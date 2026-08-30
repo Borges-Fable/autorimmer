@@ -59,7 +59,7 @@ git clone https://github.com/Borges-Fable/autorimmer.git
 cd autorimmer
 git-bug user new --name "<you>" --email "<you@example.com>" --non-interactive
 git-bug pull origin
-git-bug bug --status open        # 20 open + 1 closed
+git-bug bug --status open        # 23 issues: 17 open, 6 closed
 ```
 
 Then read `DESIGN.md`, then the muster (`git-bug bug show 01f0b85`), then
