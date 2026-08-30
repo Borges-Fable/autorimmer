@@ -1,1 +1,1 @@
-{"author":{"id":"e0b5a45ee94df92761e1991b03f72f45cac91cde564e2faac1223bf52a3fe292"},"ops":[{"type":5,"timestamp":1788123020,"nonce":"w+aX/d/UVlP1sZ4NQALsD/PaEp0=","added":null,"removed":["state:backlog"]}]}
+{"author":{"id":"e0b5a45ee94df92761e1991b03f72f45cac91cde564e2faac1223bf52a3fe292"},"ops":[{"type":3,"timestamp":1788123020,"nonce":"Uv/Dkw9PRlrRWPV+1nEjwZ6GSkY=","message":"dispatched (BORGES) — orchestrator session 2, in-session fable. Wave-1 substrate closed; this is the serializer exemplar 2.2/2.4 follow.","files":null}]}
