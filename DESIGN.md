@@ -25,6 +25,23 @@ Status: spec stage. The build plan is the git-bug spec issues (start at the
 - The agent never launches the user's installs (`_RimWorld-Testing`, MP). Only
   `_RimWorld-Agent`. This is the standing carve-out to the workspace "never
   launch RimWorld" rule; the rule stays in force for every other install.
+- **DLC-specific colony management is not driven in v1** (decided 2026-08-30
+  after an action-surface audit found it was an unstated omission across six
+  active DLCs, 62 of the 132 alerts). All DLCs stay ACTIVE on the bench — their
+  presence is part of the integration test and always was — but the agent does
+  not manage Royalty titles/psycasts, Ideology rituals, Biotech genes/children/
+  mechs, or Anomaly entities. Observation is not restricted: serializers report
+  DLC state like any other, and the agent may be interrupted by it. **One
+  carve-out, because it is a live mood drain and one call to fix:** assigning a
+  pawn to an empty Ideology role (`Precept_Role.Assign`), since
+  `createsRoleEmptyThought` produces a standing `Thought_IdeoRoleEmpty`.
+- **Animal management is deferred, not excluded.** Training, master assignment,
+  auto-slaughter and pen filters are not v1 verbs. Animal state is still
+  OBSERVED — seven vanilla alerts hang off it — so the agent can see a problem
+  it cannot yet act on, and says so rather than silently ignoring it.
+- Cosmetics (the `Designator_Paint` family, styling stations, glower colour) and
+  the planning grid (`Designator_Plan_*`, redundant with the baseviz layout IR)
+  are out of scope. Named here so nobody specs them later.
 
 ## Architecture
 
@@ -126,6 +143,27 @@ Two layers:
 
 Every mutation echoes evidence (before/after crop for spatial verbs, result
 data otherwise) and lands in the journal.
+
+**The gate lives in the widget, not in the model — so every player verb must
+re-implement its precondition and cite it.** This is the standing invariant that
+"transact against the model, never drive widgets" does not by itself give you.
+RimWorld puts its preconditions in the UI layer and leaves the model wide open;
+verified in the decompiled 1.6 source, 2026-08-30:
+
+- `BillStack.AddBill` (`RimWorld/BillStack.cs:69`) is four lines and checks
+  nothing — not `RecipeDef.AvailableNow`, not the 15-bill cap.
+- `GenConstruct.CanPlaceBlueprintAt` performs no research check; the gate is
+  `Designator_Build.Visible` (`RimWorld/Designator_Build.cs:125`,
+  `!entDef.IsResearchFinished`).
+- `ResearchManager.SetCurrentProject` (`RimWorld/ResearchManager.cs:110`) tests
+  only `baseCost > 0f` — no prerequisite check at all.
+
+A verb that calls the model directly therefore hands the agent a god-hand it was
+never meant to have, silently and while looking correct: unresearched buildings
+blueprinted, impossible bills queued, a research project started out of order.
+`dev:*` may bypass these deliberately; a player verb may not. **Each such verb
+names the widget-layer check it reproduces, in a comment, with its file:line** —
+the same discipline `Blockers.cs` already follows for the removal taxonomy.
 
 ## Tile-system risk (top model-risk)
 
