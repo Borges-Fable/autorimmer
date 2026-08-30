@@ -1053,8 +1053,18 @@ def cmd_status(opts, root, tokens):
             lines.append(f"thermal {st['thermal'].get('c')}C  budget scale {st['thermal'].get('scale')}")
     if data.get("sample"):
         s = data["sample"]
-        note = "paused — tick will not move without `rwa advance`" if s["paused"] else \
-               ("ticking" if s["tick_delta"] else "UNPAUSED BUT NOT TICKING")
+        # `paused` and `tick_delta > 0` are not exclusive here, and the pair is
+        # this platform's NORMAL driven state rather than a corner: TimeDriver
+        # pins CurTimeSpeed to Paused for the whole of an advance and steps
+        # DoSingleTick itself, so status.json reports paused=true while time
+        # moves. Branching on `paused` alone printed "tick will not move" in the
+        # same sentence as the ticks it had just counted.
+        if s["tick_delta"]:
+            note = "advancing (driven while pinned paused)" if s["paused"] else "ticking"
+        elif s["paused"]:
+            note = "paused — tick will not move without `rwa advance`"
+        else:
+            note = "UNPAUSED BUT NOT TICKING"
         lines.append(f"sample  {s['seconds']:g}s: {s['tick_delta']} ticks, heartbeat "
                      f"{'moved' if s['heartbeat_moved'] else 'FROZEN'}, {note}")
     advice = health_advice(h, root)
