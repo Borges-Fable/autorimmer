@@ -236,6 +236,48 @@ debt below.
 dispatched to opus workers in isolated worktrees at ~17:20 — new files only, no
 game launches (orchestrator runs all in-game acceptance), no DLL commits (the
 orchestrator owns Build: commits; two workers would collide on the binary).
+**Both stopped deliberately at the 95% usage limit** before either committed a
+line (one mid-decompile, one setting up its branch). Nothing left behind —
+worktrees auto-cleaned, empty branch pointers deleted, both issues back to
+`state:next` with PARKED comments carrying fixture guidance for the next
+machine.
+
+### State at session end
+
+- **Done this session:** 1.1, 1.2, 1.3, 2.1, 2.3 — all closed, merged
+  fast-forward, acceptance personally verified. Wave 1 substrate complete; the
+  bridge does act -> advance(until…) -> journal -> digest/spatial-read end to
+  end on a live colony. Verbs shipped: ping/status/version, journal,
+  journal-selftest (stimulus layer: raid/downed/break/letter-delay/save/
+  stockpile), pause/unpause/advance, digest, map-view/find-rect/nearest/
+  reachable/room-at/path-cost/landmark.
+- **In flight:** none — both opus workers stopped for the handover.
+- **Blocked:** none.
+- **Next picks:** 2.2 + 2.4 (`state:next`, opus, deps met, PARKED notes on
+  each); then 3.2/3.3 (deps 1.1+2.3, met) and 3.1 (deps 1.1+1.2, met). 1.4 and
+  2.5 need `rimworld-tools`, which exists only on dorian's machine — natural
+  picks THERE alongside the sibling-repo work.
+- **Bench state:** `_RimWorld-Agent` (Windows flavor) built and healthy —
+  0 errors / 9 warnings baseline reproduced across ~10 boots. No autostart.rws
+  armed; scratch saves journal-accept.rws + Autosave-1..5 (collapse-era
+  fixtures) remain in SaveData/Saves. Mod DLL current with all five specs.
+
+### Needs Dorian (carried forward + new)
+
+1. `_RimWorld-Test/make-profile.sh` engine-symlink re-rooting bug (from
+   session 1) — untouched, not this repo.
+2. **catalog.py cross-check** (new): 2.3's ASCII glyph policy derives from live
+   def properties because `rimworld-tools/baseviz/catalog.py` is not on BORGES;
+   when the two meet on one machine, diff the policies and reconcile BEFORE
+   3.2/3.3 build UX on the viewport (2.3's closing comment has the glyph
+   table).
+3. **WirelessChargingMech missing on BORGES** (not in Steam Mods, not in the
+   pack) — the one hole in the v1 modlist here; ship it in the next pack
+   publish if bench parity matters before M3.
+4. FYI: the Steam Workshop's Storefront (Aug-3 update) breaks the pack-pinned
+   Guests (AmbiguousMatch on TryGiveJob) — the BORGES bench junctions the
+   pack's pinned copies instead; if dorian updates Storefront upstream, Guests
+   needs its patch disambiguated.
 
 **1.1 — what landed.** `About/`, `Source/AutoRimmer/` (7 files, AnalyzerBridge's
 shape generalized), `Assemblies/AutoRimmer.dll` in its own `Build:` commit, and
