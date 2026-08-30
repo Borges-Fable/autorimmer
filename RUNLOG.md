@@ -430,13 +430,12 @@ is reachable by anything we are about to build; `halt_on_error` bites at 4.3 and
 dispatch-note problem, not a dependency — both are back to `state:next` with a
 precise do-not-copy list on the issue.
 
-- **Next picks:** **2.6 (3dce29a) then 1.5 (4b65a28)**, with 2.2 (69ae91f) as
-  the parallel partner for whichever is not currently holding the bench — 2.6
-  and 1.5 touch disjoint files (observers vs poller/driver/journal) but both
-  need the game for acceptance, and the rule allows only one of those at a time.
-  Then 2.4.
-- **NOT 1.4 or 2.5** — see below. I recommended 1.4 as a pair for 2.6 earlier in
-  this session and then withdrew it.
+- **Next picks: 2.6 (3dce29a) + 1.4 (e3d04c7) as the pair.** Disjoint files
+  (observers vs a new top-level `rwa/`), and only 2.6 needs the bench for
+  acceptance until 1.4's round-trip test at the end. 1.4 is unblocked now that
+  its location is settled, and it is the piece that makes the whole thing
+  drivable by hand. Then 1.5 (4b65a28) + 2.2 (69ae91f), then 2.4, then 2.5.
+- No open contract questions remain. 3.2/3.3 are clear to start once 2.6 lands.
 - **Before 3.2/3.3:** the fog-of-war contract question needs Dorian.
 
 ### Needs Dorian — second escalation, found late in the session
@@ -458,3 +457,32 @@ deviation); or a small separate repo for `rwa/` + `rwtest/` alone.
 
 This was found by Dorian asking why the project seemed to span more than one
 repo — a good question that the plan had not been checked against.
+
+### Both escalations resolved by Dorian, same session
+
+**1. `rwa/` and `rwtest/` move into this repo.** The CLI is the client half of
+a protocol whose server half is here, so a verb and its CLI surface change in
+one commit and one clone is a working system; `rimworld-tools` stays unversioned
+and reference-only, and nothing decompiled gets published. DESIGN.md's
+architecture line and decisions log updated; 1.4, 2.5, 5.1 and the muster carry
+the amendment, since their bodies still say otherwise. **1.4 and 2.5 are
+unblocked.**
+
+**2. Fog of war is respected across the player-facing surface; `dev:*` is
+exempt.** One rule, mirroring the action model's player/dev split, so it cannot
+drift into three behaviours again. Fogged cells get their own glyph in
+`map-view` rather than being blanked — the shape of the unexplored is
+information a player has too.
+
+**And a third thing Dorian added that the specs had missed entirely:** a blocker
+must report HOW it clears, not merely that it blocks. Some obstacles are mined,
+some deconstructed, and some have to be beaten down by a drafted colonist — a
+bare `buildable: false` cannot be acted on. The game already reifies this, so it
+gets serialized rather than reinvented: `Building.DeconstructibleBy(Faction)`
+returns an `AcceptanceReport` with the game's own reason string, and
+`Designator_Deconstruct` answers the attack case with the literal
+`RemoveByAttackingTooltip`. Every rejected cell or thing now carries
+`removal: mine|deconstruct|attack|none` plus that reason verbatim. Landed on
+2.6 (which owns find-rect's candidate path), 2.3, 3.2, 3.3, 3.4 and the muster.
+This is the concrete form of the standing candidates-and-reasons invariant, and
+it came from Dorian knowing the game, not from the review.
