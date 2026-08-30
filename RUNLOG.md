@@ -693,3 +693,91 @@ from 2.3's now-stale closing table.
   re-read against what actually shipped. Then 2.4, then 3.1 (which supersedes
   the `journal-selftest` fixture layer and unblocks the rest of wave 3).
 - **Run them in separate worktrees.**
+
+### Two coverage audits, at Dorian's suggestion — the highest-value hour of the session
+
+Dorian: *"an agent looking at the decompiled code for actions we might have
+missed is a good idea, or gameplay loops, a sonnet agent on the learning helper
+could be useful too, that's how you're meant to learn the game, that and the
+tutorial should be looked at for gaps in what we're doing."*
+
+Two read-only agents: an opus sweep of the decompiled action surface (81
+designators, 53 float-menu providers, ~60 mutating gizmos, 53 pawn columns) and
+a sonnet sweep of the game's own curriculum (the ConceptDef/tutor system and the
+scripted tutorial). **They converged, from completely different directions, on
+the same two flagship gaps: production bills and research selection.** The
+action audit found them by enumerating `BillStack` and `ResearchManager`; the
+curriculum audit found them because they are steps 11 and 14 of the tutorial.
+Two independent methods agreeing is the strongest signal either produced.
+
+**The single structural finding, verified myself before acting on it:**
+RimWorld puts its preconditions in the UI layer and leaves the model wide open.
+`BillStack.AddBill` (`BillStack.cs:69`) is four lines and checks nothing — not
+`RecipeDef.AvailableNow`, not the 15-bill cap. The research gate for building
+lives in `Designator_Build.Visible:125`, not in `GenConstruct
+.CanPlaceBlueprintAt`. `ResearchManager.SetCurrentProject:110` tests only
+`baseCost > 0f`. So DESIGN's "transact against the model, never drive widgets"
+is right about the mechanism and silently drops the gate — a player verb calling
+the model directly is a god-hand that looks correct. **Now an invariant in
+DESIGN §Action model (`f690cf2`), with the cite-your-file:line discipline
+`Blockers.cs` already follows.**
+
+**The most severe single defect, verified line by line before filing:** an
+advance can tick underneath a force-pausing modal, and after that every
+timing-out letter in the session silently expires. `TickManager.cs:463` drives
+`LetterStackTick` inside `DoSingleTick` — which is what we call;
+`LetterWithTimeout.ShouldAutomaticallyOpenLetter => LastTickBeforeTimeout`
+(`:35`) means a letter opens ITSELF; `LetterStack.OpenAutomaticLetters`
+(`:139-142`) then early-returns forever while any `forcePause` window is up. And
+`grep -n 'WindowStack' Source/AutoRimmer/*.cs` returns **nothing**. Vanilla
+survives because a forcePause window actually pauses; we pin `CurTimeSpeed =
+Paused` and drive ticks ourselves, so we do not stop. No exception, no red
+error, no halted advance — the run looks healthy and the colony stops being told
+things. **Filed as 1.7 (8555381), p1.**
+
+**Filed:** 1.6 (fc287ba, `until:condition`), 1.7 (8555381, the modal hazard),
+3.6 (48f666c, production bills + storage settings).
+**Amended:** 2.4, 3.2, 3.3, 3.4, 3.5, 4.1, 4.2, 4.3 — each with file:line
+citations so a worker can check rather than trust.
+
+**Scope decisions taken rather than queued** (now in DESIGN's non-goals):
+DLC-specific colony management is not driven in v1 — the DLCs stay ACTIVE on the
+bench because their presence is the integration test, but the agent does not
+manage Royalty/Ideology/Biotech/Anomaly content. One carve-out: assigning an
+empty Ideology role, because `createsRoleEmptyThought` is a live standing mood
+penalty and the fix is one call. Animal management deferred but still OBSERVED
+(seven alerts hang off it — the agent must see what it cannot yet act on).
+Cosmetics and the planning grid excluded outright.
+
+**A correction the curriculum audit produced, worth keeping:** unmet ritual
+obligations are NOT a mood penalty. No `ThoughtWorker_*` references
+`RitualObligation`; the coupling is positive-only, obligations are pruned when
+stale, and they are inert below 3 believers. Rituals are a foregone buff, not an
+accruing debuff — so they were correctly deprioritised, for a reason nobody had
+established.
+
+**4.3's dependency line is wrong and M1 is not reachable as written.** It omits
+3.5 entirely, omits the new 1.7, and its own scope says "cook" while production
+bills do not exist. Amended on the issue with the three options.
+
+### Handover — session ends at the budget line
+
+- **On `main` and pushed:** everything above. Working tree clean.
+- **In flight when the session ended:** 1.5 (4b65a28) and 2.2 (69ae91f), each in
+  its OWN worktree this time, both `state:doing`. Check their state before
+  assuming anything — if they left no commits, set them back to `state:next`
+  with a PARKED note, as session 2 did.
+- **Dispatch model now in force** (ORCHESTRATION-PROMPT updated): every parallel
+  worker gets `isolation: "worktree"`; workers never launch the game and never
+  commit a DLL; the orchestrator runs all in-game acceptance and owns the
+  `Build:` commit. This is a direct consequence of this session's failure.
+- **Bench:** `_RimWorld-Agent` healthy, stopped cleanly, 0 errors / 9 warnings.
+  `Assemblies/AutoRimmer.dll` is now a LINUX build — first time. BORGES will see
+  ~48% of bytes differ on a same-source rebuild. That is Roslyn, not a
+  regression; behavioural testing is the only parity check.
+- **Next picks after 1.5/2.2:** 1.7 (p1, and it gates M1), then 2.4, then 3.1
+  (which supersedes the `journal-selftest` fixture layer and unblocks wave 3).
+  3.6 is filed but backlogged behind 2.4.
+- **BORGES can close one thing cheaply:** 1.4's `rwa` root resolution lists the
+  Windows `-savedatafolder` layout as a candidate but it was never exercised.
+  One command there closes it.
