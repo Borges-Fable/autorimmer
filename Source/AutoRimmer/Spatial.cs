@@ -96,16 +96,54 @@ namespace AutoRimmer
     // door/plant-ness), deterministic per bench version — the same def set the
     // dumped baseviz_catalog.json records (colors stay the catalog's business;
     // an ASCII channel has none). Layer priority per cell:
-    // pawns > things > designations > zones > roof > terrain.
+    // FOG > pawns > designations > things > zones > roof > terrain.
+    //
+    // Two 2.6 corrections to that policy:
+    //
+    // 1. RESERVED BAND. Pawn and fog glyphs own "?@$!&^;" and nothing derived
+    //    from a def label may land there. 2.3 mapped items to label[0]
+    //    lowercased and pawns to g/d/w, so `gold` collided with guest, `duster`
+    //    with tame animal and `wood` with wild animal, and the legend merged
+    //    them into one entry ("tame animal | duster (Muffalo)"). With a 32-mod
+    //    catalog that is the common case, not the corner. UpperLetter and
+    //    LowerLetter now push any label that would collide out of the band, so
+    //    disjointness is enforced rather than assumed. Collisions BETWEEN
+    //    things (Table/Tree both `T`) are still allowed and still disambiguated
+    //    by the legend — only the pawn/fog band is reserved.
+    //
+    // 2. DESIGNATIONS OUTRANK THINGS. Almost every designation is ON a thing,
+    //    so rendering the designation layer UNDER things (2.3) made it
+    //    invisible exactly when it mattered: a wall marked for deconstruction
+    //    drew `#` and never `*`. Designations are an overlay.
+    //
+    // Fog: `c.Fogged(map)` short-circuits the whole cell to `?`, so no detail
+    // leaks out of ground the colony has never walked (DESIGN decisions log,
+    // 2026-08-30). Fogged cells get their OWN glyph rather than being blanked —
+    // the shape of the unexplored is information a player has too.
     public static class CropRenderer
     {
-        public const int MaxSide = 60;
+        // ODD on purpose. CellRect.CenteredOn(c, r) is (2r+1) on a side, so an
+        // even cap made `map-view {radius:30}` — 61x61, and documented-legal at
+        // SpatialVerbs.cs:31 — fail with bad-args every single time (2.6
+        // blocker 4). 61 keeps every legal radius renderable.
+        public const int MaxSide = 61;
+
+        // Reserved for pawns and fog; def-derived glyphs are pushed out of it.
+        private const string ReservedBand = "?@$!&^;";
+        public const char FogGlyph = '?';
 
         public static readonly IReadOnlyList<string> DefaultLayers = new[] { "terrain", "things", "zones", "pawns" };
 
         public static Dictionary<string, object> Render(Map map, CellRect rect, ICollection<string> layers)
         {
             bool clipped = rect.minX < 0 || rect.minZ < 0 || rect.maxX >= map.Size.x || rect.maxZ >= map.Size.z;
+            // A rect with NO overlap at all is a caller mistake, not a crop.
+            // ClipInsideMap only clamps the two low edges, so a fully off-map
+            // rect used to survive as ok:true with a negative width and an
+            // origin outside the map (2.3 only ever tested overlapping edges).
+            if (rect.maxX < 0 || rect.maxZ < 0 || rect.minX >= map.Size.x || rect.minZ >= map.Size.z)
+                throw new VerbArgsException(
+                    $"rect [{rect.minX},{rect.minZ},{rect.Width},{rect.Height}] lies entirely outside the {map.Size.x}x{map.Size.z} map");
             rect = rect.ClipInsideMap(map);
             if (rect.Width > MaxSide || rect.Height > MaxSide)
                 throw new VerbArgsException($"viewport {rect.Width}x{rect.Height} exceeds the {MaxSide}x{MaxSide} cap");
@@ -152,6 +190,13 @@ namespace AutoRimmer
         private static char Cell(Map map, IntVec3 c, Func<string, bool> L,
             Dictionary<string, object> legend, Dictionary<char, List<string>> pawnNames)
         {
+            // Fog first and unconditionally: the player-facing surface hides
+            // undiscovered cells, and no layer may leak detail through it.
+            if (c.Fogged(map))
+            {
+                Note(legend, FogGlyph, "unexplored (fogged)");
+                return FogGlyph;
+            }
             if (L("pawns"))
             {
                 var things = map.thingGrid.ThingsListAtFast(c);
@@ -164,6 +209,12 @@ namespace AutoRimmer
                     names.Add(p.LabelShortCap.ToString());
                     return g;
                 }
+            }
+            // Above things, not below: a designation is an overlay ON a thing.
+            if (L("designations"))
+            {
+                var des = map.designationManager.AllDesignationsAt(c);
+                foreach (var d in des) { Note(legend, '*', d.def.defName); return '*'; }
             }
             if (L("things"))
             {
@@ -182,13 +233,6 @@ namespace AutoRimmer
                     Note(legend, g, best.def.label);
                     return g;
                 }
-            }
-            if (L("designations"))
-            {
-                var des = map.designationManager.AllDesignationsAt(c);
-                bool any = false;
-                foreach (var d in des) { Note(legend, '*', d.def.defName); any = true; break; }
-                if (any) return '*';
             }
             if (L("zones"))
             {
@@ -222,6 +266,9 @@ namespace AutoRimmer
             }
         }
 
+        // Every glyph here is inside ReservedBand, so a pawn can never be
+        // confused with an item whose label happens to start with the same
+        // letter. Was g/d/w for guest/tame/wild in 2.3 — see the class comment.
         private static char PawnGlyph(Pawn p, out string kind)
         {
             if (p.IsPrisoner) { kind = "prisoner"; return '$'; }
@@ -229,12 +276,12 @@ namespace AutoRimmer
             {
                 if (p.RaceProps.Humanlike) { kind = "colonist"; return '@'; }
                 kind = "tame animal";
-                return 'd';
+                return '^';
             }
             if (p.HostileTo(Faction.OfPlayer)) { kind = "hostile"; return '!'; }
-            if (p.RaceProps.Humanlike) { kind = "neutral/guest"; return 'g'; }
+            if (p.RaceProps.Humanlike) { kind = "neutral/guest"; return '&'; }
             kind = "wild animal";
-            return 'w';
+            return ';';
         }
 
         private static char ThingGlyph(ThingDef def, ThingDef stuff)
@@ -248,7 +295,9 @@ namespace AutoRimmer
             }
             if (def.category == ThingCategory.Plant)
                 return def.plant != null && def.plant.IsTree ? 'T' : 't';
-            if (def.category == ThingCategory.Pawn) return '?';
+            // A non-Pawn-class thing of Pawn category (rare; the things layer
+            // filters real pawns out above). `?` is the fog glyph now, so it
+            // takes the ordinary item letter.
             return LowerLetter(def.label);
         }
 
@@ -261,11 +310,22 @@ namespace AutoRimmer
             return '.';
         }
 
+        // Label-derived glyphs, forced out of the pawn/fog band. Nothing in a
+        // vanilla catalog starts with one of those characters, but a modded
+        // label can, and the collision would be silent.
         private static char UpperLetter(string label)
-            => string.IsNullOrEmpty(label) ? 'B' : char.ToUpperInvariant(label[0]);
+        {
+            if (string.IsNullOrEmpty(label)) return 'B';
+            char g = char.ToUpperInvariant(label[0]);
+            return ReservedBand.IndexOf(g) >= 0 ? 'B' : g;
+        }
 
         private static char LowerLetter(string label)
-            => string.IsNullOrEmpty(label) ? 'i' : char.ToLowerInvariant(label[0]);
+        {
+            if (string.IsNullOrEmpty(label)) return 'i';
+            char g = char.ToLowerInvariant(label[0]);
+            return ReservedBand.IndexOf(g) >= 0 ? 'i' : g;
+        }
 
         private static void Note(Dictionary<string, object> legend, char g, string label)
         {
