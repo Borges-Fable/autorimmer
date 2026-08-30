@@ -212,6 +212,31 @@ Wave 1 in-mod substrate complete.
 **Bench hygiene:** the 1.2 acceptance's `autostart.rws` would have hijacked
 every later boot (devMode auto-load) — renamed to `journal-accept.rws`.
 
+| 2.1 Colony digest + what-changed (b2b89f3) | fable (in-session) | ~40 min | merged ff c2131a0..3c4c5cd; closed |
+| 2.3 Spatial: viewport, queries, landmarks (1a35e07) | fable (in-session) | ~35 min | merged ff 3c4c5cd..cefa580; closed |
+
+**2.1 — what landed.** DigestVerb (the 2.2/2.4 exemplar), AlertScanner.Snapshot,
+Journal (seq,type) ring for main-thread-safe what-changed, selftest `stockpile`
+step. Verified across five fixture states (731-1593 bytes); food-days at 0%
+error against an independent raw-thing tally; since-bracketing exact. Stated
+caveats: 5-pawn size extrapolated (~1.9KB data), power validated at zero only.
+Bug found live: `FreeColonistsSpawned` clears/rebuilds its cached list on every
+access — snapshot before iterating, now taught loudly in the exemplar.
+
+**2.3 — what landed.** Positions resolver (landmarks/pawn:/thing: everywhere),
+LandmarkComponent (save-persisted), CropRenderer (the single crop source),
+seven query/view verbs. 5x7 corner placed sight-unseen via queries only and
+validated through the independent renderer path; four edge crops clip-honest;
+landmark save/kill/load exact; echo crops legible (colonists named in legend).
+`catalog.py` does not exist on this machine — glyph policy derives from live
+def properties, colors stay the dumped baseviz_catalog.json's; cross-check
+debt below.
+
+**Parallel workers.** 2.2 (pawn serializers) and 2.4 (world serializers)
+dispatched to opus workers in isolated worktrees at ~17:20 — new files only, no
+game launches (orchestrator runs all in-game acceptance), no DLL commits (the
+orchestrator owns Build: commits; two workers would collide on the binary).
+
 **1.1 — what landed.** `About/`, `Source/AutoRimmer/` (7 files, AnalyzerBridge's
 shape generalized), `Assemblies/AutoRimmer.dll` in its own `Build:` commit, and
 the Windows bench scripts `profile/{make-profile-agent,gen-modsconfig,run-agent}.ps1`
