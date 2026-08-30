@@ -21,6 +21,7 @@
 #   --batchmode   pass Unity -batchmode -nographics (experiment; spike 0.1
 #                 verdict: FINDINGS.md).
 #   --no-rule     skip the Hyprland special-workspace windowrule.
+#   --no-modsconfig  skip the launch-time ModsConfig.xml regeneration.
 set -e
 SCRIPT_PATH="$(readlink -f "$0")"
 GAME_DIR="$(dirname "$SCRIPT_PATH")"
@@ -35,6 +36,7 @@ cd "$GAME_DIR"
 [ -x ./RimWorldLinux ] || chmod +x ./RimWorldLinux
 
 FPS=30
+REGEN_MODSCONFIG=1
 USE_XVFB=0
 USE_VNC=0
 BATCHMODE=0
@@ -51,6 +53,7 @@ while [ $# -gt 0 ]; do
         --vnc)       USE_VNC=1; shift ;;
         --batchmode) BATCHMODE=1; shift ;;
         --no-rule)   APPLY_RULE=0; shift ;;
+        --no-modsconfig) REGEN_MODSCONFIG=0; shift ;;
         *)           PASS+=("$1"); shift ;;
     esac
 done
@@ -58,6 +61,17 @@ done
 # --- isolation: self-contained config home, no Steam attach ------------------
 export XDG_CONFIG_HOME="$GAME_DIR/config"
 unset SteamAppId SteamGameId SteamOverlayGameId
+
+# --- self-heal ModsConfig.xml ------------------------------------------------
+# RimWorld REWRITES ModsConfig.xml whenever it prunes mods it cannot resolve
+# (found in spike 0.1: one mis-rooted boot pruned the list to DLC-only and the
+# damage persisted into every later launch). Regenerating from Mods/ contents
+# at each launch makes the active list a pure function of the profile.
+if [ "$REGEN_MODSCONFIG" != "0" ] && [ -x "$GAME_DIR/gen-modsconfig.py" ]; then
+    "$GAME_DIR/gen-modsconfig.py" >/dev/null 2>&1 \
+        && echo "modsconfig: regenerated from Mods/ ($(ls "$GAME_DIR/Mods" | wc -l) dirs)" \
+        || echo "WARN: gen-modsconfig.py failed; launching with existing ModsConfig.xml" >&2
+fi
 
 # --- window parking: Hyprland special workspace, silent (no focus steal) -----
 # Dialect verified on Hyprland 0.55.1 (this box): inline dynamic rule via

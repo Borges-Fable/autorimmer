@@ -41,8 +41,24 @@ link() {  # link <dest-relpath> <source-abspath>
     echo "  linked $1"
 }
 
-echo "== engine + Data (symlinked from Steam install) =="
-for f in RimWorldLinux RimWorldLinux_Data UnityPlayer.so Version.txt Data; do
+echo "== engine + Data =="
+# The player stub must be a REAL COPY, not a symlink: Unity roots the game dir
+# via /proc/self/exe, which canonicalizes symlinks — a linked RimWorldLinux
+# re-roots the whole game at the Steam install, whose Mods/ (a farm of dev
+# symlinks, no Harmony) silently replaces this profile's Mods/. Found the hard
+# way in spike 0.1 (git-bug 3fa4cf5); _RimWorld-Test has the same latent bug,
+# _RimWorld-Testing avoids it by owning full real copies of everything.
+cp -f "$STEAM/RimWorldLinux" "$ROOT/RimWorldLinux" && chmod +x "$ROOT/RimWorldLinux" \
+    && echo "  copied RimWorldLinux (real file: keeps the game rooted here)"
+# RimWorldLinux_Data: real dir, symlinked children — dataPath stays in the
+# profile (in case Unity canonicalizes it) while the bulk stays on Steam's copy.
+[ -L "$ROOT/RimWorldLinux_Data" ] && rm "$ROOT/RimWorldLinux_Data"
+mkdir -p "$ROOT/RimWorldLinux_Data"
+for d in "$STEAM/RimWorldLinux_Data"/*; do
+    ln -sfn "$d" "$ROOT/RimWorldLinux_Data/$(basename "$d")"
+done
+echo "  built RimWorldLinux_Data (real dir, $(ls "$ROOT/RimWorldLinux_Data" | wc -l) symlinked children)"
+for f in UnityPlayer.so Version.txt Data; do
     link "$f" "$STEAM/$f"
 done
 
