@@ -6,6 +6,11 @@ Source/**/obj/
 # User-specific build config
 Directory.Build.props.user
 
+__pycache__/
+
+# rwa session transcripts (RWA_TRANSCRIPTS moves them elsewhere)
+transcripts/
+
 # IDE
 .vs/
 .idea/

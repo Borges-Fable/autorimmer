@@ -1,0 +1,1515 @@
+#!/usr/bin/env python3
+"""rwa — the client half of the AutoRimmer file protocol (spec 1.4).
+
+The mod under `Source/AutoRimmer/` owns a directory under the bench's save-data
+folder: `commands/<id>.json` in, `results/<id>.json` out, `status.json` as a
+~1Hz heartbeat, `journal/<sid>.ndjson` as the event stream. This script is the
+other end of that: write a command, wait for its result, print it, exit
+non-zero if the mod said no.
+
+It carries ZERO game semantics. There is no verb table here and no
+verb-specific formatting: any word that is not one of this script's own
+subcommands is sent to the mod as an op, and the mod's own `unknown-op` error
+lists what it actually knows. That is deliberate — a verb table client-side
+would be a second contract to keep in sync with `VerbRegistry`, and it would
+rot on the first spec that adds a verb. Same reasoning drives the pretty
+printer: it is a generic JSON tree renderer, so a serializer that grows a field
+shows the field the day it ships.
+
+Three things this script knows that the mod cannot tell you:
+
+  * WHERE the protocol root is. Two bench layouts exist (XDG_CONFIG_HOME
+    isolation on this box, `-savedatafolder` on the Windows bench), so the root
+    is derived from a candidate list, never hardcoded. `--root`/`RWA_ROOT` is
+    the escape hatch; the bench itself is found through the workspace's
+    existing `RIMWORLD_VAULT` convention.
+
+  * WHETHER THE GAME IS ACTUALLY RUNNING, which is not the same question as
+    "is the process up". RimWorld's tick loop is frame-bound and Hyprland
+    delivers no frames to a hidden special workspace, so a parked bench without
+    the launcher's render_unfocused fix runs at ~1-2 fps (~4 tps) and looks
+    perfectly healthy in `ps` (FINDINGS.md section 4b). So liveness is graded
+    into five states — down / menu / stalled / starved / ok — and each gets its
+    own message. Only `down` tells you how to start the game.
+
+  * HOW TO BE WATCHED. `rwa watch on` is one file write plus one hyprctl call:
+    the launcher runs the game under mangohud with MANGOHUD_CONFIGFILE pointed
+    at the bench's `config/mangohud-agent.conf`, and MangoHud re-reads that file
+    while the game runs, so rewriting `fps_limit` re-caps a RUNNING game. The
+    window is already parked on Hyprland's `special:rwagent` by a `silent`
+    windowrule applied before launch; revealing it is a separate, independent
+    step. No game-side code is involved in either half.
+
+Everything else is protocol plumbing, plus transcripts: every command and
+result is mirrored into a run directory keyed by the game's session id, so the
+transcript, the journal file (`journal/<sid>.ndjson`) and every result's `sid`
+field share one key. `rwa replay <run-dir>` re-sends a transcript's commands in
+order, which is what makes "replayable" a testable claim rather than a hope.
+
+House style: stdlib only, python3, no third-party deps — this has to run from a
+bare shell on either bench.
+"""
+
+import calendar
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+VERSION = "0.1.0"
+
+# --- where things live -------------------------------------------------------
+# RIMWORLD_VAULT is the workspace-wide convention (make-profile-agent.sh honours
+# the same var); RWA_ROOT is the escape hatch for a protocol root that is not
+# under it — a synthetic root for testing, or a `-savedatafolder` bench.
+VAULT = Path(os.environ.get("RIMWORLD_VAULT", "/home/dorian/projects/rimworld"))
+BENCH_NAME = "_RimWorld-Agent"
+XDG_REL = "config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer"
+SAVEDATA_REL = "SaveData/AutoRimmer"
+UNITY_REL = "unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer"
+WINDOWS_REL = "AppData/LocalLow/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer"
+
+# Transcripts default beside the repo this script ships in, so `rwtest` (5.1)
+# and a human reviewing a post-mortem look in the same place. resolve() follows
+# symlinks, so `rwa` symlinked onto PATH still finds its own repo.
+REPO = Path(__file__).resolve().parent.parent
+TRANSCRIPTS = Path(os.environ.get("RWA_TRANSCRIPTS", REPO / "transcripts"))
+
+# --- protocol timing ---------------------------------------------------------
+# Poller.cs: PollMs=500 and it ignores inbox files younger than MinFileAgeMs=250
+# (its writer-finished heuristic), so the floor on any round trip is ~0.25-1.0s
+# even for an off-thread verb. Nothing here should be surprised by that.
+POLL_MS = 100          # how often we look for the result file
+POLL_MS_MAX = 500      # backed off to this after the first second
+DEFAULT_TIMEOUT = 30.0  # seconds; `advance` overrides to unbounded, see cmd_send
+STALE_SECS = 10.0      # status.json older than this => no heartbeat => down
+FPS_FLOOR = 5.0        # below this the frame loop is starved (FINDINGS 4b)
+
+# `advance` is the one op with no useful wall-clock default: a 60000-tick
+# advance took 59.9s on the bench and an until-matcher can legitimately run for
+# minutes. It is guarded by the heartbeat instead of by a clock.
+UNBOUNDED_OPS = {"advance"}
+
+WATCH_FPS_ON = 60      # live interactive watching
+WATCH_FPS_OFF = 30     # unwatched default; advance does NOT need more (FINDINGS 6)
+HYPR_WORKSPACE = "rwagent"
+GAME_WINDOW_CLASS = "RimWorldLinux"
+
+# Poller.Sanitize maps every char outside this set to '_' when it names the
+# RESULT file, so an id outside it would leave us polling a path that never
+# appears. Rejected up front rather than silently rewritten.
+ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+# Client-side failures wear the same envelope as the mod's, so a jq pipeline
+# never has to branch on where the failure came from. The `rwa-` prefix is the
+# discriminator; the mod's taxonomy (Runtime.cs `Err`) uses none.
+E_TIMEOUT = "rwa-timeout"
+E_DOWN = "rwa-game-down"
+E_NO_ROOT = "rwa-no-root"
+E_BAD_RESULT = "rwa-bad-result"
+E_USAGE = "rwa-usage"
+E_IO = "rwa-io"
+
+# Exit codes. 0/1 is the spec's "non-zero exit on ok:false"; the rest split the
+# client-side failures apart so a script can tell "the colony said no" from
+# "there is no colony".
+EXIT_OK = 0
+EXIT_NOT_OK = 1      # the mod answered ok:false
+EXIT_USAGE = 2       # bad invocation
+EXIT_DOWN = 3        # no live bench to talk to
+EXIT_TIMEOUT = 4     # command accepted, no result in time
+
+HEALTH_EXIT = {"down": EXIT_DOWN, "stalled": EXIT_DOWN, "starved": EXIT_OK,
+               "menu": EXIT_OK, "ok": EXIT_OK}
+
+# This script's own subcommands. Everything else on the command line is an op
+# name handed straight to the mod — which is why `send` exists: it is the way to
+# reach an op whose name collides with one of these (`rwa send status`).
+CLIENT_COMMANDS = {}   # filled in below, once the handlers are defined
+
+
+def die(msg, code=EXIT_USAGE):
+    print("rwa: " + msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def warn(msg):
+    print("rwa: " + msg, file=sys.stderr)
+
+
+# --- argument parsing --------------------------------------------------------
+# Hand-rolled rather than argparse: op arguments are open-ended (`--anything`
+# belongs to the verb, not to us) and they need types, nesting and repetition,
+# none of which argparse expresses without a per-verb table we refuse to keep.
+
+KEY_RE = re.compile(r"^--([A-Za-z_][A-Za-z0-9_.-]*)(?::(str|num|bool|json))?(=(?s:.*))?$")
+
+# Global flags, recognised anywhere on the line. value_count 0 = a bare switch.
+GLOBALS = {
+    "--root": 1, "--timeout": 1, "--id": 1, "--run": 1, "--transcripts": 1,
+    "--stale-secs": 1, "--fps-floor": 1, "--poll-ms": 1,
+    "--json": 0, "--pretty": 0, "--no-transcript": 0, "--quiet": 0,
+    "--version": 0, "--help": 0, "-h": 0,
+}
+
+
+def parse_globals(argv):
+    """Pull the global flags out of argv wherever they appear; return (opts, rest)."""
+    opts, rest, i = {}, [], 0
+    while i < len(argv):
+        tok = argv[i]
+        name, inline = (tok.split("=", 1) + [None])[:2] if tok.startswith("--") and "=" in tok else (tok, None)
+        if name in GLOBALS:
+            if GLOBALS[name] == 0:
+                if inline is not None:
+                    die(f"{name} takes no value")
+                opts[name] = True
+            elif inline is not None:
+                opts[name] = inline
+            else:
+                if i + 1 >= len(argv):
+                    die(f"{name} needs a value")
+                i += 1
+                opts[name] = argv[i]
+            i += 1
+            continue
+        rest.append(tok)
+        i += 1
+    return opts, rest
+
+
+def autotype(text):
+    """A bare value's JSON type, guessed. `--key:str` etc. override the guess.
+
+    The mod is strict — VerbArgs rejects a string where it wanted a number
+    rather than coercing it — so guessing wrong is a loud bad-args, never a
+    silent misread. Note that a position like `120,130` is not a number and
+    stays the string the mod's Positions.Resolve expects.
+    """
+    if text == "true":
+        return True
+    if text == "false":
+        return False
+    if text == "null":
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    return text
+
+
+def cast(text, kind):
+    if kind == "str":
+        return text
+    if kind == "num":
+        try:
+            return int(text)
+        except ValueError:
+            pass
+        try:
+            return float(text)
+        except ValueError:
+            die(f"'{text}' is not a number")
+    if kind == "bool":
+        if text in ("true", "1", "yes"):
+            return True
+        if text in ("false", "0", "no"):
+            return False
+        die(f"'{text}' is not a bool")
+    if kind == "json":
+        try:
+            return json.loads(text)
+        except ValueError as e:
+            die(f"--…:json value is not JSON ({e})")
+    return autotype(text)
+
+
+def assign(root, dotted, value, seen):
+    """Set a dotted path into a nested dict; a repeated key becomes an array."""
+    parts = dotted.split(".")
+    node = root
+    for p in parts[:-1]:
+        nxt = node.get(p)
+        if nxt is None:
+            nxt = {}
+            node[p] = nxt
+        elif not isinstance(nxt, dict):
+            die(f"--{dotted}: '{p}' was already given a scalar value")
+        node = nxt
+    leaf = parts[-1]
+    if dotted in seen:
+        cur = node[leaf]
+        node[leaf] = (cur + [value]) if isinstance(cur, list) and seen[dotted] > 1 else [cur, value]
+        seen[dotted] += 1
+    else:
+        node[leaf] = value
+        seen[dotted] = 1
+
+
+def parse_op_args(tokens, known=None):
+    """`--key value` op args -> the JSON `args` object.
+
+    Syntax, in full:
+      --key value        scalar, type guessed (true/false/null/number/string)
+      --key              bare switch, means the boolean true
+      --key=value        same as `--key value`
+      --key:str value    force the type (also :num, :bool, :json)
+      --a.b.c value      nested objects: {"a":{"b":{"c":…}}}
+      --key x --key y    repetition builds an array ["x","y"]
+      --args-json JSON   a whole args object, merged first; `-` reads stdin,
+                         `@path` reads a file. Explicit flags override it.
+
+    `known` (client subcommands only) is a dict of flag -> value_count for
+    flags this script consumes itself; those come back in a second dict.
+    """
+    args, mine, seen = {}, {}, {}
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if known is not None:
+            base = tok.split("=", 1)[0]
+            if base in known:
+                if known[base] == 0:
+                    mine[base] = True
+                    i += 1
+                    continue
+                if "=" in tok:
+                    mine.setdefault(base, []).append(tok.split("=", 1)[1])
+                    i += 1
+                    continue
+                if i + 1 >= len(tokens):
+                    die(f"{base} needs a value")
+                mine.setdefault(base, []).append(tokens[i + 1])
+                i += 2
+                continue
+        if tok == "--args-json" or tok.startswith("--args-json="):
+            if "=" in tok:
+                raw = tok.split("=", 1)[1]
+            else:
+                if i + 1 >= len(tokens):
+                    die("--args-json needs a value")
+                raw = tokens[i + 1]
+                i += 1
+            if raw == "-":
+                raw = sys.stdin.read()
+            elif raw.startswith("@"):
+                raw = Path(raw[1:]).read_text()
+            try:
+                blob = json.loads(raw)
+            except ValueError as e:
+                die(f"--args-json is not JSON ({e})")
+            if not isinstance(blob, dict):
+                die("--args-json must be a JSON object")
+            for k, v in blob.items():
+                args[k] = v
+            i += 1
+            continue
+        m = KEY_RE.match(tok)
+        if not m:
+            die(f"unexpected argument '{tok}' (op arguments are --key value)")
+        key, kind, inline = m.group(1), m.group(2), m.group(3)
+        if inline is not None:
+            value = cast(inline[1:], kind)
+        elif i + 1 < len(tokens) and not tokens[i + 1].startswith("--"):
+            value = cast(tokens[i + 1], kind)
+            i += 1
+        else:
+            if kind in ("num", "json"):
+                die(f"--{key}:{kind} needs a value")
+            value = True
+        assign(args, key, value, seen)
+        i += 1
+    return (args, mine) if known is not None else args
+
+
+def one(mine, flag, default=None):
+    """Last value of a client flag collected by parse_op_args."""
+    v = mine.get(flag)
+    if v is True:
+        return True
+    return v[-1] if v else default
+
+
+# --- protocol root -----------------------------------------------------------
+
+def root_candidates():
+    """Every place an AutoRimmer protocol root is known to live, in priority order.
+
+    Derived, not hardcoded to this box: the bench profile isolates
+    XDG_CONFIG_HOME (so the root sits under `<bench>/config/…`), while a
+    `-savedatafolder` launch — the Windows bench and the rwpack snapshots —
+    puts it under `<that folder>/AutoRimmer`. Both must work.
+    """
+    bench = VAULT / BENCH_NAME
+    home = Path.home()
+    out = [
+        (bench / XDG_REL, "bench, XDG_CONFIG_HOME isolation"),
+        (bench / SAVEDATA_REL, "bench, -savedatafolder layout"),
+        (home / ".config" / UNITY_REL, "linux default save-data folder"),
+        (home / WINDOWS_REL, "windows default save-data folder"),
+    ]
+    profile = os.environ.get("USERPROFILE")
+    if profile:
+        out.append((Path(profile) / WINDOWS_REL, "windows USERPROFILE save-data folder"))
+    return out
+
+
+def resolve_root(explicit):
+    """(root, why, candidates). Prefers a root that has actually been written to."""
+    if explicit:
+        return Path(explicit).expanduser(), "explicit (--root / RWA_ROOT)", []
+    cands = root_candidates()
+    for path, why in cands:
+        if (path / "status.json").exists():
+            return path, why + " (has status.json)", cands
+    for path, why in cands:
+        if path.is_dir():
+            return path, why + " (exists, never written to)", cands
+    return None, None, cands
+
+
+def bench_dir_for(root):
+    """The bench profile directory a protocol root belongs to, or None.
+
+    Walked up from the root rather than assumed, so a `--root` pointing at some
+    other install still finds that install's launcher and mangohud config.
+    """
+    for parent in [root] + list(root.parents):
+        if parent.name == BENCH_NAME:
+            return parent
+        if (parent / "run-agent.sh").exists() and (parent / "config").is_dir():
+            return parent
+    guess = VAULT / BENCH_NAME
+    return guess if guess.is_dir() else None
+
+
+# --- status.json and the liveness verdict ------------------------------------
+
+def read_json(path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def parse_ts(text):
+    """UTC epoch seconds from the mod's timestamps.
+
+    Both `status.json` and every result envelope stamp `DateTime.UtcNow` with
+    the "o" format: ISO-8601 with SEVEN fractional digits and a trailing Z,
+    which is one digit more than datetime.fromisoformat accepted before 3.11 —
+    hence the split rather than a one-liner. calendar.timegm, not mktime: the
+    string is UTC and the box is not, and mktime would quietly apply the local
+    offset (and get DST wrong twice a year).
+    """
+    if not isinstance(text, str):
+        return None
+    body = text.rstrip("Z").rstrip()
+    frac = 0.0
+    if "." in body:
+        body, digits = body.split(".", 1)
+        digits = "".join(c for c in digits if c.isdigit())
+        frac = float("0." + digits) if digits else 0.0
+    try:
+        return calendar.timegm(time.strptime(body, "%Y-%m-%dT%H:%M:%S")) + frac
+    except ValueError:
+        return None
+
+
+def health(root, stale_secs=STALE_SECS, fps_floor=FPS_FLOOR):
+    """Grade the bench. Returns a dict; `state` is one of:
+
+      down     — no status.json, or its `ts` is older than stale_secs. The
+                 poller thread writes it every second independently of frames,
+                 so a stale one means the PROCESS is gone. Only this state
+                 should tell you how to start the game.
+      menu     — heartbeat fresh, no game ever loaded this session (the mod's
+                 snapshot is still its zero value: speed "" and tick 0).
+      stalled  — heartbeat fresh but the mod reports gameLoaded:false while its
+                 last snapshot names a real game. GameComponentUpdate has not
+                 run for >5s (Poller.NoGameAfterSeconds): total frame stop, a
+                 modal/loading screen, or a hang.
+      starved  — game loaded and frames are arriving, but far too few. Ticks
+                 are frame-bound, so this is the ~4 tps hidden-workspace case
+                 from FINDINGS 4b — healthy in `ps`, useless to advance.
+      ok       — a live bench. Paused is normal here; the agent owns time.
+    """
+    path = root / "status.json" if root else None
+    st = read_json(path) if path and path.exists() else None
+    out = {"root": str(root) if root else None, "status": st, "age_s": None}
+    if root is None:
+        out.update(state="down", why="no protocol root could be resolved")
+        return out
+    if st is None:
+        why = "status.json is missing" if not (path and path.exists()) else "status.json is unreadable/not JSON"
+        out.update(state="down", why=why)
+        return out
+    ts = parse_ts(st.get("ts"))
+    age = None if ts is None else max(0.0, time.time() - ts)
+    if age is None:  # fall back to the file's own mtime if `ts` is unparseable
+        try:
+            age = max(0.0, time.time() - path.stat().st_mtime)
+        except OSError:
+            age = None
+    out["age_s"] = round(age, 2) if age is not None else None
+    if age is None or age > stale_secs:
+        out.update(state="down",
+                   why=f"status.json heartbeat is {out['age_s']}s old (stale after {stale_secs:g}s)")
+        return out
+    fps = st.get("fps") or 0.0
+    if not st.get("gameLoaded"):
+        if not st.get("speed") and not st.get("tick"):
+            out.update(state="menu", why="the bench is up but no game has been loaded this session")
+        else:
+            out.update(state="stalled",
+                       why=("the main thread has not run for >5s while the process is alive "
+                            f"(last snapshot: speed={st.get('speed')!r}, tick={st.get('tick')}, fps={fps:g})"))
+        return out
+    if fps < fps_floor:
+        out.update(state="starved",
+                   why=(f"frames are being delivered at {fps:g} fps (floor {fps_floor:g}); "
+                        "RimWorld's tick loop is frame-bound, so time is barely moving"))
+        return out
+    out.update(state="ok", why=f"gameLoaded, {fps:g} fps, tick {st.get('tick')}")
+    return out
+
+
+def health_advice(h, root):
+    """The actionable half of a liveness verdict. One paragraph per state."""
+    bench = bench_dir_for(root) if root else None
+    launcher = f"cd {bench} && ./run-agent.sh --quicktest" if bench else "run the bench's ./run-agent.sh"
+    state = h["state"]
+    if state == "down":
+        return ("the bench is not running.\n"
+                f"  start it:  {launcher}\n"
+                "  (that is _RimWorld-Agent, the one install an agent may launch — never\n"
+                "   _RimWorld-Testing and never the MP install)")
+    if state == "menu":
+        return ("the bench is running but sitting at the main menu.\n"
+                "  load a save in the window (`rwa watch on` reveals it), or relaunch with\n"
+                "  --quicktest for a generated map. `status`, `version` and `journal` answer\n"
+                "  from here; every other verb will say no-active-game.")
+    if state == "stalled":
+        return ("the process is alive but its main thread is not running.\n"
+                "  if the game is on a loading screen this clears itself; if it does not,\n"
+                "  the window is getting no frames at all — check the launcher's Hyprland\n"
+                "  rules (`hyprctl keyword windowrule \"render_unfocused on, match:class "
+                f"^({GAME_WINDOW_CLASS})$\"`) and relaunch through run-agent.sh, which\n"
+                "  applies them before the window maps.")
+    if state == "starved":
+        return ("frames are being throttled, so the sim is crawling (FINDINGS 4b).\n"
+                "  almost always the hidden-workspace case: Hyprland drives no frames for a\n"
+                "  window on a hidden special workspace unless render_unfocused is set BEFORE\n"
+                "  it maps. run-agent.sh applies that plus misc:render_unfocused_fps and\n"
+                "  vblank_mode=0; a game started any other way will not have them.\n"
+                "  `rwa watch on` reveals the window, which also unthrottles it.")
+    return ""
+
+
+# --- envelopes ---------------------------------------------------------------
+
+def envelope(op, ok, data=None, code=None, detail=None, cid=None, extra=None):
+    """A client-synthesized envelope, shaped exactly like the mod's.
+
+    Same keys in the same places, so `jq '.ok'` and `jq '.data'` work no matter
+    which side produced the answer. The `rwa` block is the only tell, and its
+    presence is what says "this did not come off the disk from the mod".
+    """
+    env = {"id": cid, "op": op, "ok": bool(ok)}
+    if ok:
+        env["data"] = data if data is not None else {}
+    else:
+        env["error"] = {"code": code, "detail": detail}
+    env["rwa"] = dict(extra or {})
+    env["rwa"].setdefault("client", VERSION)
+    return env
+
+
+def env_exit(env):
+    if env.get("ok"):
+        return EXIT_OK
+    code = (env.get("error") or {}).get("code")
+    if code == E_TIMEOUT:
+        return EXIT_TIMEOUT
+    if code in (E_DOWN, E_NO_ROOT):
+        return EXIT_DOWN
+    if code == E_USAGE:
+        return EXIT_USAGE
+    return EXIT_NOT_OK
+
+
+# --- output ------------------------------------------------------------------
+
+def want_json(opts):
+    if opts.get("--json"):
+        return True
+    if opts.get("--pretty"):
+        return False
+    mode = os.environ.get("RWA_OUTPUT")
+    if mode in ("json", "pretty"):
+        return mode == "json"
+    return not sys.stdout.isatty()
+
+
+def render(value, indent=0):
+    """Generic JSON tree -> readable lines. Never drops, renames or reorders.
+
+    This is the whole of pretty mode, on purpose. A verb-aware formatter would
+    be game semantics on the client (banned by the spec's invariants) and would
+    silently hide any field added by a later serializer. If a verb ever wants a
+    prose rendering, it belongs in the verb's own data — a digest string from
+    2.1, not a special case here.
+    """
+    pad = "  " * indent
+    out = []
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if isinstance(v, (dict, list)) and v:
+                if isinstance(v, list) and all(not isinstance(x, (dict, list)) for x in v):
+                    out.append(f"{pad}{k}: [{', '.join(scalar(x) for x in v)}]")
+                else:
+                    out.append(f"{pad}{k}:")
+                    out.extend(render(v, indent + 1))
+            elif isinstance(v, (dict, list)):
+                out.append(f"{pad}{k}: {'{}' if isinstance(v, dict) else '[]'}")
+            else:
+                out.append(f"{pad}{k}: {scalar(v)}")
+    elif isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                lines = render(item, indent + 1)
+                if lines:
+                    out.append(pad + "- " + lines[0].strip())
+                    out.extend(lines[1:])
+                else:
+                    out.append(pad + "- {}")
+            elif isinstance(item, list):
+                out.append(pad + "-")
+                out.extend(render(item, indent + 1))
+            else:
+                out.append(f"{pad}- {scalar(item)}")
+    else:
+        out.append(pad + scalar(value))
+    return out
+
+
+def scalar(v):
+    if v is None:
+        return "null"
+    if v is True:
+        return "true"
+    if v is False:
+        return "false"
+    return str(v)
+
+
+def emit(env, opts, pretty_body=None):
+    """Print an envelope and return its exit code."""
+    if want_json(opts):
+        print(json.dumps(env, ensure_ascii=False))
+    elif not opts.get("--quiet"):
+        if pretty_body is not None:
+            print(pretty_body.rstrip("\n"))
+        elif env.get("ok"):
+            data = env.get("data")
+            lines = render(data) if isinstance(data, (dict, list)) else [scalar(data)]
+            print("\n".join(lines) if lines else "(no data)")
+        else:
+            err = env.get("error") or {}
+            print(f"{env.get('op')}: {err.get('code')}", file=sys.stderr)
+            if err.get("detail"):
+                print("  " + str(err["detail"]).replace("\n", "\n  "), file=sys.stderr)
+    return env_exit(env)
+
+
+# --- transcripts -------------------------------------------------------------
+
+class Transcript:
+    """A run directory: every command and result, byte for byte, in order.
+
+    Keyed by the game's session id by default, because `sid` is already the
+    join key for the journal file (`journal/<sid>.ndjson`) and for every result
+    envelope. One game session, one transcript, one journal — a post-mortem or
+    an rwtest report can line all three up without a correlation table.
+    """
+
+    def __init__(self, base, run):
+        self.dir = Path(base) / run
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.run = run
+        meta = self.dir / "meta.json"
+        if not meta.exists():
+            meta.write_text(json.dumps({
+                "run": run, "client": VERSION,
+                "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            }, indent=2) + "\n")
+
+    def step(self, op):
+        """Claim the next NNN-<op>/ directory. mkdir is the lock."""
+        n = 1 + sum(1 for p in self.dir.iterdir() if p.is_dir() and re.match(r"^\d{3}-", p.name))
+        while n < 1000:
+            path = self.dir / f"{n:03d}-{re.sub(r'[^A-Za-z0-9_-]', '_', op)}"
+            try:
+                path.mkdir()
+                return path
+            except FileExistsError:
+                n += 1
+        raise RuntimeError("transcript run is full (1000 steps)")
+
+    def record(self, step_dir, cmd_text, result_text, entry):
+        (step_dir / "cmd.json").write_text(cmd_text.rstrip("\n") + "\n")
+        if result_text is not None:
+            (step_dir / "result.json").write_text(result_text.rstrip("\n") + "\n")
+        self.note(dict(entry, step=step_dir.name))
+
+    def note(self, entry):
+        """A log line with no step directory — an attempt that was never sent.
+
+        It has no bytes to replay, so it gets no NNN- directory, but a
+        post-mortem still wants to see that the agent tried to talk to a bench
+        that was not there and when.
+        """
+        entry = dict(entry, ts=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+        with (self.dir / "log.ndjson").open("a") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def open_transcript(opts, root, h):
+    if opts.get("--no-transcript") or os.environ.get("RWA_NO_TRANSCRIPT"):
+        return None
+    base = Path(opts.get("--transcripts") or TRANSCRIPTS)
+    run = opts.get("--run") or os.environ.get("RWA_RUN")
+    if not run:
+        sid = (h.get("status") or {}).get("sid")
+        run = sid if sid else "nogame-" + time.strftime("%Y%m%dT%H%M%S")
+    run = re.sub(r"[^A-Za-z0-9_.-]", "_", str(run))
+    try:
+        return Transcript(base, run)
+    except OSError as e:
+        warn(f"transcripts disabled ({e})")
+        return None
+
+
+# --- the round trip ----------------------------------------------------------
+
+def new_id(op):
+    stamp = time.strftime("%H%M%S")
+    return f"{re.sub(r'[^A-Za-z0-9]', '', op)[:12] or 'op'}-{stamp}-{os.getpid() % 10000:04d}"
+
+
+def send(root, op, args, opts, h, transcript=None):
+    """Write commands/<id>.json, wait for results/<id>.json, return the envelope.
+
+    Liveness is checked BEFORE the write, because a command dropped into a dead
+    bench's inbox is not a no-op: Poller.Init answers it `stale-on-restart` on
+    the next launch, so a fast failure here is the difference between "nothing
+    happened" and "a ghost command surfaces at the next boot".
+    """
+    cid = opts.get("--id") or new_id(op)
+    if not ID_RE.match(cid):
+        return envelope(op, False, code=E_USAGE, cid=cid, detail=(
+            f"id {cid!r} has characters outside [A-Za-z0-9_-]; Poller.Sanitize rewrites "
+            "those when it names the result file, so the result would land somewhere "
+            "this client is not looking"))
+    # Only `down` blocks. A stalled or starved bench still has a live POLLER
+    # THREAD — that thread is what writes status.json, independently of frames —
+    # so it consumes the command and answers promptly: off-thread verbs succeed,
+    # and main-thread verbs get no-active-game out of Poller.ScanInbox rather
+    # than queueing. Refusing to send there would hide the mod's own, better
+    # answer behind a guess of ours.
+    if h["state"] == "down":
+        env = envelope(op, False, code=E_DOWN, cid=cid,
+                       detail=h["why"] + " — command not sent",
+                       extra={"health": h["state"], "advice": health_advice(h, root)})
+        if transcript:
+            transcript.note({"op": op, "id": cid, "ok": False, "error": E_DOWN,
+                             "sent": False, "source": "rwa"})
+        return env
+
+    inbox = root / "commands"
+    results = root / "results"
+    try:
+        inbox.mkdir(parents=True, exist_ok=True)
+        results.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return envelope(op, False, code=E_IO, cid=cid, detail=str(e))
+
+    # A leftover result from an earlier command with this id would be read back
+    # instantly as if it were ours. Only reachable via --id, but silent if it
+    # happens, so it is cleared rather than guarded against.
+    dest = results / (cid + ".json")
+    if dest.exists():
+        try:
+            dest.unlink()
+        except OSError as e:
+            return envelope(op, False, code=E_IO, cid=cid,
+                            detail=f"a stale {dest} is in the way and cannot be removed: {e}")
+
+    cmd = {"id": cid, "op": op, "args": args}
+    text = json.dumps(cmd, ensure_ascii=False)
+    # Written as a dotfile then renamed: the poller's inbox scan globs *.json,
+    # so a partially written command is never even a candidate. (It also has a
+    # 250ms minimum-age heuristic, but that is its belt, not our braces.)
+    tmp = inbox / f".rwa-{cid}.tmp"
+    step_dir = transcript.step(op) if transcript else None
+    started = time.time()
+    try:
+        tmp.write_text(text)
+        tmp.replace(inbox / (cid + ".json"))
+    except OSError as e:
+        env = envelope(op, False, code=E_IO, cid=cid, detail=str(e))
+        if step_dir:
+            transcript.record(step_dir, text, None,
+                              {"op": op, "id": cid, "ok": False, "error": E_IO, "source": "rwa"})
+        return env
+
+    timeout = resolve_timeout(op, opts)
+    env, raw = await_result(root, dest, cid, op, started, timeout, opts, h)
+    if step_dir:
+        transcript.record(step_dir, text, raw if raw is not None else json.dumps(env, indent=2) + "\n", {
+            "op": op, "id": cid, "ok": bool(env.get("ok")),
+            "error": (env.get("error") or {}).get("code"),
+            "elapsed_s": round(time.time() - started, 3),
+            "source": "mod" if raw is not None else "rwa",
+        })
+    return env
+
+
+def resolve_timeout(op, opts):
+    if opts.get("--timeout") is not None:
+        try:
+            t = float(opts["--timeout"])
+        except ValueError:
+            die("--timeout takes seconds (0 = wait as long as the heartbeat is alive)")
+        return None if t <= 0 else t
+    return None if op in UNBOUNDED_OPS else DEFAULT_TIMEOUT
+
+
+def await_result(root, dest, cid, op, started, timeout, opts, h0):
+    """Poll for the result file, watching the heartbeat while we wait.
+
+    The wall clock is the weaker guard of the two. A bench that dies mid-command
+    never writes anything, so waiting out a 60s advance timeout would report
+    "timeout" for what is really "the game is gone"; the heartbeat catches that
+    in stale_secs instead, and says so.
+    """
+    stale = float(opts.get("--stale-secs") or STALE_SECS)
+    floor = float(opts.get("--fps-floor") or FPS_FLOOR)
+    delay = float(opts.get("--poll-ms") or POLL_MS) / 1000.0
+    show_progress = not want_json(opts) and not opts.get("--quiet") and sys.stderr.isatty()
+    last_note = 0.0
+    noted = False
+
+    def done(env, raw):
+        # The progress line is written with \r and no newline, so it has to be
+        # wiped before anything else prints or the two overlap.
+        if noted:
+            print("\r" + " " * 78 + "\r", end="", file=sys.stderr, flush=True)
+        return env, raw
+
+    while True:
+        if dest.exists():
+            raw = None
+            for _ in range(5):  # the mod writes tmp+rename, but be forgiving
+                try:
+                    raw = dest.read_text()
+                except OSError:
+                    time.sleep(0.05)
+                    continue
+                try:
+                    env = json.loads(raw)
+                except ValueError:
+                    time.sleep(0.05)
+                    continue
+                if not isinstance(env, dict) or "ok" not in env:
+                    return done(envelope(op, False, code=E_BAD_RESULT, cid=cid, detail=(
+                        "result file is JSON but not a result envelope: " + raw[:500]),
+                        extra={"result_path": str(dest)}), raw)
+                if env.get("id") not in (None, cid):
+                    return done(envelope(op, False, code=E_BAD_RESULT, cid=cid, detail=(
+                        f"result file names id {env.get('id')!r}, expected {cid!r}"),
+                        extra={"result_path": str(dest)}), raw)
+                return done(env, raw)
+            return done(envelope(op, False, code=E_BAD_RESULT, cid=cid, detail=(
+                "result file never parsed as JSON: " + (raw or "")[:500]),
+                extra={"result_path": str(dest)}), raw)
+
+        h = health(root, stale, floor)
+        if h["state"] == "down":
+            return done(envelope(op, False, code=E_DOWN, cid=cid,
+                                 detail=f"{h['why']} — the command was written to the inbox but "
+                                        "the bench stopped answering; it will be consumed with "
+                                        "stale-on-restart at the next launch",
+                                 extra={"health": h["state"],
+                                        "advice": health_advice(h, root)}), None)
+
+        waited = time.time() - started
+        if timeout is not None and waited > timeout:
+            return done(envelope(op, False, code=E_TIMEOUT, cid=cid, detail=(
+                f"no result after {waited:.1f}s (limit {timeout:g}s). the bench is alive "
+                f"(state={h['state']}); raise --timeout, or use --timeout 0 to wait as long "
+                "as the heartbeat holds"),
+                extra={"health": h["state"], "waited_s": round(waited, 2)}), None)
+
+        if show_progress and time.time() - last_note >= 1.0:
+            last_note = time.time()
+            adv = (h.get("status") or {}).get("advance") or {}
+            if adv.get("id") == cid:
+                target = adv.get("target")
+                where = f"{adv.get('ticks_done')}" + (f"/{target}" if target and target > 0 else "")
+                print(f"\r  advance {cid}: {where} ticks, {waited:.0f}s elapsed",
+                      end="", file=sys.stderr, flush=True)
+                noted = True
+            elif waited > 3:
+                print(f"\r  waiting for {op} ({waited:.0f}s, bench {h['state']})",
+                      end="", file=sys.stderr, flush=True)
+                noted = True
+        if waited > 1.0:
+            delay = min(POLL_MS_MAX / 1000.0, delay * 1.5)
+        time.sleep(delay)
+
+
+# --- journal -----------------------------------------------------------------
+
+def journal_files(root):
+    d = root / "journal"
+    if not d.is_dir():
+        return []
+    return sorted(d.glob("*.ndjson"))
+
+
+def pick_journal(root, sid=None):
+    files = journal_files(root)
+    if not files:
+        return None
+    if sid:
+        for f in files:
+            if f.stem == sid:
+                return f
+        return None
+    return files[-1]  # session ids sort chronologically: yyyyMMddTHHmmss
+
+
+def read_journal(path, since_seq=0, since_tick=-1, types=None, limit=500):
+    """Same filter semantics as JournalVerbs.Read, over the file directly.
+
+    Deliberately identical, including skipping unparseable lines (the verb does
+    `if (evt == null) continue`, which also covers a torn final line while the
+    poller is mid-flush). The count of those is reported out of band rather than
+    in `data`, so the data shape stays byte-comparable with the verb's.
+    """
+    events, last_seq, truncated, bad = [], 0, False, 0
+    with path.open("r", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                evt = json.loads(line)
+            except ValueError:
+                bad += 1
+                continue
+            if not isinstance(evt, dict) or not isinstance(evt.get("seq"), (int, float)):
+                bad += 1
+                continue
+            seq = evt["seq"]
+            if seq > last_seq:
+                last_seq = int(seq)
+            if seq <= since_seq:
+                continue
+            if since_tick >= 0 and isinstance(evt.get("tick"), (int, float)) and evt["tick"] < since_tick:
+                continue
+            if types and evt.get("type") not in types:
+                continue
+            if limit and len(events) >= limit:
+                truncated = True
+                break
+            events.append(evt)
+    return {"file": str(path), "count": len(events), "truncated": truncated,
+            "last_seq": last_seq, "events": events}, bad
+
+
+def journal_line(evt, width=0):
+    """One event, one line: `seq tick type payload`.
+
+    The payload is rendered as compact JSON rather than picked apart, so this
+    stays schema-free — a new event type needs no change here. Clipping is the
+    one place pretty mode hides anything, and it is marked with a `…` and
+    switched off by --full.
+    """
+    payload = evt.get("payload")
+    body = json.dumps(payload, ensure_ascii=False) if payload is not None else ""
+    head = f"{evt.get('seq'):>5} t{evt.get('tick'):<8} {evt.get('type', '?'):<13}"
+    line = head + " " + body
+    if width and len(line) > width:
+        line = line[:width - 1] + "…"
+    return line
+
+
+# --- client subcommands ------------------------------------------------------
+
+def cmd_root(opts, root, why, cands):
+    data = {"root": str(root) if root else None,
+            "exists": bool(root and root.is_dir()),
+            "resolved_by": why,
+            "bench": str(bench_dir_for(root)) if root else None,
+            "candidates": [{"path": str(p), "note": n, "exists": p.is_dir()} for p, n in cands]}
+    env = envelope("rwa:root", root is not None, data=data,
+                   code=E_NO_ROOT, detail="no AutoRimmer protocol root found")
+    if want_json(opts):
+        return emit(env, opts)
+    if root:
+        print(root)
+        if not root.is_dir():
+            warn(f"that path does not exist yet ({why})")
+        return EXIT_OK
+    warn("no protocol root found. tried:")
+    for p, n in cands:
+        warn(f"  {p}   [{n}]")
+    return EXIT_DOWN
+
+
+def cmd_status(opts, root, tokens):
+    known = {"--probe": 0, "--sample": 1}
+    _, mine = parse_op_args(tokens, known)
+    stale = float(opts.get("--stale-secs") or STALE_SECS)
+    floor = float(opts.get("--fps-floor") or FPS_FLOOR)
+    h = health(root, stale, floor)
+    data = {"health": {k: h[k] for k in ("state", "why", "age_s", "root")},
+            "status": h["status"]}
+
+    sample = one(mine, "--sample")
+    if sample:
+        # Liveness by observation rather than by a single field: FINDINGS 4b's
+        # standing advice is to assert a tick delta, not process-up. Only the
+        # heartbeat half is meaningful while paused — which is the normal state
+        # of an agent-driven bench, so that is said rather than scored.
+        secs = float(sample)
+        first = h["status"] or {}
+        time.sleep(secs)
+        h2 = health(root, stale, floor)
+        second = h2["status"] or {}
+        data["sample"] = {
+            "seconds": secs,
+            "tick_delta": (second.get("tick", 0) or 0) - (first.get("tick", 0) or 0),
+            "heartbeat_moved": second.get("ts") != first.get("ts"),
+            "fps": second.get("fps"),
+            "paused": second.get("paused"),
+            "state_before": h["state"], "state_after": h2["state"],
+        }
+        h = h2
+
+    if mine.get("--probe"):
+        # The `status` verb is off-thread in the mod, so it answers from the
+        # main menu too — the one round trip worth making before a game exists.
+        t = open_transcript(opts, root, h)
+        data["probe"] = send(root, "status", {}, opts, h, t)
+
+    ok = h["state"] in ("ok", "menu", "starved")
+    env = envelope("rwa:status", ok, data=data,
+                   code=E_DOWN, detail=h["why"],
+                   extra={"health": h["state"], "advice": health_advice(h, root)})
+    if not ok:
+        env["data"] = data  # keep the evidence on a failure too
+    if want_json(opts):
+        print(json.dumps(env, ensure_ascii=False))
+        return HEALTH_EXIT[h["state"]]
+
+    st = h["status"] or {}
+    lines = [f"bench   {h['state'].upper()}  — {h['why']}", f"root    {root}"]
+    if st:
+        adv = st.get("advance")
+        lines += [
+            f"session {st.get('sid')}   mod {st.get('mod')}   heartbeat {h['age_s']}s ago",
+            f"game    gameLoaded={scalar(st.get('gameLoaded'))} paused={scalar(st.get('paused'))} "
+            f"speed={st.get('speed') or '-'} tick={st.get('tick')} fps={st.get('fps')}",
+        ]
+        if st.get("activeOp"):
+            lines.append(f"active  {st.get('activeOp')}")
+        if adv:
+            lines.append(f"advance {adv.get('id')}: {adv.get('ticks_done')} ticks done, target {adv.get('target')}")
+        if st.get("thermal"):
+            lines.append(f"thermal {st['thermal'].get('c')}C  budget scale {st['thermal'].get('scale')}")
+    if data.get("sample"):
+        s = data["sample"]
+        note = "paused — tick will not move without `rwa advance`" if s["paused"] else \
+               ("ticking" if s["tick_delta"] else "UNPAUSED BUT NOT TICKING")
+        lines.append(f"sample  {s['seconds']:g}s: {s['tick_delta']} ticks, heartbeat "
+                     f"{'moved' if s['heartbeat_moved'] else 'FROZEN'}, {note}")
+    advice = health_advice(h, root)
+    if advice:
+        lines.append("")
+        lines.append(advice)
+    if data.get("probe"):
+        p = data["probe"]
+        lines.append("")
+        if p.get("ok"):
+            v = p["data"].get("verbs", [])
+            lines.append(f"probe   status verb answered: {len(v)} verbs — {', '.join(v)}")
+        else:
+            lines.append(f"probe   FAILED: {(p.get('error') or {}).get('code')}")
+    print("\n".join(lines))
+    return HEALTH_EXIT[h["state"]]
+
+
+def cmd_journal(opts, root, tokens):
+    known = {"--since": 1, "--since-tick": 1, "--type": 1, "--limit": 1,
+             "--sid": 1, "--verb": 0, "--file": 0, "--list": 0, "--full": 0}
+    extra, mine = parse_op_args(tokens, known)
+    since = int(one(mine, "--since", 0))
+    since_tick = int(one(mine, "--since-tick", -1))
+    limit = int(one(mine, "--limit", 500))
+    types = [t for v in (mine.get("--type") or []) for t in v.split(",") if t]
+
+    if mine.get("--list"):
+        files = journal_files(root)
+        data = {"journal_dir": str(root / "journal"),
+                "sessions": [{"sid": f.stem, "path": str(f), "bytes": f.stat().st_size} for f in files]}
+        env = envelope("rwa:journal-list", True, data=data)
+        if want_json(opts):
+            return emit(env, opts)
+        for s in data["sessions"]:
+            print(f"{s['sid']}  {s['bytes']:>9} bytes  {s['path']}")
+        if not data["sessions"]:
+            warn(f"no journal files under {data['journal_dir']}")
+        return EXIT_OK
+
+    if mine.get("--verb"):
+        h = health(root, float(opts.get("--stale-secs") or STALE_SECS),
+                   float(opts.get("--fps-floor") or FPS_FLOOR))
+        args = dict(extra)
+        if since:
+            args["since_seq"] = since
+        if since_tick >= 0:
+            args["since_tick"] = since_tick
+        if types:
+            args["types"] = types
+        args.setdefault("limit", limit)
+        t = open_transcript(opts, root, h)
+        env = send(root, "journal", args, opts, h, t)
+    else:
+        if extra:
+            warn(f"ignoring {', '.join('--' + k for k in extra)}: a file-mode journal read "
+                 "takes no verb arguments (add --verb to send them to the mod)")
+        # The file is the same one the verb reads (JournalVerbs is off-thread),
+        # so a direct read costs the game nothing, needs no live bench, and is
+        # the only path that works for a post-mortem after the game exits.
+        path = pick_journal(root, one(mine, "--sid"))
+        if path is None:
+            env = envelope("journal", False, code=E_IO,
+                           detail=f"no journal file under {root / 'journal'}"
+                                  + (f" for sid {one(mine, '--sid')}" if one(mine, "--sid") else ""),
+                           extra={"source": "file"})
+        else:
+            data, bad = read_journal(path, since, since_tick, types, limit)
+            env = envelope("journal", True, data=data,
+                           extra={"source": "file", "unparseable_lines": bad})
+            if bad:
+                warn(f"{bad} unparseable line(s) skipped in {path.name}")
+
+    if want_json(opts) or not env.get("ok"):
+        return emit(env, opts)
+    d = env["data"]
+    width = 0 if mine.get("--full") else term_width()
+    for evt in d["events"]:
+        print(journal_line(evt, width))
+    tail = f"{d['count']} events, last_seq {d['last_seq']}"
+    if d["truncated"]:
+        tail += f" (TRUNCATED at limit {limit}; raise --limit or use --since {d['events'][-1]['seq']})"
+    print(f"--- {tail}  [{Path(d['file']).name}]")
+    return EXIT_OK
+
+
+def term_width():
+    try:
+        return max(60, os.get_terminal_size().columns)
+    except OSError:
+        return 0
+
+
+def cmd_tail(opts, root, tokens):
+    """Follow the journal, including across a game restart.
+
+    Session rotation is not an edge case here: the mod opens a new
+    `journal/<sid>.ndjson` per process, so "the game restarted" always looks
+    like a new file appearing beside the one being read.
+    """
+    known = {"--since": 1, "--type": 1, "-n": 1, "--from-start": 0, "--full": 0,
+             "--sid": 1, "--once": 0}
+    _, mine = parse_op_args(tokens, known)
+    types = [t for v in (mine.get("--type") or []) for t in v.split(",") if t]
+    last_n = int(one(mine, "-n", 10))
+    since = one(mine, "--since")
+    as_json = want_json(opts)
+    width = 0 if (mine.get("--full") or as_json) else term_width()
+
+    path = pick_journal(root, one(mine, "--sid"))
+    if path is None:
+        return emit(envelope("rwa:tail", False, code=E_IO,
+                             detail=f"no journal file under {root / 'journal'}"), opts)
+
+    def show(evt):
+        if types and evt.get("type") not in types:
+            return
+        print(json.dumps(evt, ensure_ascii=False) if as_json else journal_line(evt, width),
+              flush=True)
+
+    data, _ = read_journal(path, int(since) if since else 0, -1, None, 0)
+    events = data["events"]
+    if not mine.get("--from-start") and since is None:
+        events = events[-last_n:] if last_n else []
+    for evt in events:
+        show(evt)
+    seen = data["last_seq"]
+    if mine.get("--once"):
+        return EXIT_OK
+
+    if not as_json:
+        warn(f"following {path.name} (ctrl-c to stop)")
+    try:
+        while True:
+            time.sleep(0.5)
+            newest = pick_journal(root, one(mine, "--sid"))
+            if newest and newest != path:
+                path, seen = newest, 0
+                if not as_json:
+                    warn(f"--- new session: {path.name}")
+            data, _ = read_journal(path, seen, -1, None, 0)
+            for evt in data["events"]:
+                show(evt)
+            seen = max(seen, data["last_seq"])
+    except KeyboardInterrupt:
+        return EXIT_OK
+
+
+def hyprctl(args, as_json=False):
+    """Run hyprctl; None if it is not there or fails. Never raises."""
+    if not os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        return None
+    cmd = ["hyprctl"] + (["-j"] if as_json else []) + args
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    if not as_json:
+        return out.stdout.strip()
+    try:
+        return json.loads(out.stdout)
+    except ValueError:
+        return None
+
+
+def workspace_revealed():
+    mons = hyprctl(["monitors"], as_json=True)
+    if mons is None:
+        return None
+    for m in mons:
+        sw = m.get("specialWorkspace") or {}
+        if sw.get("name") == "special:" + HYPR_WORKSPACE:
+            return True
+    return False
+
+
+def game_window():
+    clients = hyprctl(["clients"], as_json=True)
+    if clients is None:
+        return None
+    for c in clients:
+        if c.get("class") == GAME_WINDOW_CLASS:
+            return c
+    return False
+
+
+def set_fps_cap(conf, fps):
+    """Rewrite fps_limit in the mangohud config MangoHud is watching.
+
+    Written in place (not tmp+rename) exactly as run-agent.sh writes it, and
+    every other line is preserved — the launcher also puts `no_display=1` there
+    and a rewrite that dropped it would pop the HUD onto the bench.
+    """
+    lines, found = [], False
+    if conf.exists():
+        for line in conf.read_text().splitlines():
+            if line.strip().startswith("fps_limit"):
+                lines.append(f"fps_limit={fps}")
+                found = True
+            else:
+                lines.append(line)
+    if not found:
+        lines.insert(0, f"fps_limit={fps}")
+        if "no_display=1" not in lines:
+            lines.append("no_display=1")
+    conf.parent.mkdir(parents=True, exist_ok=True)
+    conf.write_text("\n".join(lines) + "\n")
+
+
+def cmd_watch(opts, root, tokens):
+    """`rwa watch on|off` — reveal/hide the window and re-cap a running game.
+
+    Two independent mechanisms, deliberately kept separate because they fail
+    separately: MangoHud re-reads its config file, so the fps cap changes
+    without a restart and works even with no compositor; the special workspace
+    is a pure Hyprland concern and does nothing at all under the Xvfb fallback,
+    where "watching" means pointing a VNC client at localhost:5900 instead.
+    """
+    known = {"--fps": 1}
+    _, mine = parse_op_args([t for t in tokens if t.startswith("--")], known)
+    words = [t for t in tokens if not t.startswith("--")]
+    if len(words) > 1:
+        die("usage: rwa watch [on|off]")
+    action = words[0] if words else "show"
+    if action not in ("on", "off", "show", "status"):
+        die(f"unknown watch action {action!r} (on|off, or nothing to report state)")
+
+    bench = bench_dir_for(root) if root else None
+    conf = (bench / "config" / "mangohud-agent.conf") if bench else None
+    fps_arg = one(mine, "--fps")
+    data = {"action": action, "bench": str(bench) if bench else None,
+            "mangohud_config": str(conf) if conf else None,
+            "workspace": "special:" + HYPR_WORKSPACE}
+
+    if action in ("on", "off"):
+        fps = int(fps_arg) if fps_arg else (WATCH_FPS_ON if action == "on" else WATCH_FPS_OFF)
+        if conf is None:
+            return emit(envelope("rwa:watch", False, code=E_NO_ROOT,
+                                 detail="no bench directory found, so there is no mangohud "
+                                        "config to rewrite"), opts)
+        try:
+            set_fps_cap(conf, fps)
+        except OSError as e:
+            return emit(envelope("rwa:watch", False, code=E_IO, detail=str(e)), opts)
+        data["fps_limit"] = fps
+        # The launcher pins misc:render_unfocused_fps to the same cap; leaving
+        # it at 30 while the mangohud cap says 60 would silently hold the hidden
+        # window at 30 the moment it is hidden again.
+        hyprctl(["keyword", "misc:render_unfocused_fps", str(fps)])
+        revealed = workspace_revealed()
+        data["revealed_before"] = revealed
+        want = action == "on"
+        if revealed is None:
+            data["hyprland"] = "unavailable (not a Hyprland session, or hyprctl failed)"
+        elif revealed != want:
+            hyprctl(["dispatch", "togglespecialworkspace", HYPR_WORKSPACE])
+            data["hyprland"] = "toggled"
+        else:
+            data["hyprland"] = "already " + ("revealed" if want else "hidden")
+
+    win = game_window()
+    data["revealed"] = workspace_revealed()
+    data["window"] = None if win in (None, False) else {
+        "workspace": (win.get("workspace") or {}).get("name"),
+        "title": win.get("title"), "pid": win.get("pid")}
+    if conf and conf.exists():
+        for line in conf.read_text().splitlines():
+            if line.strip().startswith("fps_limit"):
+                data["fps_limit"] = line.split("=", 1)[-1].strip()
+
+    notes = []
+    if win is False:
+        notes.append(f"no {GAME_WINDOW_CLASS} window on this Hyprland session. If the bench was "
+                     "started with run-agent.sh --xvfb, watching means a VNC client on "
+                     "localhost:5900, not a workspace (FINDINGS section 8).")
+    if win is None and data["revealed"] is None:
+        notes.append("hyprctl is unavailable here; the fps cap was still written, which is the "
+                     "half that works on any machine.")
+    data["notes"] = notes
+
+    env = envelope("rwa:watch", True, data=data)
+    if want_json(opts):
+        return emit(env, opts)
+    print(f"watch    {action}")
+    print(f"fps cap  {data.get('fps_limit', '?')}   ({conf})")
+    print(f"window   {'revealed' if data['revealed'] else 'hidden'} on special:{HYPR_WORKSPACE}"
+          if data["revealed"] is not None else "window   (no Hyprland session)")
+    if data["window"]:
+        print(f"         {data['window']['title']} on {data['window']['workspace']}")
+    for n in notes:
+        warn(n)
+    return EXIT_OK
+
+
+def cmd_verbs(opts, root, tokens):
+    h = health(root, float(opts.get("--stale-secs") or STALE_SECS),
+               float(opts.get("--fps-floor") or FPS_FLOOR))
+    env = send(root, "status", {}, opts, h, open_transcript(opts, root, h))
+    if want_json(opts) or not env.get("ok"):
+        return emit(env, opts)
+    verbs = env["data"].get("verbs", [])
+    print("\n".join(verbs))
+    warn(f"{len(verbs)} verbs; mod root {env['data'].get('root')}")
+    return EXIT_OK
+
+
+def cmd_replay(opts, root, tokens):
+    """Re-send a transcript's commands, in order, against the current bench.
+
+    Ids are regenerated by default: replaying with the original ids would have
+    the run overwrite its own evidence in `results/`, and two replays of one
+    transcript would collide with each other.
+    """
+    known = {"--same-ids": 0, "--dry-run": 0, "--stop-on-error": 0}
+    _, mine = parse_op_args([t for t in tokens if t.startswith("--")], known)
+    words = [t for t in tokens if not t.startswith("--")]
+    if len(words) != 1:
+        die("usage: rwa replay <transcript-dir>")
+    src = Path(words[0])
+    if not src.is_dir():
+        src = Path(opts.get("--transcripts") or TRANSCRIPTS) / words[0]
+    if not src.is_dir():
+        die(f"no transcript directory at {words[0]}", EXIT_USAGE)
+    steps = sorted(p for p in src.iterdir() if p.is_dir() and (p / "cmd.json").exists())
+    if not steps:
+        die(f"{src} has no NNN-<op>/cmd.json steps to replay", EXIT_USAGE)
+
+    h = health(root, float(opts.get("--stale-secs") or STALE_SECS),
+               float(opts.get("--fps-floor") or FPS_FLOOR))
+    run = opts.get("--run") or ("replay-" + src.name + "-" + time.strftime("%H%M%S"))
+    t = None if mine.get("--dry-run") else Transcript(
+        Path(opts.get("--transcripts") or TRANSCRIPTS), re.sub(r"[^A-Za-z0-9_.-]", "_", run))
+    results, failed = [], 0
+    for step in steps:
+        cmd = json.loads((step / "cmd.json").read_text())
+        op, args = cmd.get("op"), cmd.get("args") or {}
+        sub = dict(opts)
+        if mine.get("--same-ids"):
+            sub["--id"] = cmd.get("id")
+        else:
+            sub.pop("--id", None)
+        if mine.get("--dry-run"):
+            env = envelope(op, True, data={"dry_run": True, "args": args})
+        else:
+            env = send(root, op, args, sub, h, t)
+        results.append({"step": step.name, "op": op, "ok": bool(env.get("ok")),
+                        "error": (env.get("error") or {}).get("code"),
+                        "id": env.get("id")})
+        if not env.get("ok"):
+            failed += 1
+            if mine.get("--stop-on-error"):
+                break
+    data = {"source": str(src), "run": t.run if t else None, "steps": len(steps),
+            "sent": len(results), "failed": failed, "results": results}
+    env = envelope("rwa:replay", failed == 0, data=data,
+                   code="rwa-replay-failed", detail=f"{failed}/{len(results)} steps failed")
+    if not want_json(opts):
+        for r in results:
+            print(f"{r['step']:<20} {r['op']:<16} {'ok' if r['ok'] else 'FAIL ' + str(r['error'])}")
+        print(f"--- {len(results)} sent, {failed} failed"
+              + (f", transcript {t.dir}" if t else " (dry run)"))
+        return EXIT_OK if failed == 0 else EXIT_NOT_OK
+    return emit(env, opts)
+
+
+USAGE = """rwa — drive an AutoRimmer bench over the file protocol.
+
+  rwa <op> [--arg value …]      send any op the mod knows (ping, digest, advance,
+                                find-rect, …) and print its result
+  rwa send <op> [--arg value …] the same, explicitly — use it for an op whose name
+                                collides with a subcommand below
+
+  rwa status [--probe] [--sample SECS]   is the bench alive, and how alive
+  rwa root                               which protocol root was resolved, and why
+  rwa verbs                              ops the running mod actually registered
+  rwa journal [--since N] [--type T] [--limit N] [--verb] [--sid S] [--list]
+  rwa tail [--type T] [-n N] [--from-start] [--full] [--once]
+  rwa watch [on|off] [--fps N]           reveal/hide the window, re-cap a running game
+  rwa replay <transcript-dir> [--dry-run] [--same-ids] [--stop-on-error]
+
+Op arguments:
+  --key value      type guessed: true/false/null, a number, else a string
+  --key            bare flag means the boolean true
+  --key:str value  force the type — also :num, :bool, :json
+  --a.b value      dotted keys nest: --until.event.type death
+  --key x --key y  repeating a key builds an array
+  --args-json JSON pass the whole args object ('-' = stdin, '@path' = a file)
+
+Global flags:
+  --json | --pretty     output mode (default: pretty on a tty, json otherwise)
+  --root PATH           protocol root override (also RWA_ROOT)
+  --timeout SECS        result wait; 0 = as long as the heartbeat holds
+                        (default 30s, and unbounded for advance)
+  --id ID               command id — [A-Za-z0-9_-] only
+  --run NAME            transcript run directory name (also RWA_RUN)
+  --transcripts DIR     transcript root (also RWA_TRANSCRIPTS)
+  --no-transcript       do not record this command
+  --stale-secs N        heartbeat age that means "down" (default 10)
+  --fps-floor N         fps below which the bench counts as frame-starved (default 5)
+  --quiet               suppress pretty output (exit code still speaks)
+
+Exit codes: 0 ok · 1 the mod said ok:false · 2 bad usage · 3 no live bench ·
+4 timed out waiting for a result.
+
+Environment: RIMWORLD_VAULT (workspace, default /home/dorian/projects/rimworld),
+RWA_ROOT, RWA_TRANSCRIPTS, RWA_RUN, RWA_OUTPUT=json|pretty, RWA_NO_TRANSCRIPT.
+See rwa/README.md for the protocol, jq recipes and the transcript layout."""
+
+
+def main(argv):
+    opts, rest = parse_globals(argv)
+    if opts.get("--version"):
+        print("rwa " + VERSION)
+        return EXIT_OK
+    if opts.get("--help") or opts.get("-h") or not rest or rest[0] in ("help", "--help"):
+        print(USAGE)
+        return EXIT_OK if (rest or opts) else EXIT_USAGE
+
+    cmd, tokens = rest[0], rest[1:]
+    root, why, cands = resolve_root(opts.get("--root") or os.environ.get("RWA_ROOT"))
+
+    if cmd == "root":
+        return cmd_root(opts, root, why, cands)
+    if root is None:
+        env = envelope(cmd, False, code=E_NO_ROOT, detail=(
+            "no AutoRimmer protocol root found. tried: "
+            + "; ".join(str(p) for p, _ in cands)
+            + ". Set RWA_ROOT or pass --root."))
+        return emit(env, opts)
+
+    if cmd in CLIENT_COMMANDS:
+        return CLIENT_COMMANDS[cmd](opts, root, tokens)
+
+    if cmd == "send":
+        if not tokens:
+            die("usage: rwa send <op> [--arg value …]")
+        op, tokens = tokens[0], tokens[1:]
+    else:
+        op = cmd
+    if op.startswith("-"):
+        die(f"'{op}' is not an op (ops come first: rwa <op> [--arg value …])")
+
+    args = parse_op_args(tokens)
+    h = health(root, float(opts.get("--stale-secs") or STALE_SECS),
+               float(opts.get("--fps-floor") or FPS_FLOOR))
+    transcript = open_transcript(opts, root, h)
+    env = send(root, op, args, opts, h, transcript)
+    if not want_json(opts) and not env.get("ok"):
+        adv = (env.get("rwa") or {}).get("advice")
+        code = env_exit(env)
+        emit(env, opts)
+        if adv:
+            print(adv, file=sys.stderr)
+        return code
+    return emit(env, opts)
+
+
+CLIENT_COMMANDS.update({
+    "status": cmd_status, "journal": cmd_journal, "tail": cmd_tail,
+    "watch": cmd_watch, "verbs": cmd_verbs, "replay": cmd_replay,
+})
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except BrokenPipeError:
+        os._exit(EXIT_OK)  # `rwa tail | head` is a normal way to stop
+    except KeyboardInterrupt:
+        sys.exit(130)
