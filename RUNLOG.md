@@ -430,8 +430,31 @@ is reachable by anything we are about to build; `halt_on_error` bites at 4.3 and
 dispatch-note problem, not a dependency — both are back to `state:next` with a
 precise do-not-copy list on the issue.
 
-- **Next picks:** **2.6 (3dce29a) + 1.4 (e3d04c7) as the pair** — different
-  repos entirely, zero file overlap, and 1.4 is work only this box can do.
-  Then 1.5 (4b65a28) + 2.2 (69ae91f), then 2.4. 2.5 also needs `rimworld-tools`
-  and so is a this-box pick whenever a slot is free.
+- **Next picks:** **2.6 (3dce29a) then 1.5 (4b65a28)**, with 2.2 (69ae91f) as
+  the parallel partner for whichever is not currently holding the bench — 2.6
+  and 1.5 touch disjoint files (observers vs poller/driver/journal) but both
+  need the game for acceptance, and the rule allows only one of those at a time.
+  Then 2.4.
+- **NOT 1.4 or 2.5** — see below. I recommended 1.4 as a pair for 2.6 earlier in
+  this session and then withdrew it.
 - **Before 3.2/3.3:** the fog-of-war contract question needs Dorian.
+
+### Needs Dorian — second escalation, found late in the session
+
+**`rimworld-tools` is not a git repository, and two specs are supposed to land
+there.** DESIGN.md line 34 and the README both put the `rwa` CLI (1.4) and the
+PNG render channel (2.5) in `/home/dorian/projects/rimworld-tools/`; that
+directory has no `.git`. Work landing there would have no branch, no commits, no
+review trail and no route to the other bench, which breaks the muster's process
+law and sits outside the GitHub handover.
+
+Not the orchestrator's call, because `git init` there is not neutral: 467 MB
+across 43,884 files, 206 MB of it `Info/decompiled/` — decompiled RimWorld plus
+~60 decompiled third-party mods. That is a copyright question and the handover
+repo is public. Three options are laid out on 1.4, 2.5 and the muster:
+gitignore-the-bulk and keep it private; move `rwa/` into the autorimmer repo
+(simplest, but contradicts DESIGN.md so it needs his sign-off, not a quiet
+deviation); or a small separate repo for `rwa/` + `rwtest/` alone.
+
+This was found by Dorian asking why the project seemed to span more than one
+repo — a good question that the plan had not been checked against.
