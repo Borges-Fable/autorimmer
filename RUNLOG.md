@@ -436,6 +436,26 @@ precise do-not-copy list on the issue.
   its location is settled, and it is the piece that makes the whole thing
   drivable by hand. Then 1.5 (4b65a28) + 2.2 (69ae91f), then 2.4, then 2.5.
 - No open contract questions remain. 3.2/3.3 are clear to start once 2.6 lands.
+
+### rimworld-tools now has local version control
+
+Closed at the end of the session. `git init`, 345 files, 34MB tracked of 467MB
+on disk, **no remote**. Version control is not publication — the copyright
+concern only ever applied to pushing, which I had conflated with versioning.
+`Info/decompiled/` (decompiled RimWorld + ~60 third-party mods) is gitignored
+with the rest of the derived bulk.
+
+Correction to my own earlier report: I said baseviz and log-watcher were both
+unbacked. Only baseviz was — `_meta/` and `log-watcher/` are each already their
+own local repo, so the umbrella ignores them rather than swallowing them as
+gitlinks. It did swallow `_meta` on the first attempt, because a `.gitignore`
+entry written `_meta/` does not match a gitlink, which is a file entry named
+`_meta`. Caught and fixed in the same operation.
+
+The point of doing it: spec 2.5 reuses baseviz's catalog and canvas, and an
+unversioned dependency cannot be pinned. Vendor-vs-import is still 2.5's open
+question, but it can no longer be decided on the grounds that there is no
+version to pin.
 - **Before 3.2/3.3:** the fog-of-war contract question needs Dorian.
 
 ### Needs Dorian — second escalation, found late in the session
