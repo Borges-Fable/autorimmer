@@ -116,14 +116,47 @@ other open spec lists 1.1 among its dependencies, so wave 1 is single-file until
 the skeleton lands. It is also the first spec in this repo to ship an assembly,
 so it sets the `Build:`-commit pattern.
 
+### Handover to another machine
+
+Session budget ran out, so 1.1's worker was stopped deliberately before it
+committed anything. It left nothing behind — no branch, no commits, no untracked
+files, tree clean — and the issue went back to `state:next` with a note saying
+so. Nothing about 1.1 is blocked; it simply has not started.
+
+Repo published: **https://github.com/Borges-Fable/autorimmer** (public). `main`
+and `spec/0.1-profile-spike` pushed, plus **21 `refs/bugs/*` and 1
+`refs/identities/*`** — the build plan lives in those refs and neither `git
+clone` nor `git push` carries them by default, so publishing without them would
+have handed the next machine the code and none of the plan.
+
+Two things fail on a fresh clone and both are now in the README, found by
+running the sequence into a throwaway clone rather than assuming:
+
+- `git-bug pull origin` dies with "No identity is set" before merging anything.
+  A local identity must be created first (`git-bug user new --non-interactive`).
+- `git-bug push origin` cannot authenticate against an HTTPS remote through
+  gh's credential helper — it does its own transport. Use
+  `git push origin 'refs/bugs/*:refs/bugs/*' 'refs/identities/*:refs/identities/*'`
+  after any issue change, or the next machine reads stale labels.
+
+Verified recipe end to end: clone -> identity -> pull gives 21 issues, all 8
+comments on the closed 0.1, and the wave 1-3 amendments intact.
+
+Also made the profile scripts machine-portable (e1a144f): `RIMWORLD_STEAM` and
+`RIMWORLD_TOOLS` now join the existing `RIMWORLD_VAULT` override, with this
+box's values as defaults. Re-verified it still builds an identical 32-mod,
+0-missing profile here. The bench still needs the sibling mod repos and a
+RimWorld install to be useful; spec work that does not touch the game does not.
+
 ### State at session end
 
 - **Done:** 0.1 (3fa4cf5) — closed, merged, acceptance fully met.
-- **In flight:** 1.1 (097f33a) — fable worker running.
+- **In flight:** none — 1.1's worker was stopped for the handover.
 - **Blocked:** none.
-- **Next pick:** whatever 1.1 unblocks. 1.2 (journal) and 2.3 (spatial) both
-  list 1.1 as their only dependency, so they are the first pair that can run in
-  parallel — different files, and only one of them needs the running game.
+- **Next pick:** 1.1 (097f33a, agent:fable), `state:next`, not started. After it,
+  1.2 (journal) and 2.3 (spatial) both list 1.1 as their only dependency, so
+  they are the first pair that can run in parallel — different files, and only
+  one of them needs the running game.
 
 ### Needs Dorian (carried forward, not blocking)
 
