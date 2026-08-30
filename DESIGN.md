@@ -226,3 +226,26 @@ queue by default (an agent flailing mid-experiment must not page triage).
   the original split also had no review trail and no route to the second bench.
   It stays unversioned and reference-only. 2.5 still REUSES `baseviz/`'s
   catalog and canvas — that reuse is a code dependency, not a location.
+- 2026-08-30 — **Fog of war is respected by the whole player-facing surface;
+  `dev:*` is exempt.** Every observer and query hides undiscovered cells —
+  `map-view`, `find-rect`, `nearest`, `room-at` alike — mirroring the action
+  model's player/dev split so it stays one rule rather than a per-verb
+  judgement. Spec 2.3 shipped three different behaviours in one file because
+  the question was never asked. The agent must not site a building in ground
+  it has never explored; and an agent with information no player has weakens
+  the colony as a test substrate, since exploration-triggered mod bugs would
+  never be provoked.
+- 2026-08-30 — **Blockers report HOW they are removable, not merely that they
+  block.** A bare "not buildable" is useless: some obstacles are mined, some
+  deconstructed, and some must be beaten down by a drafted colonist. The game
+  already reifies this and it must be serialized, not reinvented —
+  `Building.DeconstructibleBy(Faction.OfPlayer)` returns an `AcceptanceReport`
+  carrying the game's own reason string, and `Designator_Deconstruct` answers
+  the attack case with the literal `RemoveByAttackingTooltip`. Every spatial
+  result that rejects a cell or thing carries a `removal` field:
+  `mine` (`def.mineable` → 3.2 `designate mine`) ·
+  `deconstruct` (`DeconstructibleBy` accepted → 3.2 `designate deconstruct`) ·
+  `attack` (`def.IsNonDeconstructibleAttackableBuilding` → 3.4 draft + attack
+  thing) · `none` (permanent), plus the game's own reason string verbatim.
+  This is the concrete form of the standing "candidates + reasons, never bare
+  booleans" invariant.
