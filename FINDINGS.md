@@ -309,37 +309,57 @@ batchmode is a plausible future fast-CI lane only if someone patches or
 whitelists the atlas NREs and adds frame pacing — file under deferred, no
 spec depends on it.
 
-## 8. Xvfb fallback: designed + script-flagged; runtime demo UNVERIFIED-PENDING-INSTALL
+## 8. Xvfb fallback: VERIFIED (2026-08-30, orchestrator, post-install)
 
-`xorg-server-xvfb`/`x11vnc` were not installed at any point during the spike
-(checked at start, mid-run, and at close; sudo needs a password so the agent
-cannot install them — deliberately not attempted). The acceptance line "both
-display modes demonstrated" is therefore **half-done: special-workspace mode
-demonstrated live; Xvfb mode implemented and documented but not executed.**
+`xorg-server-xvfb`/`x11vnc` were absent for the whole spike (sudo needs a
+password), so this line shipped as UNVERIFIED-PENDING-INSTALL. Dorian installed
+both at the post-0.1 gate and the orchestrator ran it. **It works, and running
+it found a bug in the launcher that no amount of reading would have found.**
 
-What exists now in `run-agent.sh` (flag-gated, exact commands):
+    cd _RimWorld-Agent && ./run-agent.sh --xvfb --vnc --quicktest --fps 30
 
-    ./run-agent.sh --xvfb [--vnc] [--quicktest] [--fps N]
-      → Xvfb :99 -screen 0 1280x768x24 &
-        (optional) x11vnc -display :99 -localhost -rfbport 5900 -forever -shared -quiet &
-        DISPLAY=:99 WAYLAND_DISPLAY= LC_ALL=C mangohud ./RimWorldLinux [-quicktest]
+Result: booted to a playable ticking map in **73 s**, `gameLoaded:true`,
+**0 errors / 9 warnings** — byte-for-byte the same known-benign set as the live
+session boot (section 5) — 0 exceptions in Player.log, `127.0.0.1:5900`
+listening (v4 + v6, loopback only), and **zero windows on the live Hyprland
+session**. Genuinely detached, which is the whole point of the fallback.
 
-    XVFB_DISPLAY / VNC_PORT env vars override :99 / 5900. The script traps
-    EXIT to reap both daemons. vblank_mode=0 is already exported (harmless
-    under Xvfb; removes any GLX swap-wait there too).
+### The bug: `WAYLAND_DISPLAY=` is not the same as unsetting it
 
-To verify once installed (one command, ~3 min):
-`cd _RimWorld-Agent && ./run-agent.sh --xvfb --vnc --quicktest`, then watch
-via `vncviewer localhost:5900`, and confirm `status.json` reports
-`gameLoaded:true` with ticks advancing and Player.log stays at zero errors.
-Expected to work: it is the same GL stack minus the compositor (softpipe or
-GPU-backed depending on Mesa), and the hidden-window frame-throttling
-problem (§4) does not exist under Xvfb because there is no compositor to
-withhold frame callbacks.
+`--vnc` produced an Xvfb with nothing listening. x11vnc 0.9.17 tests for
+`WAYLAND_DISPLAY`'s **presence**, not its value: launched from a Wayland
+session it prints
 
-Standing note for spec 1.4: with the §4 render-unfocused fix proven on the
-live session, Xvfb is genuinely a *fallback* (fully detached runs, e.g.
-under a lock screen or a headless boot), not the daily driver.
+    Wayland display server detected.
+    Wayland sessions are as of now only supported via -rawfb ... Exiting.
+
+and dies before binding — and `-quiet` swallows the message, so the symptom is
+a silent absence. The launcher's `WAYLAND_DISPLAY=` clears the value but leaves
+the variable defined, so the check still fired. Fixed in a66d78b: `env -u` for
+x11vnc, and a subshell with `unset` for the game (a shell function cannot be
+launched through `env -u`). The game had been surviving the same trap only
+because SDL falls back to X11 when the Wayland connect fails.
+
+### Xvfb costs about 15% of throughput
+
+Mesa cannot reach the GPU under Xvfb (`amdgpu_device_initialize failed`, then
+software rendering), so the frame rate lands **below** the mangohud cap: 25.2
+fps against a cap of 30, and because ticks are frame-bound that is **50.9 tps
+where the live session gives 60**. Measured over 11 s at Normal speed
+(764 -> 1324 ticks). Consequence for spec 1.3: the tps table in section 6 is a
+GPU-backed-session table. Under the Xvfb fallback the budgeted loop still
+governs correctly, but its ceiling is lower, and the thermal governor matters
+less because the frame loop itself is the bottleneck.
+
+Boot is also slower — 73 s here against 39 s on the live session, both
+`-quicktest` with worldgen — since worldgen is CPU-bound and the software
+rasteriser is competing for the same cores (853% CPU observed during worldgen).
+
+Standing note for spec 1.4: with the section 4b render-unfocused fix proven on
+the live session, Xvfb is genuinely a *fallback* (fully detached runs, e.g.
+under a lock screen or a headless boot), not the daily driver. `rwa watch`
+against an Xvfb run means pointing a VNC client at `localhost:5900`, not
+revealing a workspace.
 
 ## 9. Per-frame update set a fast-forward loop must preserve (spec 1.3's core input)
 
