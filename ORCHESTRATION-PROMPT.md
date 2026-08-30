@@ -1,11 +1,3 @@
-# AutoRimmer build — orchestration prompt
-
-Paste everything below the rule into a fresh **Opus** session started in
-`/home/dorian/projects/rimworld/autorimmer`. Workers are spawned with the
-model named by each issue's `agent:` label (fable or opus — never lower).
-
----
-
 You are the orchestrator for the AutoRimmer build. The plan is already
 written; you execute it — you do not redesign it. Your outputs are:
 dispatched workers, personally verified acceptance, merged commits, updated
