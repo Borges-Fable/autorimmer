@@ -195,6 +195,23 @@ spec branch — the `spec/1.2-journal` pointer was created after the fact at the
 Build commit. Tree identical to a branch + ff-merge; nothing lost but the
 ordering discipline. Branch-first restored from 1.3 on.
 
+| 1.3 Time control: advance-until, tps throttle (c9b5769) | fable (in-session) | ~45 min | merged ff ee2acbf..2dd7655; closed, all acceptance verified |
+
+**1.3 — what landed.** TimeDriver (budgeted DoSingleTick loop per the 0.1
+shape), pause/unpause/advance, journal-tap halt matchers, deferred results,
+Config, ThermalGovernor (file-driven; INERT on BORGES — WMI thermal probed
+unsupported; hwmon serves dorian's bench), status advance/thermal blocks.
+Verified: exact +60000 halt; until:letter halted the SAME tick a
+deterministically-delayed letter arrived; **400K ticks at avg 994.4 tps against
+the 1000 hard cap** (caller asked 99999) over 6.7 min, seven natural TimeSlower
+spans reported-not-honored while Cassandra wrecked the colony (deaths, Man in
+Black, mad animals — the journal chronicled all of it unattended); timeout
+exact; pause-interrupt; busy-gating; 0 errors / 9 warnings throughout.
+Wave 1 in-mod substrate complete.
+
+**Bench hygiene:** the 1.2 acceptance's `autostart.rws` would have hijacked
+every later boot (devMode auto-load) — renamed to `journal-accept.rws`.
+
 **1.1 — what landed.** `About/`, `Source/AutoRimmer/` (7 files, AnalyzerBridge's
 shape generalized), `Assemblies/AutoRimmer.dll` in its own `Build:` commit, and
 the Windows bench scripts `profile/{make-profile-agent,gen-modsconfig,run-agent}.ps1`
