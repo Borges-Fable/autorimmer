@@ -433,15 +433,34 @@ namespace AutoRimmer
             if (pawn != null) data["pawn"] = pawn.LabelShortCap.ToString();
             if (!ok)
             {
-                string note;
-                if (!from.Walkable(map)) note = "from-cell is not walkable";
-                else if (!to.Walkable(map)) note = "to-cell is not walkable (wall or impassable)";
-                else note = "no path: separated by walls/terrain" + (pawn != null ? " for this pawn" : "");
-                data["note"] = note;
-                // A rejected cell says HOW it clears, not just that it blocks.
-                var blocker = !to.Walkable(map) ? to.GetEdifice(map)
-                    : (!from.Walkable(map) ? from.GetEdifice(map) : null);
-                if (blocker != null) data["blocker"] = Blockers.Describe(blocker);
+                // Fog stays opaque even here. "You cannot get there" is
+                // player-observable — order a pawn and watch it refuse — but
+                // WHAT is in the way is not, and the first cut of this verb
+                // happily named the limestone under undiscovered ground.
+                // Caught by 2.6's own acceptance run, which is the argument for
+                // running one.
+                if (to.Fogged(map))
+                {
+                    data["note"] = "to-cell is unexplored; no known path";
+                    data["blocker"] = Blockers.Cell(to, Blockers.FoggedReason);
+                }
+                else if (from.Fogged(map))
+                {
+                    data["note"] = "from-cell is unexplored";
+                    data["blocker"] = Blockers.Cell(from, Blockers.FoggedReason);
+                }
+                else
+                {
+                    string note;
+                    if (!from.Walkable(map)) note = "from-cell is not walkable";
+                    else if (!to.Walkable(map)) note = "to-cell is not walkable (wall or impassable)";
+                    else note = "no path: separated by walls/terrain" + (pawn != null ? " for this pawn" : "");
+                    data["note"] = note;
+                    // A rejected cell says HOW it clears, not just that it blocks.
+                    var blocker = !to.Walkable(map) ? to.GetEdifice(map)
+                        : (!from.Walkable(map) ? from.GetEdifice(map) : null);
+                    if (blocker != null) data["blocker"] = Blockers.Describe(blocker);
+                }
             }
             return data;
         }
