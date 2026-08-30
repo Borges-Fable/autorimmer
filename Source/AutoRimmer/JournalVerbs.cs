@@ -282,6 +282,11 @@ namespace AutoRimmer
                         if (lamps < 0 || lamps > 6) throw new VerbArgsException("power_lamps must be 0..6");
                         float fuel = (float)ctx.Args.Num("power_fuel", 75);
                         float stored = (float)ctx.Args.Num("power_stored", 300);
+                        // power_generator:false builds the battery-only grid
+                        // that exposes the `nets` rider: PowerNet.hasPowerSource
+                        // counts a bare battery as a source, so such a grid
+                        // reads as powered while nets_with_generator says 0.
+                        bool withGenerator = ctx.Args.Bool("power_generator", true);
                         var colonistsNow = new List<Pawn>(map.mapPawns.FreeColonistsSpawned);
                         IntVec3 anchor = colonistsNow.Count > 0 ? colonistsNow[0].Position : map.Center;
                         int width = 6 + lamps * 2;
@@ -291,8 +296,10 @@ namespace AutoRimmer
                         // on the row above it, cardinally adjacent, so one net.
                         for (int x = area.minX; x <= area.maxX; x++)
                             SpawnPlayerBuilding(map, ThingDefOf.PowerConduit, new IntVec3(x, 0, area.minZ));
-                        var gen = SpawnPlayerBuilding(map, ThingDefOf.WoodFiredGenerator,
-                            new IntVec3(area.minX, 0, area.minZ + 1));
+                        Thing gen = withGenerator
+                            ? SpawnPlayerBuilding(map, ThingDefOf.WoodFiredGenerator,
+                                new IntVec3(area.minX, 0, area.minZ + 1))
+                            : null;
                         var battery = SpawnPlayerBuilding(map, ThingDefOf.Battery,
                             new IntVec3(area.minX + 3, 0, area.minZ + 1));
                         var lampList = new List<object>();
@@ -320,7 +327,7 @@ namespace AutoRimmer
                             // The independent hand-computation, from the defs
                             // rather than from PowerNet: this is what the digest
                             // must agree with once the nets rebuild.
-                            ["expect_gen_w"] = fuelled > 0f ? 1000f : 0f,
+                            ["expect_gen_w"] = (withGenerator && fuelled > 0f) ? 1000f : 0f,
                             ["expect_draw_w"] = lamps * 30f,
                         };
                         break;
