@@ -164,3 +164,51 @@ RimWorld install to be useful; spec work that does not touch the game does not.
 bug that cost the spike its first boots. It works today only because Steam's
 `Mods/` happens to carry most of the same symlinks. Untouched — not this
 project's repo.
+
+## Session 2 — 2026-08-30 (BORGES)
+
+Fable orchestrator on Evan's Windows laptop; fable specs implemented
+in-session per the machine model rule, opus specs dispatched as workers.
+
+### Issues
+
+| issue | model | wall time | outcome |
+|---|---|---|---|
+| 1.1 Skeleton: protocol, verb registry, main-thread loop (097f33a) | fable (in-session) | ~35 min incl. bench build | merged ff 5c751e7..4f61933; closed, all acceptance verified |
+
+**1.1 — what landed.** `About/`, `Source/AutoRimmer/` (7 files, AnalyzerBridge's
+shape generalized), `Assemblies/AutoRimmer.dll` in its own `Build:` commit, and
+the Windows bench scripts `profile/{make-profile-agent,gen-modsconfig,run-agent}.ps1`
+(no python on this box — the generator is a faithful PowerShell port). Registry
+is attribute-scan; VerbArgs typed getters treat wrong types as bad-args even on
+optionals; every result carries `state:{gameLoaded,tick,paused}`; results and
+status.json written atomically. ping is main-thread on purpose (the loop's
+canary); status/version answer off-thread from the menu.
+
+**Verification.** Built the bench, booted twice, drove every acceptance case
+through the real file protocol: 7-command batch (status/version/ping/echo/
+bad-type/mangled-JSON/unknown-op) — 7 results, 0 inbox leftovers, structured
+errors exact; kill -9 (`Stop-Process -Force`) + planted command → answered
+`stale-on-restart` by the NEXT session at init, not replayed, then a fresh ping
+round-tripped at tick 737. Boot health **0 errors / 9 warnings — the identical
+Linux-baseline set**. `Mono path[0]` profile-rooted both boots; tick delta
+301/5s ≈ 60 tps with the window unfocused.
+
+**The bench on this machine** (muster environment note has the full story):
+junctions + hardlinks + real-copy engine stub; `-savedatafolder` + `-logfile`
+isolation; launcher refuses battery/second-bench and coexists with Evan's own
+RimWorld (which ran undisturbed throughout). Third-party mods junction
+READ-ONLY from the MP pack (`C:\RimWorldPack\mp`) after a live incident: the
+Aug-3 **workshop** Storefront grew a `TryGiveJob` overload and Guests' PatchAll
+died AmbiguousMatch (1 red error); the pack's pinned Jun-16 copy — what Guests
+is built against — restored the exact baseline. Own mods are Steam-install
+`Mods\` copies, byte-identical to the pack's. **WirelessChargingMech is missing
+on this machine** (not in Steam Mods, not in the pack) — the only hole in the
+v1 modlist; 38 active regardless (AutoRimmer joined).
+
+**Oddities.**
+- Game reports `1.6.4871 rev591`, Version.txt says rev590 — per-build counters
+  (handoff doc lore), neither is a build identity.
+- Boot-to-ticking-quicktest ≈ 40-70s on this box vs 2-4 min on dorian's — the
+  12700H worldgens fast. tps floor differs too; do not port throughput numbers
+  across machines.
