@@ -68,6 +68,7 @@ namespace AutoRimmer
                 {
                     Thread.Sleep(PollMs);
                     ScanInbox();
+                    Journal.Flush();
                     while (Runtime.Outgoing.TryDequeue(out var result)) WriteResult(result);
                     if ((DateTime.UtcNow - lastStatusWrite).TotalSeconds >= 1)
                     {

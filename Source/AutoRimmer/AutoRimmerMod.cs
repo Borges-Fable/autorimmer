@@ -13,11 +13,23 @@ namespace AutoRimmer
             {
                 VerbRegistry.RegisterAll();
                 Poller.Init();
+                Journal.Init(Poller.Root);
                 Log.Message("[AutoRimmer] ready — " + VerbRegistry.Count + " verbs; root=" + Poller.Root);
             }
             catch (Exception e)
             {
                 Log.Warning("[AutoRimmer] init failed, bridge disabled: " + e);
+                return;
+            }
+            // Separate so a patching failure degrades to a live bridge with dead
+            // journal hooks (and says so) instead of no bridge at all.
+            try
+            {
+                new HarmonyLib.Harmony("dorian.autorimmer").PatchAll();
+            }
+            catch (Exception e)
+            {
+                Log.Warning("[AutoRimmer] journal hooks failed to patch: " + e);
             }
         }
     }

@@ -6,5 +6,15 @@
   <supportedVersions>
     <li>1.6</li>
   </supportedVersions>
+  <modDependencies>
+    <li>
+      <packageId>brrainz.harmony</packageId>
+      <displayName>Harmony</displayName>
+      <steamWorkshopUrl>steam://url/CommunityFilePage/2009463077</steamWorkshopUrl>
+    </li>
+  </modDependencies>
+  <loadAfter>
+    <li>brrainz.harmony</li>
+  </loadAfter>
   <description>Agent bridge: file-protocol eyes and hands for an unattended RimWorld bench. An external agent observes state, executes player verbs, and controls time through files under the save-data folder; the game runs unmodified. Dev tooling for the agent bench only — not for normal play.</description>
 </ModMetaData>

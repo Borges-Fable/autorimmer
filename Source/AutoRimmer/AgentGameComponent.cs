@@ -26,6 +26,7 @@ namespace AutoRimmer
                 float dt = Time.unscaledDeltaTime;
                 if (dt > 0) fpsEma = fpsEma * 0.95 + (1.0 / dt) * 0.05;
                 PublishSnapshot();
+                AlertScanner.Tick();
                 DrainCommands();
             }
             catch (Exception e)
@@ -34,6 +35,24 @@ namespace AutoRimmer
                 // guards the plumbing itself.
                 Log.Warning("[AutoRimmer] update error: " + e);
             }
+        }
+
+        public override void StartedNewGame()
+        {
+            AlertScanner.Reset();
+            Journal.Emit("session", new System.Collections.Generic.Dictionary<string, object>
+            {
+                ["kind"] = "newgame",
+            }, Find.TickManager.TicksGame);
+        }
+
+        public override void LoadedGame()
+        {
+            AlertScanner.Reset();
+            Journal.Emit("session", new System.Collections.Generic.Dictionary<string, object>
+            {
+                ["kind"] = "loaded",
+            }, Find.TickManager.TicksGame);
         }
 
         private void PublishSnapshot()

@@ -17,6 +17,12 @@
         <!-- net48 reference assemblies via NuGet: builds without a .NET Framework
              targeting pack (this box has none), harmless where one exists. -->
         <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+        <!-- Compile-time Harmony; the runtime 0Harmony.dll is brrainz.harmony's
+             (bench load order puts it first). AnalyzerBridge pattern. -->
+        <PackageReference Include="Lib.Harmony" Version="2.3.3">
+            <PrivateAssets>all</PrivateAssets>
+            <ExcludeAssets>runtime</ExcludeAssets>
+        </PackageReference>
     </ItemGroup>
 
     <ItemGroup>
