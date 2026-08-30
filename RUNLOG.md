@@ -506,3 +506,143 @@ returns an `AcceptanceReport` with the game's own reason string, and
 2.6 (which owns find-rect's candidate path), 2.3, 3.2, 3.3, 3.4 and the muster.
 This is the concrete form of the standing candidates-and-reasons invariant, and
 it came from Dorian knowing the game, not from the review.
+
+## Session 4 — 2026-08-30 (dorian's Linux box)
+
+Opus orchestrator. Two specs dispatched in parallel to opus workers, both
+verified, merged and closed. The session's own process failure is written up
+first because it shaped everything after it.
+
+### Issues
+
+| issue | model | wall time | outcome |
+|---|---|---|---|
+| 2.6 Observer remediation (3dce29a) | opus | ~37 min worker + ~35 min verify | merged ff `09d1a1b..7e83f9b`; closed, acceptance verified |
+| 1.4 rwa CLI (e3d04c7) | opus | ~39 min worker + ~15 min verify | merged ff `7e83f9b..28a9fe4`; closed, acceptance verified |
+
+### Process failure: I dispatched two workers into one checkout
+
+The muster allows two workers at once and session 2 ran its parallel pair in
+**isolated worktrees**. I did not. Both workers got the same working tree, so
+they shared a HEAD: 1.4's four commits landed on top of
+`spec/2.6-observer-remediation`, and `spec/1.4-rwa-cli` sat unmoved at `main`
+the whole time.
+
+Nothing was lost, for two reasons that were part design and part luck. The file
+sets were genuinely disjoint (`Source/AutoRimmer/*` + `Assemblies/` vs `rwa/`
+plus two root files — I verified zero overlapping paths). And the 2.6 worker,
+finding another spec's commits above its own, **did nothing**: it tagged its
+true tip and reported, rather than running the `reset --hard` that would have
+deleted `rwa/` from disk under a still-running peer. That was the right call and
+it is the only reason this is a paragraph rather than an incident. I then sent
+the live 1.4 worker an advisory telling it explicitly NOT to fix the branches
+itself, which it followed.
+
+Recovery was two ref moves with the tree untouched. **1.4's history therefore
+sits on top of 2.6's rather than beside it** — real and visible in the log. I
+chose not to rebase onto `main`: 2.6 merged first as a fast-forward, so 1.4's
+base is simply "main as it then was", and rebasing would have rewritten the
+exact shas the worker's own acceptance evidence cites.
+
+**For the next orchestrator: pass `isolation: "worktree"` to every parallel
+worker, or run them one at a time. Disjoint files are not enough — a shared HEAD
+is the hazard.**
+
+### 2.6 — what landed
+
+`Blockers.cs` (the game's own removal taxonomy, serialized not invented), a
+find-rect ring walk in CENTRE space with a proven termination bound, alert sort
+before truncation, a colonist cap ordered by attention, `MaxSide` 61,
+gen/draw/battery_days split, a reserved pawn+fog glyph band, designations
+promoted to an overlay, fog across `map-view`/`find-rect`/`nearest`/`room-at`,
+and four `journal-selftest` fixture steps (declared).
+
+**Verification highlights** (full evidence on the issue). I re-derived rather
+than read: for 9 (near, w×h) combinations I recomputed `center` and `dist`
+independently — zero mismatches, ordering monotonic, and `dist 0.0` reached
+where the ideal centre is clear. The differential test 2.3 would have failed —
+top-1 must not depend on `max` — holds across max 1/3/5/20. The Critical alert
+injected LAST came back as `active[0]` with all 8 truncations Medium, and later
+a storyteller-generated `Alert_ColonistNeedsRescuing/Critical` did the same
+without any fixture. All four `removal` values observed live, and I checked
+`'Remove this by attacking it.'` against `Misc_Gameplay.xml:284` rather than
+against the code that produces it.
+
+**One acceptance bullet met in a weaker form, stated as such on the issue.**
+"Keeps the digest inside budget": the digest is now BOUNDED where it was
+unbounded — the actual defect is fixed — but with both caps saturated it
+measures **2625 B**, outside DESIGN's "~1–2KB". The dominant term is now
+`alerts` at 1053 B, which is 2.1's cap of 12, untouched by this spec. So the
+breach moved rather than closed. Filed below.
+
+**Zero red errors under real load**: one 240,000-tick advance (4 in-game days,
+20 colonists) with `halt_on_error` at its default true ran to completion without
+halting — 19 deaths, 21 downed, 16 mental breaks, 0 `red_error`. LogRelay
+**0 errors / 9 warnings**, the exact FINDINGS §5 set.
+
+**First live observation of the thermal governor.** It engaged at ~93.5 °C and
+held `scale 0.5`, and sustained tps settled at ~698 against the 1000 cap.
+BORGES has no sensor and can never test this; session 3 had deliberately dropped
+thermals as a target. The governor works.
+
+### 1.4 — what landed
+
+`rwa/` — `rwa` (the client), `fakebench.py` (a synthetic bench emulating
+`Poller.cs`), `selftest.sh` (124 checks), `README.md` (the drive-it manual), and
+the root README's location correction. Zero game semantics client-side: no verb
+table, generic JSON tree renderer.
+
+I ran everything the worker was barred from: the live round-trip (`advance
+--ticks 3000` landing exactly +3000 and returning paused), the documented jq
+pipelines as pasted, the game-down path (**refuses the send rather than planting
+a ghost command** that would surface as `stale-on-restart`), transcripts and
+replay (which reproduces a session including its failures), and `rwa watch` —
+the running game re-capped **30.0 → 60.1 → 30.0 fps with no restart**, workspace
+revealed and re-hidden, focus never moved, desktop restored.
+
+**A defect I found and fixed myself (`a3a8876`).** Mid-advance, `rwa status
+--sample` printed "2699 ticks … paused — tick will not move without `rwa
+advance`" — denying that time was moving in the same sentence as the ticks it
+had counted. It branched on `paused` and never consulted `tick_delta`, but
+paused-and-ticking is this platform's NORMAL driven state, because `TimeDriver`
+pins `CurTimeSpeed` to Paused for the whole of an advance. Four states now; the
+frame-starved alarm unchanged; selftest still 124/0. Fixed rather than filed
+because 4.2's play-loop reads that line to decide whether the colony is running.
+
+### Needs Dorian
+
+1. **DESIGN.md and the shipped code disagree about `advance until:`.** DESIGN
+   §Time model advertises `until:{letter|alert|event-match|condition}`;
+   `TimeDriver` implements `letter|threat|alert|event`. So `condition` does not
+   exist and `threat` is undocumented. **Not resolving this by judgment** — it
+   changes what 4.2 (play-loop until-guards) and 5.1 (advance specs) are written
+   against. Either DESIGN drops `condition` and gains `threat`, or `condition`
+   is a feature still owed. Your call. Raised on the muster too.
+2. **The digest budget.** DESIGN says "~1–2KB"; at full caps it is 2625 B and
+   the alert section is the dominant term. Either the budget number moves or the
+   alert cap of 12 does. Small, but rwtest will assert on this surface.
+3. Carried forward unchanged: `_RimWorld-Test` re-rooting bug;
+   WirelessChargingMech missing on BORGES; Storefront/Guests version clash.
+4. **catalog.py cross-check is now overdue and its debt grew.** 2.6 changed the
+   pawn glyph band, so 2.3's closing glyph table is stale as well as
+   unreconciled. Both benches are on this box's policy now; this is still only
+   doable here, and it still gates 3.2/3.3 UX.
+
+### State at session end
+
+- **Done:** 0.1, 1.1, 1.2, 1.3, 1.4, 2.1, 2.3, 2.6 — 8 of 22 specs. Wave 1 is
+  complete including the CLI; the wave-2 observer defects are closed before
+  2.2/2.4 could copy them and before 3.2/3.3 could build on them.
+- **In flight:** none.
+- **Blocked:** none.
+- **Bench:** `_RimWorld-Agent` healthy, stopped cleanly. Scratch quicktest maps
+  only; no saves written. `Assemblies/AutoRimmer.dll` is now a LINUX build
+  (pdb path `…/autorimmer/Source/AutoRimmer/obj/Release/`), where every prior
+  artifact was BORGES-built — expect ~48% of bytes to differ on the next
+  cross-box comparison, which is Roslyn, not a regression.
+- **Next picks: 1.5 (4b65a28) + 2.2 (69ae91f).** Disjoint files (substrate
+  lifecycle vs new pawn serializers) and only 1.5 needs the bench. 2.2's
+  do-not-copy list is now largely discharged by 2.6 — its GATED note should be
+  re-read against what actually shipped. Then 2.4, then 3.1 (which supersedes
+  the `journal-selftest` fixture layer and unblocks the rest of wave 3).
+- **Run them in separate worktrees.**
