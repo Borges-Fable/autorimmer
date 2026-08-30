@@ -30,13 +30,29 @@ namespace AutoRimmer
             known.Clear();
         }
 
+        // One live alert, as the readout holds it. `Order` is the readout's own
+        // discovery order (its activeAlerts index) — carried out because
+        // AlertsReadout NEVER sorts that list (decompiled AlertsReadout.cs:262
+        // appends; priority grouping happens only in AlertsReadoutOnGUI at draw
+        // time), so a consumer that truncates must sort for itself and wants a
+        // stable tie-break when it does. `Priority` is carried NUMERICALLY:
+        // AlertPriority is Medium=0, High=1, Critical=2, and comparing the
+        // ToString() would sort "Critical" first only by alphabetical luck.
+        public struct AlertLine
+        {
+            public string Id;
+            public string Label;
+            public AlertPriority Priority;
+            public int Order;
+        }
+
         // Live verbatim read of the readout's active list (main thread only) —
         // the digest's alert section (spec 2.1: the readout IS the attention
         // model). Same read-only discipline as the scan: labels via the same
         // Label the readout itself draws, never Recalculate/GetReport.
-        public static List<string[]> Snapshot()
+        public static List<AlertLine> Snapshot()
         {
-            var result = new List<string[]>();
+            var result = new List<AlertLine>();
             if (!(Find.UIRoot is UIRoot_Play play)) return result;
             var active = ActiveAlerts(play.alerts);
             for (int i = 0; i < active.Count; i++)
@@ -46,9 +62,43 @@ namespace AutoRimmer
                 string label;
                 try { label = alert.Label; }
                 catch { label = alert.GetType().Name; }
-                result.Add(new[] { alert.GetType().Name, label, alert.Priority.ToString() });
+                result.Add(new AlertLine
+                {
+                    Id = alert.GetType().Name,
+                    Label = label,
+                    Priority = alert.Priority,
+                    Order = i,
+                });
             }
             return result;
+        }
+
+        // Fixture hook (spec 2.6 acceptance): inject/clear alert instances in
+        // the readout's own activeAlerts list. Dev-gated and journaled by its
+        // ONE caller, journal-selftest — see JournalVerbs.Selftest. It lives
+        // here because the private-field ref does, and nowhere else may use it.
+        //
+        // Safe by construction: an instance we create is not in the readout's
+        // AllAlerts list, so the round-robin CheckAddOrRemoveAlert never touches
+        // it, and Alert_Custom/Alert_CustomCritical (and their subclasses) are
+        // explicitly EXCLUDED from allAlertTypesCached (decompiled
+        // AlertsReadout.cs:64), so the game never instantiates ours either.
+        public static bool FixtureInject(Alert alert)
+        {
+            if (!(Find.UIRoot is UIRoot_Play play)) return false;
+            var active = ActiveAlerts(play.alerts);
+            if (!active.Contains(alert)) active.Add(alert);
+            return true;
+        }
+
+        public static int FixtureClear(System.Func<Alert, bool> pred)
+        {
+            if (!(Find.UIRoot is UIRoot_Play play)) return 0;
+            var active = ActiveAlerts(play.alerts);
+            int removed = 0;
+            for (int i = active.Count - 1; i >= 0; i--)
+                if (pred(active[i])) { active.RemoveAt(i); removed++; }
+            return removed;
         }
 
         // Main thread, every GameComponentUpdate (same thread that mutates the
