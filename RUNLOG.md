@@ -72,13 +72,62 @@ Amendments only — no spec body was rewritten.
    engine-symlink re-rooting bug. It works today only because Steam's Mods/
    happens to carry most of the same symlinks. Not this run's scope.
 
+### Gate lifted, same session
+
+Dorian cleared both items: installed the packages ("do that sudo") and confirmed
+the modlist ("I'm fine with whatever modlist"). Recorded on the issue and the
+muster, and written into DESIGN.md (4cf191a) — its own-mods list had omitted
+Guests and RegisterLanes while the visitor-cluster line justified the cluster as
+existing to serve them, so a worker reading only the list would have built the
+wrong bench.
+
+**0.1 closed.** With `xorg-server-xvfb`/`x11vnc` present I ran the last
+acceptance line myself: booted to a playable ticking map under Xvfb in 73s,
+**0 errors / 9 warnings** (identical set to the live-session boot), 0 exceptions
+in Player.log, `127.0.0.1:5900` listening loopback-only, **zero windows on the
+live Hyprland session**. Both display modes now demonstrated; all three
+acceptance criteria met; issue `state:done` and closed.
+
+**Running it found a bug the spike could not have found**, because the packages
+did not exist while it ran: `--vnc` produced an Xvfb with nothing listening.
+x11vnc 0.9.17 tests for `WAYLAND_DISPLAY`'s PRESENCE, not its value — from a
+Wayland session it prints "Wayland display server detected ... Exiting." and
+dies before binding, and `-quiet` swallows the message, so the symptom is a
+silent absence. `WAYLAND_DISPLAY=` clears the value but leaves the variable
+defined. Fixed in a66d78b (`env -u` for x11vnc, subshell `unset` for the game).
+The game had been surviving the same trap only because SDL falls back to X11
+when the Wayland connect fails.
+
+Second fix, 292de94: follow-on from my own 57263e7. Repointing
+`Mods/AutoRimmer` at the repo root meant the link always resolved, dropping an
+About-less folder into the bench. Now guarded on `About/About.xml`, printing
+"skipped ... spec 1.1 creates it" until that file exists.
+
+FINDINGS section 8 rewritten from PENDING to verified (cc420dc), including what
+the fallback costs: software rendering holds the frame rate below the mangohud
+cap, so the sim runs **50.9 tps under Xvfb where the live session gives 60**,
+and boot takes 73s against 39s. Section 6's tps table is a GPU-backed-session
+table and spec 1.3 should read it that way.
+
+### 1.1 dispatched
+
+**1.1 (097f33a)**, agent:fable, `state:doing`. Nothing runs alongside it: every
+other open spec lists 1.1 among its dependencies, so wave 1 is single-file until
+the skeleton lands. It is also the first spec in this repo to ship an assembly,
+so it sets the `Build:`-commit pattern.
+
 ### State at session end
 
-- **Done:** none closed.
-- **In flight:** none.
-- **Blocked:** 0.1 (3fa4cf5) — `state:next`, BLOCKED on the Xvfb package
-  install; all other work merged.
-- **Next pick:** 1.1 (097f33a, agent:fable) once Dorian lifts the gate. It
-  depends only on 0.1 and gates every other wave-1+ spec. 1.4 is the natural
-  parallel second but depends on 1.1's protocol, so nothing runs alongside 1.1
-  at the start.
+- **Done:** 0.1 (3fa4cf5) — closed, merged, acceptance fully met.
+- **In flight:** 1.1 (097f33a) — fable worker running.
+- **Blocked:** none.
+- **Next pick:** whatever 1.1 unblocks. 1.2 (journal) and 2.3 (spatial) both
+  list 1.1 as their only dependency, so they are the first pair that can run in
+  parallel — different files, and only one of them needs the running game.
+
+### Needs Dorian (carried forward, not blocking)
+
+`_RimWorld-Test/make-profile.sh` has the same latent engine-symlink re-rooting
+bug that cost the spike its first boots. It works today only because Steam's
+`Mods/` happens to carry most of the same symlinks. Untouched — not this
+project's repo.
