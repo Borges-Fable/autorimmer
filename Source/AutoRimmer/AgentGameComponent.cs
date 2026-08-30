@@ -28,6 +28,7 @@ namespace AutoRimmer
                 PublishSnapshot();
                 AlertScanner.Tick();
                 DrainCommands();
+                TimeDriver.FrameStep();
             }
             catch (Exception e)
             {
@@ -65,7 +66,7 @@ namespace AutoRimmer
                 speed = tm.CurTimeSpeed.ToString(),
                 tick = tm.TicksGame,
                 fps = fpsEma,
-                activeOp = activeOp,
+                activeOp = TimeDriver.Active ? "advance:" + TimeDriver.ActiveId : activeOp,
             };
         }
 
@@ -73,8 +74,18 @@ namespace AutoRimmer
         {
             while (Runtime.Pending.TryDequeue(out var cmd))
             {
+                // One long-running op at a time: while an advance is in flight,
+                // main-thread verbs answer busy — except pause, the brake pedal.
+                if (TimeDriver.Active && cmd.Op != "pause")
+                {
+                    Runtime.Outgoing.Enqueue(Result.Fail(cmd.Id, cmd.Op, Err.Busy,
+                        $"advance '{TimeDriver.ActiveId}' in flight ({TimeDriver.TicksDone} ticks done)"));
+                    continue;
+                }
                 activeOp = cmd.Op;
-                Runtime.Outgoing.Enqueue(VerbRegistry.Execute(cmd));
+                var result = VerbRegistry.Execute(cmd);
+                if (!(result.Ok && result.Data is DeferredResult))
+                    Runtime.Outgoing.Enqueue(result);
                 activeOp = null;
             }
         }

@@ -77,10 +77,18 @@ namespace AutoRimmer
                 switch (step)
                 {
                     case "letter":
+                    {
+                        // letter_delay_ticks queues the letter for future
+                        // arrival (LetterStackTick drains the queue per tick) —
+                        // the deterministic mid-advance stimulus for 1.3's
+                        // until:letter acceptance.
+                        int delay = ctx.Args.Int("letter_delay_ticks", 0);
                         Find.LetterStack.ReceiveLetter("AutoRimmer selftest",
                             "Deliberate selftest letter (journal acceptance, spec 1.2).",
-                            LetterDefOf.NeutralEvent);
+                            LetterDefOf.NeutralEvent, null, delay);
+                        if (delay > 0) target = $"delayed {delay} ticks";
                         break;
+                    }
                     case "message":
                         Messages.Message("[AutoRimmer] selftest message", MessageTypeDefOf.NeutralEvent, historical: false);
                         break;

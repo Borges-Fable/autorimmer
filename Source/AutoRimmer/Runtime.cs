@@ -55,6 +55,17 @@ namespace AutoRimmer
         public const string StaleOnRestart = "stale-on-restart";
     }
 
+    // Sentinel a long-running verb returns from its handler: the executor's
+    // auto-result is suppressed and the verb's owner (e.g. TimeDriver) writes
+    // the single real result later. The one-result-per-command invariant moves
+    // to that owner.
+    public sealed class DeferredResult
+    {
+        public static readonly DeferredResult Instance = new DeferredResult();
+
+        private DeferredResult() { }
+    }
+
     public sealed class Result
     {
         public string Id;

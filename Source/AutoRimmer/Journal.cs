@@ -28,11 +28,14 @@ namespace AutoRimmer
         private static readonly ConcurrentDictionary<string, int> errorCounts = new ConcurrentDictionary<string, int>();
         private static readonly ConcurrentDictionary<string, bool> warningsSeen = new ConcurrentDictionary<string, bool>();
 
-        // Alert scan cadence in frames; configurable via config.json
-        // {"alertScanFrames": N} under the protocol root (clamped 1..600).
-        public static int AlertScanFrames = 30;
-
         public static string CurrentFile => path;
+
+        public static long CurrentSeq => Interlocked.Read(ref seq);
+
+        // Synchronous tap on every emission — (type, payload, tick, seq) —
+        // fired on the EMITTING thread. TimeDriver's halt matchers hang here;
+        // handlers must be cheap and thread-safe.
+        public static event Action<string, Dictionary<string, object>, int, long> OnEvent;
 
         // Main thread, from the mod ctor (after the protocol root exists).
         public static void Init(string root)
@@ -43,18 +46,6 @@ namespace AutoRimmer
             writer = new StreamWriter(
                 new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read),
                 new UTF8Encoding(false)) { AutoFlush = true };
-
-            try
-            {
-                var cfgPath = Path.Combine(root, "config.json");
-                if (File.Exists(cfgPath))
-                {
-                    var cfg = MiniJson.Parse(File.ReadAllText(cfgPath));
-                    if (cfg != null && cfg.TryGetValue("alertScanFrames", out var v) && v is double d)
-                        AlertScanFrames = Math.Max(1, Math.Min(600, (int)d));
-                }
-            }
-            catch { }
 
             string game = "unknown";
             try { game = RimWorld.VersionControl.CurrentVersionStringWithRev; } catch { }
@@ -76,10 +67,11 @@ namespace AutoRimmer
         {
             if (writer == null) return;
             long n = Interlocked.Increment(ref seq);
+            int tick = exactTick ?? Runtime.GameState.tick;
             var evt = new Dictionary<string, object>
             {
                 ["seq"] = n,
-                ["tick"] = exactTick ?? Runtime.GameState.tick,
+                ["tick"] = tick,
                 ["wall"] = DateTime.UtcNow.ToString("o"),
                 ["type"] = type,
                 ["payload"] = payload,
@@ -87,6 +79,8 @@ namespace AutoRimmer
             var sb = new StringBuilder(256);
             MiniJson.Write(sb, evt);
             pending.Enqueue(sb.ToString());
+            try { OnEvent?.Invoke(type, payload, tick, n); }
+            catch { }
         }
 
         public static void EmitError(string text, int? exactTick = null)

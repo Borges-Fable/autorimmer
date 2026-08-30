@@ -34,7 +34,7 @@ namespace AutoRimmer
         // list, so no torn reads).
         public static void Tick()
         {
-            if (++frameCounter < Journal.AlertScanFrames) return;
+            if (++frameCounter < Config.AlertScanFrames) return;
             frameCounter = 0;
             if (!(Find.UIRoot is UIRoot_Play play)) return;
 

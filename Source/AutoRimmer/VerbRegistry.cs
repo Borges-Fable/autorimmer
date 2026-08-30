@@ -35,6 +35,7 @@ namespace AutoRimmer
         public string Id;
         public string Op;
         public VerbArgs Args;
+        public PendingCommand Command;
     }
 
     // Thrown by VerbArgs getters; the executor turns it into a bad-args result.
@@ -56,6 +57,9 @@ namespace AutoRimmer
         public VerbArgs(Dictionary<string, object> raw) { this.raw = raw ?? Empty; }
 
         public bool Has(string key) => raw.ContainsKey(key);
+
+        // The parsed value as-is (object/array args validated by the caller).
+        public object Raw(string key) => raw.TryGetValue(key, out var v) ? v : null;
 
         public string Str(string key, string fallback = null)
         {
@@ -159,7 +163,7 @@ namespace AutoRimmer
         {
             try
             {
-                var ctx = new VerbContext { Id = cmd.Id, Op = cmd.Op, Args = new VerbArgs(cmd.Args) };
+                var ctx = new VerbContext { Id = cmd.Id, Op = cmd.Op, Args = new VerbArgs(cmd.Args), Command = cmd };
                 return Result.Success(cmd.Id, cmd.Op, cmd.Verb.Handler(ctx));
             }
             catch (VerbArgsException e)

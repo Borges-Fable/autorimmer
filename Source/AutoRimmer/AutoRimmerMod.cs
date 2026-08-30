@@ -13,7 +13,9 @@ namespace AutoRimmer
             {
                 VerbRegistry.RegisterAll();
                 Poller.Init();
+                Config.Load(Poller.Root);
                 Journal.Init(Poller.Root);
+                TimeDriver.HookJournal();
                 Log.Message("[AutoRimmer] ready — " + VerbRegistry.Count + " verbs; root=" + Poller.Root);
             }
             catch (Exception e)

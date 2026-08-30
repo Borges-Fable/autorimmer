@@ -68,11 +68,16 @@ namespace AutoRimmer
                 {
                     Thread.Sleep(PollMs);
                     ScanInbox();
+                    // Journal before results, deliberately: an advance halt
+                    // enqueues its journal events strictly before its result,
+                    // so flushing here first makes every result
+                    // journal-consistent (spec 1.3 invariant).
                     Journal.Flush();
                     while (Runtime.Outgoing.TryDequeue(out var result)) WriteResult(result);
                     if ((DateTime.UtcNow - lastStatusWrite).TotalSeconds >= 1)
                     {
                         lastStatusWrite = DateTime.UtcNow;
+                        ThermalGovernor.Poll(root);
                         WriteStatus();
                     }
                 }
@@ -224,8 +229,21 @@ namespace AutoRimmer
               .Append(",\"speed\":").Append(MiniJson.J(snap.speed))
               .Append(",\"tick\":").Append(snap.tick)
               .Append(",\"fps\":").Append(MiniJson.N(snap.fps))
-              .Append(",\"activeOp\":").Append(MiniJson.J(snap.activeOp))
-              .Append('}');
+              .Append(",\"activeOp\":").Append(MiniJson.J(snap.activeOp));
+            if (TimeDriver.Active)
+            {
+                sb.Append(",\"advance\":{\"id\":").Append(MiniJson.J(TimeDriver.ActiveId))
+                  .Append(",\"ticks_done\":").Append(TimeDriver.TicksDone)
+                  .Append(",\"target\":").Append(TimeDriver.Target)
+                  .Append('}');
+            }
+            if (ThermalGovernor.Available)
+            {
+                sb.Append(",\"thermal\":{\"c\":").Append(MiniJson.N(ThermalGovernor.TempC))
+                  .Append(",\"scale\":").Append(MiniJson.N(ThermalGovernor.Scale))
+                  .Append('}');
+            }
+            sb.Append('}');
             AtomicWrite(statusPath, sb.ToString());
         }
 
