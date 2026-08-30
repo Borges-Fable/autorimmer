@@ -417,10 +417,21 @@ old laptop, and BORGES handles its own.
 
 - **Done:** nothing new closed. 0.1, 1.1, 1.2, 1.3, 2.1, 2.3 remain closed.
 - **In flight:** none.
-- **Blocked:** 2.2, 2.4 gated on 2.6 (`state:backlog`).
-- **Next picks, in order:** 2.6 (3dce29a) first — it unblocks the most. Then
-  1.5 (4b65a28); the two touch disjoint files (observers vs poller/driver/
-  journal) so they can run as a parallel pair, and only one needs the bench at a
-  time. Then 2.2 + 2.4. **1.4 and 2.5 need `rimworld-tools`, which exists only
-  on this box** — they are the natural picks here whenever a slot is free, and
-  BORGES structurally cannot take them.
+- **Blocked:** none.
+
+**Correction made within the session.** I first labelled 1.5 and 2.6 as though
+they blocked things, and moved 2.2/2.4 to `backlog` on that basis. That was too
+strong and I reversed it. Nothing is unmerged: all five specs are on main,
+closed, and working on both benches — "would not merge as-is" was the reviewers
+answering a hypothetical I posed, and I repeated it as if it described a gate.
+What exists is a defect list against shipped code. None of the seven blockers
+is reachable by anything we are about to build; `halt_on_error` bites at 4.3 and
+`find-rect` at 3.2/3.3. The exemplar risk for 2.2/2.4 is real but is a
+dispatch-note problem, not a dependency — both are back to `state:next` with a
+precise do-not-copy list on the issue.
+
+- **Next picks:** **2.6 (3dce29a) + 1.4 (e3d04c7) as the pair** — different
+  repos entirely, zero file overlap, and 1.4 is work only this box can do.
+  Then 1.5 (4b65a28) + 2.2 (69ae91f), then 2.4. 2.5 also needs `rimworld-tools`
+  and so is a this-box pick whenever a slot is free.
+- **Before 3.2/3.3:** the fog-of-war contract question needs Dorian.
