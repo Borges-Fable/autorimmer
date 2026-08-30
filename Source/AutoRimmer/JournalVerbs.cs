@@ -68,8 +68,11 @@ namespace AutoRimmer
                 steps = new List<string> { "letter", "message", "error", "downed", "break" };
 
             var executed = new List<object>();
+            var extras = new Dictionary<string, object>();
             var map = Find.CurrentMap;
-            var colonists = map?.mapPawns?.FreeColonistsSpawned;
+            // Snapshot: the underlying cached list rebuilds on every access
+            // (see DigestVerb.ColonistSection).
+            var colonists = map == null ? null : new List<Pawn>(map.mapPawns.FreeColonistsSpawned);
 
             foreach (var step in steps)
             {
@@ -106,8 +109,10 @@ namespace AutoRimmer
                     }
                     case "downed":
                     {
-                        var pawn = colonists != null && colonists.Count > 0 ? colonists[0] : null;
-                        if (pawn == null) throw new VerbArgsException("downed needs a spawned free colonist");
+                        Pawn pawn = null;
+                        if (colonists != null)
+                            foreach (var c in colonists) { if (!c.Downed) { pawn = c; break; } }
+                        if (pawn == null) throw new VerbArgsException("downed needs a standing free colonist");
                         HealthUtility.DamageUntilDowned(pawn, allowBleedingWounds: false);
                         target = pawn.LabelShortCap.ToString();
                         break;
@@ -126,6 +131,54 @@ namespace AutoRimmer
                         GameDataSaveLoader.SaveGame(ctx.Args.Str("save_name", "journal-accept"));
                         target = ctx.Args.Str("save_name", "journal-accept");
                         break;
+                    case "stockpile":
+                    {
+                        // Zone the crash scatter so the vanilla resource
+                        // counter (stockpiles only — SlotGroup-based) has
+                        // something to count, and return raw-thing tallies as
+                        // the independent hand-computation for 2.1's food-days
+                        // check. Counts here come from ListerThings directly,
+                        // NOT from ResourceCounter — two readers, one truth.
+                        if (map == null) throw new VerbArgsException("stockpile needs a current map");
+                        var zone = new Zone_Stockpile(StorageSettingsPreset.DefaultStockpile, map.zoneManager);
+                        map.zoneManager.RegisterZone(zone);
+                        int cells = 0, meals = 0, steel = 0, silver = 0, wood = 0, meds = 0;
+                        float nutrition = 0f;
+                        foreach (var def in new[] { ThingDefOf.MealSurvivalPack, ThingDefOf.Steel,
+                                                    ThingDefOf.Silver, ThingDefOf.WoodLog, ThingDefOf.MedicineHerbal })
+                        {
+                            foreach (var thing in map.listerThings.ThingsOfDef(def).ToArray())
+                            {
+                                if (!thing.Spawned || thing.Position.Fogged(map)) continue;
+                                if (map.zoneManager.ZoneAt(thing.Position) == null)
+                                {
+                                    zone.AddCell(thing.Position);
+                                    cells++;
+                                }
+                                if (def == ThingDefOf.MealSurvivalPack)
+                                {
+                                    meals += thing.stackCount;
+                                    nutrition += def.GetStatValueAbstract(StatDefOf.Nutrition) * thing.stackCount;
+                                }
+                                else if (def == ThingDefOf.Steel) steel += thing.stackCount;
+                                else if (def == ThingDefOf.Silver) silver += thing.stackCount;
+                                else if (def == ThingDefOf.WoodLog) wood += thing.stackCount;
+                                else if (def == ThingDefOf.MedicineHerbal) meds += thing.stackCount;
+                            }
+                        }
+                        extras["stockpile"] = new Dictionary<string, object>
+                        {
+                            ["cells"] = cells,
+                            ["meals"] = meals,
+                            ["nutrition"] = nutrition,
+                            ["steel"] = steel,
+                            ["silver"] = silver,
+                            ["wood"] = wood,
+                            ["meds_herbal"] = meds,
+                        };
+                        target = cells + " cells";
+                        break;
+                    }
                     default:
                         throw new VerbArgsException($"unknown step '{step}' (letter|message|error|raid|downed|break|save)");
                 }
@@ -137,7 +190,9 @@ namespace AutoRimmer
                 }, Find.TickManager.TicksGame);
                 executed.Add(step);
             }
-            return new Dictionary<string, object> { ["executed"] = executed };
+            var data = new Dictionary<string, object> { ["executed"] = executed };
+            foreach (var kv in extras) data[kv.Key] = kv.Value;
+            return data;
         }
     }
 }

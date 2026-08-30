@@ -37,6 +37,30 @@ namespace AutoRimmer
         // handlers must be cheap and thread-safe.
         public static event Action<string, Dictionary<string, object>, int, long> OnEvent;
 
+        // In-memory (seq, type) ring so what-changed queries (digest, spec 2.1)
+        // never read the journal file on the main thread. 4096 events dwarfs
+        // any between-glance window; a since older than the ring says so.
+        private const int RingSize = 4096;
+        private static readonly ValueTuple<long, string>[] ring = new ValueTuple<long, string>[RingSize];
+        private static readonly object ringLock = new object();
+
+        public static Dictionary<string, int> CountsSince(long since, out long lastSeq, out bool truncated)
+        {
+            var counts = new Dictionary<string, int>();
+            lock (ringLock)
+            {
+                lastSeq = seq;
+                truncated = since < lastSeq - RingSize;
+                for (long s = Math.Max(since + 1, lastSeq - RingSize + 1); s <= lastSeq; s++)
+                {
+                    var entry = ring[(int)(s % RingSize)];
+                    if (entry.Item1 != s) continue;
+                    counts[entry.Item2] = counts.TryGetValue(entry.Item2, out var c) ? c + 1 : 1;
+                }
+            }
+            return counts;
+        }
+
         // Main thread, from the mod ctor (after the protocol root exists).
         public static void Init(string root)
         {
@@ -79,6 +103,7 @@ namespace AutoRimmer
             var sb = new StringBuilder(256);
             MiniJson.Write(sb, evt);
             pending.Enqueue(sb.ToString());
+            lock (ringLock) { ring[(int)(n % RingSize)] = ValueTuple.Create(n, type); }
             try { OnEvent?.Invoke(type, payload, tick, n); }
             catch { }
         }

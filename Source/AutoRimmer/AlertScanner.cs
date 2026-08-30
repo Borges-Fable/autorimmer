@@ -30,6 +30,27 @@ namespace AutoRimmer
             known.Clear();
         }
 
+        // Live verbatim read of the readout's active list (main thread only) —
+        // the digest's alert section (spec 2.1: the readout IS the attention
+        // model). Same read-only discipline as the scan: labels via the same
+        // Label the readout itself draws, never Recalculate/GetReport.
+        public static List<string[]> Snapshot()
+        {
+            var result = new List<string[]>();
+            if (!(Find.UIRoot is UIRoot_Play play)) return result;
+            var active = ActiveAlerts(play.alerts);
+            for (int i = 0; i < active.Count; i++)
+            {
+                var alert = active[i];
+                if (alert == null) continue;
+                string label;
+                try { label = alert.Label; }
+                catch { label = alert.GetType().Name; }
+                result.Add(new[] { alert.GetType().Name, label, alert.Priority.ToString() });
+            }
+            return result;
+        }
+
         // Main thread, every GameComponentUpdate (same thread that mutates the
         // list, so no torn reads).
         public static void Tick()
