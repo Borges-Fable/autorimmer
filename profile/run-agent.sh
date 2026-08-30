@@ -133,12 +133,19 @@ if [ "$USE_XVFB" -eq 1 ]; then
     if [ "$USE_VNC" -eq 1 ]; then
         command -v x11vnc >/dev/null 2>&1 || {
             echo "x11vnc not installed (pacman -S x11vnc). Aborting." >&2; exit 1; }
-        x11vnc -display "$XVFB_DISPLAY" -localhost -rfbport "$VNC_PORT" -forever -shared -quiet &
+        # env -u, not WAYLAND_DISPLAY=: x11vnc 0.9.17 tests for the variable's
+        # PRESENCE, and on finding it exits with "Wayland display server
+        # detected ... Exiting." before it ever binds. An empty value is still
+        # present. Same trap applies to the game below.
+        env -u WAYLAND_DISPLAY \
+            x11vnc -display "$XVFB_DISPLAY" -localhost -rfbport "$VNC_PORT" -forever -shared -quiet &
         VNC_PID=$!
         echo "x11vnc on localhost:$VNC_PORT"
     fi
     # Point the game at the virtual display; drop Wayland so SDL/Unity picks X11.
-    DISPLAY="$XVFB_DISPLAY" WAYLAND_DISPLAY= run_game
+    # Subshell + `unset` so WAYLAND_DISPLAY is ABSENT, not merely empty (see the
+    # x11vnc note above); a shell function cannot be launched through `env -u`.
+    ( unset WAYLAND_DISPLAY; export DISPLAY="$XVFB_DISPLAY"; run_game )
 else
     run_game
 fi
