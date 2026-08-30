@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net48</TargetFramework>
+        <LangVersion>latest</LangVersion>
+        <OutputPath>../../Assemblies/</OutputPath>
+        <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+        <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+        <!-- Game refs come from the agent bench profile, never Steam directly.
+             Machine-portable: set RIMWORLD_MANAGED (env) or -p:RimWorldManaged to
+             your bench's Managed dir; the default is the BORGES bench. dorian:
+             /home/dorian/projects/rimworld/_RimWorld-Agent/RimWorldLinux_Data/Managed -->
+        <RimWorldManaged Condition="'$(RimWorldManaged)' == ''">$(RIMWORLD_MANAGED)</RimWorldManaged>
+        <RimWorldManaged Condition="'$(RimWorldManaged)' == ''">C:/Users/EvanKornoelje/misc/rimworld/_RimWorld-Agent/RimWorldWin64_Data/Managed</RimWorldManaged>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- net48 reference assemblies via NuGet: builds without a .NET Framework
+             targeting pack (this box has none), harmless where one exists. -->
+        <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Reference Include="Assembly-CSharp">
+            <HintPath>$(RimWorldManaged)/Assembly-CSharp.dll</HintPath>
+            <Private>false</Private>
+        </Reference>
+        <Reference Include="UnityEngine.CoreModule">
+            <HintPath>$(RimWorldManaged)/UnityEngine.CoreModule.dll</HintPath>
+            <Private>false</Private>
+        </Reference>
+    </ItemGroup>
+</Project>
