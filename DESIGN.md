@@ -151,10 +151,18 @@ v1 mod set (ONE set — the suite coexisting is itself the integration test):
   RetryFailedSurgery, Church, CruelAndUnusualPunishment, Fingerkill, AutoQuest,
   CoherentBionics, Nepobaby, DisableLeaveBadWeather, NoMoreAlarms,
   RealisticGasses, RealisticHeatDeath, SuperHotFire, WirelessChargingMech, Music.
-- **Visitor cluster (third-party)**: Hospitality, Gastronomy, Storefront —
-  required by Guests (and Music/RegisterLanes), on the bench from day one
-  because Factions/Guests is the first analysis target.
+- **Visitor cluster (third-party)**: Hospitality, Gastronomy, Storefront,
+  CashRegister (transitive dep of the latter two) — plus the own mods they
+  exist to serve, **Guests and RegisterLanes**. On the bench from day one
+  because Factions/Guests is the first analysis target. Load order is pinned
+  (CashRegister → Hospitality → Gastronomy → Storefront → Guests, all ahead of
+  the alphabetical middle: Factions declares `loadAfter` Guests).
 - **DLCs**: all owned (Royalty, Ideology, Biotech, Anomaly, Odyssey).
+- **Not needed, verified in spike 0.1**: HugsLib (nothing on the bench declares
+  it) and PerspectiveShift (SeekAndKill runs standalone — `PSInterop.Init`
+  returns early when PS is absent and its own gizmo path takes over).
+  Transitive deps are resolved from About.xml at profile-build time, so this
+  list stays honest as the bench grows.
 
 Deferred tiers (each joins with its own mods AND unlocks its bugfix mods):
 CE/DMS/PerspectiveShift cluster; singletons (NiceHealthTab → NHTInjuriesOnly,
@@ -201,3 +209,11 @@ queue by default (an agent flailing mid-experiment must not page triage).
   workspace, Xvfb+VNC fallback. Orchestrator = Opus with mechanical acceptance
   gates + escalation rule; design-setting specs = Fable workers, patterned
   waves = Opus workers.
+- 2026-08-30 — Spike 0.1 accepted (git-bug 3fa4cf5). Bench v1 modlist confirmed
+  at 38 active (6 DLC + 32 mods) with Guests/RegisterLanes/CashRegister in and
+  HugsLib/PerspectiveShift out. `advance` is a budgeted `DoSingleTick` loop in
+  `GameComponentUpdate` yielding every frame, not vanilla speeds; `max_tps`
+  default 1000 with a thermal governor. The bench engine stub must be a real
+  copy (a symlink re-roots the game at the Steam install), and the parked
+  window needs `render_unfocused` or its frame-bound tick loop stalls. See
+  FINDINGS.md.
