@@ -609,24 +609,71 @@ pins `CurTimeSpeed` to Paused for the whole of an advance. Four states now; the
 frame-starved alarm unchanged; selftest still 124/0. Fixed rather than filed
 because 4.2's play-loop reads that line to decide whether the colony is running.
 
-### Needs Dorian
+### Decisions taken — corrected within the session
 
-1. **DESIGN.md and the shipped code disagree about `advance until:`.** DESIGN
-   §Time model advertises `until:{letter|alert|event-match|condition}`;
-   `TimeDriver` implements `letter|threat|alert|event`. So `condition` does not
-   exist and `threat` is undocumented. **Not resolving this by judgment** — it
-   changes what 4.2 (play-loop until-guards) and 5.1 (advance specs) are written
-   against. Either DESIGN drops `condition` and gains `threat`, or `condition`
-   is a feature still owed. Your call. Raised on the muster too.
-2. **The digest budget.** DESIGN says "~1–2KB"; at full caps it is 2625 B and
-   the alert section is the dominant term. Either the budget number moves or the
-   alert cap of 12 does. Small, but rwtest will assert on this surface.
-3. Carried forward unchanged: `_RimWorld-Test` re-rooting bug;
-   WirelessChargingMech missing on BORGES; Storefront/Guests version clash.
-4. **catalog.py cross-check is now overdue and its debt grew.** 2.6 changed the
-   pawn glyph band, so 2.3's closing glyph table is stale as well as
-   unreconciled. Both benches are on this box's policy now; this is still only
-   doable here, and it still gates 3.2/3.3 UX.
+I first wrote this section as a "Needs Dorian" list with two questions on it.
+Dorian's response, in full: *"there should be nothing on the muster for me. you
+take care of these things through agents or a future session."*
+
+So the escalation rule is amended (ORCHESTRATION-PROMPT `a0df478`, muster
+comment): **the orchestrator resolves and records, it does not queue.** His two
+hard gates stand — 4.3's demo review and 5.2's sign-off — because those are
+reviews of finished work, not questions. Genuine how-should-RimWorld-be-PLAYED
+questions still reach him through the playbook, which DESIGN already makes the
+channel for his game knowledge. Both items are now resolved, in `02948cb`:
+
+1. **`advance until:`** — investigated rather than coin-flipped. All four
+   shipped matchers hook `Journal.OnEvent` and halt on a discrete event;
+   `threat` is `letter` narrowed to `ThreatBig`/`ThreatSmall`. DESIGN's line was
+   simply stale and now says what runs, plus the property that makes the set
+   coherent. **`condition` was not deleted**: nothing is emitted when a
+   continuous value crosses a threshold, so no existing matcher can say "stop
+   when food gets low" — only "stop when the game finally complained". DESIGN
+   itself records that alerts fire LATE, so a state predicate is the direct
+   answer to a problem this project had already written down. Filed as **1.6
+   (fc287ba)**, wave:3, deps 1.3 + 2.2 + 2.4, whose acceptance requires it to
+   halt EARLIER than the equivalent alert — being a leading indicator is the
+   whole justification, so it should have to prove it.
+2. **The digest budget** — "~1–2KB" predated any measurement. Measured 0.7–2.0KB
+   typical, 2.6KB at saturation; restated as the worst case (≤3KB, ~1KB
+   typical), with an explicit note not to buy headroom by cutting the alert cap.
+   Capping alerts to defend a number invented before measurement would have
+   undone the attention-model fix 2.6 had just made.
+
+The other carried-forward items were never decisions for him, just tasks with no
+owner. Re-homed: the `_RimWorld-Test` re-rooting bug belongs to whoever next
+touches that sibling repo and should stop being relisted here; the two BORGES
+bench-parity facts (WirelessChargingMech, workshop-Storefront vs pinned Guests)
+belong in that machine's session notes.
+
+### catalog.py glyph cross-check — done, and its premise was wrong
+
+Carried since session 2 as "diff the two glyph policies and reconcile them
+before 3.2/3.3". There is nothing to reconcile. `baseviz/catalog.py:74` emits a
+**2-char uppercase token keyed on the defName** (`DiningChair` → `DC`) as a label
+drawn on a coloured, sized cell in a PNG; `CropRenderer` emits **1 ASCII char
+keyed on def properties** for a text grid with no colour to disambiguate with.
+Opposite constraints — collisions are harmless in the first and fatal in the
+second, which is exactly why 2.6 had to reserve a band. Forcing them to agree
+would break a fixed-width grid or throw away information the raster can afford.
+
+Two facts also make the old framing wrong. **AutoRimmer reads no catalog data at
+all** — `grep -rn 'catalog\|baseviz' Source/AutoRimmer/*.cs` gives three
+comments and no code, so 2.3's "colors stay the catalog's" reads like a
+dependency that does not exist. And **the dumped `baseviz_catalog.json` has no
+glyph field**: 3849 defs carrying `color, designationCategory, isStuff, kind,
+label, mod, rotatable, size, stuffColor, stuffable, thingCategory`, with the
+glyph computed in python at render time. There was never a stored policy on the
+bench to diverge from.
+
+The real hazard is narrower and belongs to **2.5**: it renders the same map
+through baseviz's canvas, so the agent gets two visual channels with two
+alphabets for one cell (`#` vs a cell labelled `WA`). DESIGN wants the PNG to be
+an *independent* second check, so they need not match — but the channel must
+declare which alphabet it is using, or 4.2 and 5.1 will compare glyphs across
+channels. Recorded on 2.5; **the gate on 3.2/3.3 is lifted** and both were told
+so, along with a pointer to read the glyph policy from `Spatial.cs` rather than
+from 2.3's now-stale closing table.
 
 ### State at session end
 
