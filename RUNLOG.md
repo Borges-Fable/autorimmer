@@ -763,10 +763,32 @@ bills do not exist. Amended on the issue with the three options.
 ### Handover — session ends at the budget line
 
 - **On `main` and pushed:** everything above. Working tree clean.
-- **In flight when the session ended:** 1.5 (4b65a28) and 2.2 (69ae91f), each in
-  its OWN worktree this time, both `state:doing`. Check their state before
-  assuming anything — if they left no commits, set them back to `state:next`
-  with a PARKED note, as session 2 did.
+- **Both in-flight workers stopped at the budget line and are PARKED.** 1.5
+  (4b65a28) and 2.2 (69ae91f) are back at `state:next`; neither committed
+  anything; both worktrees removed and both empty branch pointers deleted; tree
+  clean. The worktree isolation worked — each had its own checkout and they
+  never touched each other.
+
+  **2.2's research was salvaged and is the most valuable thing either produced.**
+  It had begun a `PawnSerializer.cs` (349 lines, uncommitted, never run) — that
+  file is gone deliberately, because a partly-written unreviewed serializer
+  misleads more than it helps. But a sub-agent of it returned a full **pawn
+  read-safety catalogue**, now preserved verbatim as a comment on 2.2. It is
+  worth reading before anyone writes a serializer again:
+  - **`Pawn_WorkSettings.GetPriority` MUTATES** — on a pawn with no work settings
+    it logs an error and permanently rewrites that pawn's priorities. The gate
+    vanilla itself uses is `workSettings != null && workSettings.EverWork`.
+  - **`OpinionOf` is not a read** — it creates cache entries and thought objects
+    for the (observer, other) pair and runs a full family-graph BFS per call.
+  - **`SocialCardUtility` has static caches keyed on "the pawn the player has
+    open"** — calling it repoints the player's Social tab.
+  - `Pawn_IdeoTracker.Certainty` writes a Scribe-serialized field from its
+    getter; `EffectiveAreaRestrictionInPawnCurrentMap` throws for caravan pawns;
+    anything reaching `CurLifeStageIndex` on a cold pawn can rename it.
+
+  These are leads to verify, not established fact — no code ran against them.
+  But they are the same hazard shape as the two this project already found the
+  hard way (`FreeColonistsSpawned`, `DangerWatcher`), and those were both real.
 - **Dispatch model now in force** (ORCHESTRATION-PROMPT updated): every parallel
   worker gets `isolation: "worktree"`; workers never launch the game and never
   commit a DLL; the orchestrator runs all in-game acceptance and owns the
