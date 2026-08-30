@@ -1,0 +1,306 @@
+# `rwa` — driving the bench from a shell
+
+The client half of the AutoRimmer file protocol (spec 1.4). The server half is
+`../Source/AutoRimmer/`; where this document and that code disagree, **the code
+is right** — it is what runs on the bench.
+
+```bash
+rwa/rwa status              # is the bench alive, and how alive
+rwa/rwa ping
+rwa/rwa digest --json | jq .data.alerts
+rwa/rwa advance --until.letter true --timeout_ticks 60000
+rwa/rwa journal --since 42
+rwa/rwa watch on            # reveal the window, raise the fps cap
+```
+
+Put it on `PATH` if you like — `ln -s "$PWD/rwa/rwa" ~/.local/bin/rwa`. The
+script resolves its own repo through the symlink, so transcripts still land in
+`<repo>/transcripts/`.
+
+Stdlib python3 only, no dependencies. Everything below was exercised against a
+synthetic protocol root by `./selftest.sh`; see the bottom of this file for
+what that does and does not prove.
+
+## How to drive it (the part you actually need)
+
+1. `rwa status`. Five verdicts, and only one of them means "start the game" —
+   see [Liveness](#liveness-is-not-process-up) below.
+2. `rwa <op> [--arg value …]`. Any op the mod registers is a valid word here;
+   there is no verb table in the client. `rwa verbs` asks the mod what it knows,
+   and an `unknown-op` error lists them too.
+3. Read the result. `--json` gives you the mod's envelope byte for byte,
+   `--pretty` renders it as an indented tree. On a tty you get pretty, in a pipe
+   you get JSON, and `--json`/`--pretty`/`RWA_OUTPUT` override that.
+4. Exit code: `0` ok · `1` the mod said `ok:false` · `2` bad usage · `3` no live
+   bench · `4` timed out waiting for a result.
+
+Under the covers each command is one file written to `commands/<id>.json` and
+one file read back from `results/<id>.json`. The mod's poller runs on a 500 ms
+cycle and ignores inbox files younger than 250 ms, so **the floor on a round
+trip is roughly 0.25–1 s** even for a trivial verb. That is the protocol, not
+the client being slow.
+
+## Where the protocol root is
+
+Derived, in this order, and the first one holding a `status.json` wins:
+
+| candidate | when |
+|---|---|
+| `$RIMWORLD_VAULT/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer` | this box — the bench isolates `XDG_CONFIG_HOME` |
+| `$RIMWORLD_VAULT/_RimWorld-Agent/SaveData/AutoRimmer` | a `-savedatafolder` launch (the rwpack pattern) |
+| `~/.config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer` | an un-isolated Linux install |
+| `~/AppData/LocalLow/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer` (and `$USERPROFILE/…`) | the Windows bench |
+
+`RIMWORLD_VAULT` defaults to `/home/dorian/projects/rimworld` and is the same
+variable `profile/make-profile-agent.sh` honours — one convention, not two.
+`RWA_ROOT` (or `--root`) overrides the whole search; that is the escape hatch
+for a bench somewhere else, and for the synthetic root the self-test uses.
+
+`rwa root` prints what was resolved; `rwa root --json` prints every candidate it
+tried and whether it exists. Use it first when something looks wrong.
+
+## Liveness is not "process up"
+
+RimWorld's tick loop is frame-bound, and Hyprland delivers no frames to a window
+on a hidden special workspace. A bench parked there without the launcher's
+`render_unfocused` fix runs at 1–2 fps ≈ 4 tps — and looks perfectly healthy in
+`ps` (FINDINGS.md §4b). So `rwa status` grades five states rather than two:
+
+| state | what it means | exit | what it tells you |
+|---|---|---|---|
+| `down` | no `status.json`, or its `ts` is older than `--stale-secs` (10 s) | 3 | how to start the bench. **The only state that does.** |
+| `menu` | heartbeat fresh, no game loaded this session | 0 | load a save; `status`/`version`/`journal` still answer |
+| `stalled` | heartbeat fresh, but `gameLoaded:false` over a real snapshot — `GameComponentUpdate` has not run for >5 s | 3 | loading screen, or total frame stop; check the windowrules |
+| `starved` | game loaded, frames arriving below `--fps-floor` (5) | 0 | the §4b throttle; relaunch through `run-agent.sh`, or `rwa watch on` |
+| `ok` | live | 0 | — |
+
+The heartbeat is written by the mod's **poller thread**, not by frames, so a
+stale `status.json` means the process is gone; frame starvation shows up as a
+low `fps` with a fresh timestamp. Paused is normal — the agent owns time.
+
+`rwa status --sample 2` reads the heartbeat twice two seconds apart and reports
+the tick delta, which is FINDINGS §4b's standing advice ("assert liveness, not
+process-up") in one command.
+
+Every command that sends checks liveness **before** writing to the inbox. That
+is not just politeness: a command dropped into a dead bench's inbox is answered
+`stale-on-restart` at the next launch, so failing fast is the difference between
+"nothing happened" and "a ghost surfaces tomorrow".
+
+## Argument syntax
+
+```
+--key value        scalar; type guessed: true/false/null, a number, else a string
+--key              a bare flag is the boolean true
+--key=value        same as --key value
+--key:str value    force the type — also :num, :bool, :json
+--a.b.c value      dotted keys nest:  --until.event.type death
+--key x --key y    repeating a key builds an array
+--args-json JSON   the whole args object; '-' reads stdin, '@path' reads a file
+```
+
+The mod is strict about types (`VerbArgs` rejects a string where it wanted a
+number rather than coercing it), so a wrong guess is a loud `bad-args`, never a
+silent misread. Two things worth knowing:
+
+- A **position** is `"x,z"` — a string, not an array — so `--near 120,130` is
+  already right. `[x,z]`, a landmark name, `pawn:<id>` and `thing:<id>` all work
+  too (`Positions.Resolve`).
+- Values are never split on commas. `--types letter --types death` is how you
+  build `["letter","death"]`; `--rect:json '[10,20,5,5]'` is how you build a
+  number array.
+
+Worked examples, all of them real ops:
+
+```bash
+rwa advance --ticks 2500
+rwa advance --until.letter true --timeout_ticks 60000 --max_tps 600
+rwa advance --until.event.type death --until.event.contains Xitral
+rwa advance --until.threat --halt_on_error:bool false
+rwa find-rect --w 7 --h 5 --near 120,130 --require buildable --require noRoof
+rwa map-view --rect:json '[100,100,24,24]' --layers terrain --layers things
+rwa landmark --set.kitchen 120,130
+rwa journal-selftest --steps letter --steps message --letter_delay_ticks 400
+rwa send status                       # explicit form, needed only for name clashes
+rwa advance --args-json '{"until":{"alert":"Alert_LowFood"},"timeout_ticks":120000}'
+```
+
+`--args-json` is the escape hatch and the machine-friendly path: it takes the
+exact object the protocol will carry, and explicit flags override it.
+
+## Output, and what pretty mode is allowed to do
+
+Machine output is always valid JSON: one envelope per invocation, in the mod's
+own shape — `{id, op, ok, data|error, state, sid, ts}` — passed through
+untouched. A client-side failure gets the same shape with an `rwa-…` error code
+and an `rwa` block; nothing else in the envelope moves, so a jq pipeline never
+has to branch on who failed.
+
+```
+rwa-game-down    no live bench (before or during the wait)
+rwa-timeout      command accepted, no result inside --timeout
+rwa-bad-result   the result file was not a parseable envelope
+rwa-no-root      no protocol root could be resolved
+rwa-usage        bad invocation (e.g. an id the mod would rewrite)
+rwa-io           a filesystem failure on our side
+```
+
+Pretty mode is a **generic** JSON tree renderer. It has no verb-specific
+formatting, on purpose: a per-verb formatter would be game semantics on the
+client, which this spec forbids, and it would silently hide any field a later
+serializer adds. If a verb ever wants a prose rendering, that belongs in the
+verb's own data (a digest string from spec 2.1), not here. Pretty mode never
+drops, renames or reorders a field. The single place it elides anything is the
+one-line-per-event journal view, where a long payload is clipped with `…` and
+`--full` turns clipping off.
+
+## jq recipes
+
+These are copy-pasteable and are exercised by `selftest.sh` §10.
+
+```bash
+# the alert readout, one line each, highest-priority information first
+rwa digest --json | jq -r '.data.alerts.active[] | "\(.priority)\t\(.label)"'
+
+# who is unhappy
+rwa digest --json | jq -r '.data.colonists[] | select(.mood_pct < 60) | .name'
+
+# advance, then read exactly what happened while time ran
+seq=$(rwa journal --json --limit 1 --since 99999 | jq .data.last_seq)
+rwa advance --ticks 2500 --json | jq -c '.data | {reason, ticks_elapsed, avg_tps}'
+rwa journal --json --since "$seq" | jq -r '.data.events[] | "\(.tick)\t\(.type)"'
+
+# the halt event of an until-advance, in full
+rwa advance --until.threat --json | jq '.data.halted_on'
+
+# one shape whoever failed: mod error codes and client error codes read alike
+rwa nosuchverb --json | jq -r 'if .ok then "ok" else .error.code end'
+
+# every red error this session — the standing zero-red-errors invariant
+rwa journal --json --type red_error | jq -r '.data.events[].payload.msg'
+
+# what the mod actually registers, as a shell array
+verbs=($(rwa verbs --json | jq -r '.data.verbs[]'))
+```
+
+`rwa tail --json` is the streaming exception: NDJSON, one journal event per
+line, which is what jq consumes natively.
+
+```bash
+rwa tail --json --type letter --type death | jq -r '"\(.tick)\t\(.payload.label // .payload.pawn)"'
+```
+
+## Journal
+
+`rwa journal` reads `journal/<sid>.ndjson` **directly**. That file is the same
+one the `journal` verb reads (`JournalVerbs` runs off the main thread), so a
+direct read costs the game nothing, needs no live bench, and is the only path
+that works for a post-mortem after the game has exited. `--verb` takes the same
+read through the protocol instead; the `data` shape is identical either way, and
+`.rwa.source` says which path produced it.
+
+```bash
+rwa journal --since 42                 # everything after seq 42
+rwa journal --type letter --type death # filter (repeat the flag)
+rwa journal --since-tick 60000
+rwa journal --limit 0                  # no cap (the verb's own max is 2000)
+rwa journal --list                     # every session file under journal/
+rwa journal --sid 20260830T214611      # an earlier session
+rwa tail                               # follow, including across a game restart
+rwa tail -n 50 --once                  # last 50 and exit
+```
+
+Schema: `../JOURNAL.md`. Read its alert-timing section before asserting on
+ticks — alerts trail the state change that caused them, by design.
+
+## Transcripts
+
+Every command and result is mirrored into a run directory:
+
+```
+transcripts/<sid>/
+  meta.json          run id, client version, start time
+  log.ndjson         one line per command: op, id, ok, error, elapsed_s, source
+  001-ping/cmd.json     the exact bytes written to commands/<id>.json
+  001-ping/result.json  the exact bytes read back from results/<id>.json
+  002-advance/…
+```
+
+The run directory is named for the **game session id** by default, because
+`sid` is already the join key for `journal/<sid>.ndjson` and for every result
+envelope — one game session, one transcript, one journal, no correlation table.
+`--run NAME` / `RWA_RUN` overrides it (use it for a scripted scenario), and
+`--no-transcript` / `RWA_NO_TRANSCRIPT` switches recording off. `RWA_TRANSCRIPTS`
+moves the root; it defaults to `<repo>/transcripts/`, which is gitignored.
+
+```bash
+export RWA_RUN=food-crisis
+rwa journal-selftest --steps stockpile
+rwa advance --until.alert Alert_LowFood --timeout_ticks 120000
+rwa digest
+rwa replay food-crisis            # re-send the whole thing, in order
+rwa replay food-crisis --dry-run  # …or just print what it would send
+```
+
+`replay` regenerates command ids by default (`--same-ids` keeps the originals),
+so a replay never overwrites the evidence of the run it came from.
+
+## `rwa watch`
+
+Two independent mechanisms, deliberately not merged, because they fail
+separately:
+
+- **The fps cap** is a line in `<bench>/config/mangohud-agent.conf`. The
+  launcher points `MANGOHUD_CONFIGFILE` at that file and MangoHud re-reads it
+  while the game runs, so rewriting `fps_limit` re-caps a **running** game
+  within a second or two — no restart, no game-side code. Unwatched 30, watched
+  60. `advance` does not want more: at a 30 fps cap the budgeted tick loop
+  measured ~1392 tps (FINDINGS §6), so raising it for a fast-forward buys
+  nothing and costs thermals.
+- **The window** is parked on Hyprland's `special:rwagent` by a `silent`
+  windowrule applied before launch. `rwa watch on` reveals that workspace,
+  `off` hides it. The reveal is idempotent — it reads `hyprctl -j monitors`
+  first and only toggles if the state is wrong.
+
+```bash
+rwa watch          # report: cap, workspace, whether the window is there
+rwa watch on       # reveal + fps_limit=60 + misc:render_unfocused_fps 60
+rwa watch off      # hide + fps_limit=30
+rwa watch on --fps 144
+```
+
+If there is no `RimWorldLinux` window on this Hyprland session, `rwa watch` says
+so and points at the Xvfb fallback: a bench started with `run-agent.sh --xvfb
+--vnc` is watched with a VNC client on `localhost:5900`, not by revealing a
+workspace (FINDINGS §8). Off Hyprland entirely — the Windows bench, a TTY — the
+fps half still works and the command says the reveal was skipped.
+
+## Environment
+
+| var | what | default |
+|---|---|---|
+| `RIMWORLD_VAULT` | the mod-repo workspace | `/home/dorian/projects/rimworld` |
+| `RWA_ROOT` | protocol root, overriding the search | derived |
+| `RWA_TRANSCRIPTS` | transcript root | `<repo>/transcripts` |
+| `RWA_RUN` | transcript run-dir name | the game session id |
+| `RWA_NO_TRANSCRIPT` | disable recording | unset |
+| `RWA_OUTPUT` | `json` or `pretty` | tty-dependent |
+
+## Self-test
+
+```bash
+./selftest.sh          # ~60s, no game involved
+KEEP=1 ./selftest.sh   # leave the synthetic root behind to poke at
+```
+
+`fakebench.py` emulates `Poller.cs` — the same 500 ms scan, the same 250 ms
+minimum file age, the same consume-before-execute, the same envelope, the same
+id sanitisation — so the client cannot tell it apart, and every failure mode is
+a flag instead of a race: a stale heartbeat, a live heartbeat over a starved
+frame loop, a timeout, a mangled result, each error code in the taxonomy.
+
+**What the self-test does not prove**: the live round-trip against a running
+game, and `rwa watch` actually moving a window and re-capping a live process.
+The Hyprland calls are stubbed out there on purpose (toggling a special
+workspace is not a side effect a test should have). Those two are demonstrated
+on the bench, by hand.

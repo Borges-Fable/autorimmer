@@ -3,8 +3,9 @@
 > Agent play platform: Claude plays an unattended RimWorld instance — structured
 > observation, full player verb set, turn-based time control — through a
 > file-based command bridge, and uses the colony as a regression-test platform
-> for our mods. C# bridge mod + bench profile in this repo; the `rwa` CLI and
-> `rwtest` runner live in `rimworld-tools`.
+> for our mods. The C# bridge mod, the bench profile, the `rwa` CLI and (later)
+> the `rwtest` runner all live in this repo — the client and server halves of
+> one protocol, in one clone.
 
 **Status:** spec
 **Type:** c#-system + tooling
@@ -21,6 +22,15 @@ journal + digest → think.
 Read `DESIGN.md` first. The build plan is a set of spec issues in git-bug —
 start at the muster (`type:muster`). `ORCHESTRATION-PROMPT.md` is the prompt
 that runs the build.
+
+## Driving the bench
+
+`rwa/rwa` is the CLI: write a command, wait for the result, print it. Start with
+`rwa/rwa status` — it grades the bench into five states, and only one of them
+means "the game is not running". `rwa/README.md` is the manual (protocol root
+resolution, argument syntax, jq recipes, transcripts, `rwa watch`), and
+`rwa/selftest.sh` exercises the whole client against a synthetic protocol root
+with no game involved.
 
 ## Issues
 
