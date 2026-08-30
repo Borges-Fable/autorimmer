@@ -6,9 +6,26 @@ using Verse.AI;
 
 namespace AutoRimmer
 {
-    // Spatial verbs (spec 2.3). Queries return candidates + reasons, never bare
-    // booleans; every position argument goes through Positions.Resolve, so
-    // landmarks/pawn:/thing: work everywhere. Read-only throughout.
+    // Spatial verbs (spec 2.3, remediated by 2.6). Queries return candidates +
+    // reasons, never bare booleans; every position argument goes through
+    // Positions.Resolve, so landmarks/pawn:/thing: work everywhere. Read-only
+    // throughout.
+    //
+    // FOG OF WAR (DESIGN decisions log, 2026-08-30): the whole player-facing
+    // surface hides undiscovered cells — map-view, find-rect, nearest and
+    // room-at alike, one rule rather than the three behaviours 2.3 shipped in
+    // one file. `c.Fogged(map)` is the test. The agent must not site a building
+    // in ground it has never explored, and an agent holding information no
+    // player has weakens the colony as a test substrate. `dev:*` is exempt;
+    // nothing in this file is dev:*. reachable/path-cost are deliberately NOT
+    // gated — a player cannot query reachability at all, they issue a move
+    // order and the pawn paths into fog like any other pawn; those two verbs
+    // report `from_fogged`/`to_fogged` instead of refusing, so the caller knows
+    // it is asking about unexplored ground.
+    //
+    // BLOCKERS (same decisions-log entry): every rejected cell or thing carries
+    // `removal` (mine|deconstruct|attack|none) and the game's own reason string.
+    // See Blockers.cs — the taxonomy is the game's, not ours.
     public static class SpatialVerbs
     {
         [Verb("map-view")]
@@ -27,18 +44,44 @@ namespace AutoRimmer
             {
                 var around = Positions.Resolve(map, ctx.Args.Raw("around")
                     ?? throw new VerbArgsException("map-view needs 'rect' or 'around'"));
+                // CenteredOn(c, r) is (2r+1) on a side, so the legal radius is
+                // (MaxSide-1)/2 and NOT MaxSide/2 — which is what 2.3 wrote,
+                // making the documented-legal radius:30 a guaranteed bad-args
+                // against a 60-cell cap (2.6 blocker 4). MaxSide is odd now.
                 int radius = ctx.Args.Int("radius", 12);
-                if (radius < 1 || radius > CropRenderer.MaxSide / 2)
-                    throw new VerbArgsException($"radius must be 1..{CropRenderer.MaxSide / 2}");
+                int maxRadius = (CropRenderer.MaxSide - 1) / 2;
+                if (radius < 1 || radius > maxRadius)
+                    throw new VerbArgsException($"radius must be 1..{maxRadius}");
                 rect = CellRect.CenteredOn(around, radius);
             }
             var layers = ctx.Args.Has("layers") ? ctx.Args.StrList("layers") : new List<string>(CropRenderer.DefaultLayers);
             return CropRenderer.Render(map, rect, layers);
         }
 
-        // Scored origin candidates for a W x H rect. Spiral out from 'near';
-        // per-cell requirements fail fast and the first failure is tallied so
-        // the caller learns WHY space is scarce, not just that it is.
+        // Origin candidates for a W x H rect, ordered by the distance from
+        // `near` to the rect's CENTRE — the number the caller is shown and the
+        // number the ordering is proven against.
+        //
+        // 2.6 blocker 1, stated precisely because 2.3's own comment claimed the
+        // mismatch was already fixed. CellRect.CenterCell is `origin + (w/2,
+        // h/2)` (decompiled CellRect.cs:170), so the origins whose CENTRES sit
+        // closest to `near` form a ring around `near - (w/2, h/2)` — several
+        // rings away from `near` itself. 2.3 ring-walked ORIGINS around `near`,
+        // stopped the instant it held `max` of them, and only THEN sorted by
+        // centre distance. Sorting after early termination reorders the wrong
+        // set; it does not select the right one. Visible in 2.3's own closing
+        // evidence: near=[114,133] returned [113,132] at dist 2.2 while
+        // [112,130] is at dist 0.0.
+        //
+        // So the walk is in CENTRE space: ring r enumerates candidate CENTRES at
+        // Chebyshev distance r from `near`, and each origin is `centre - (w/2,
+        // h/2)`. Termination is proven, not assumed: a cell on ring r is at
+        // Euclidean distance >= r, so once `max` candidates are held and the
+        // worst of them is nearer than the ring about to be walked, no later
+        // ring can improve the answer. A walk that stops for any OTHER reason
+        // (examine cap, ring ceiling) says so in `capped`, and `searched_radius`
+        // reports how far it actually looked — empty candidates used to be
+        // ambiguous between "none nearby" and "stopped looking".
         [Verb("find-rect")]
         public static object FindRect(VerbContext ctx)
         {
@@ -48,6 +91,7 @@ namespace AutoRimmer
             if (w < 1 || h < 1 || w > 30 || h > 30) throw new VerbArgsException("w,h must be 1..30");
             var near = ctx.Args.Has("near") ? Positions.Resolve(map, ctx.Args.Raw("near")) : map.Center;
             int max = Math.Min(20, ctx.Args.Int("max", 5));
+            if (max < 1) throw new VerbArgsException("max must be >= 1");
             var require = ctx.Args.Has("require") ? ctx.Args.StrList("require") : new List<string> { "buildable" };
 
             IntVec3 reachFrom = IntVec3.Invalid;
@@ -55,53 +99,117 @@ namespace AutoRimmer
                 if (req.StartsWith("reachable-from:", StringComparison.Ordinal))
                     reachFrom = Positions.Resolve(map, req.Substring("reachable-from:".Length));
 
-            var candidates = new List<object>();
+            var found = new List<Candidate>();
             var rejected = new Dictionary<string, int>();
+            var blockers = new Dictionary<string, BlockerTally>();
             int examined = 0;
+            int searchedRadius = -1;
+            bool capped = false;
             const int ExamineCap = 6000;
+            const int MaxRing = 80;
 
-            // Ring walk outward from near: origin candidates in growing squares,
-            // so the first accepted candidates are also the closest.
-            for (int ring = 0; ring < 80 && candidates.Count < max && examined < ExamineCap; ring++)
+            int offX = w / 2, offZ = h / 2;
+            int ring = 0;
+            for (; ring <= MaxRing; ring++)
             {
-                foreach (var origin in RingOrigins(near, ring))
+                if (found.Count >= max)
                 {
-                    if (candidates.Count >= max || ++examined > ExamineCap) break;
+                    found.Sort((a, b) => a.Dist.CompareTo(b.Dist));
+                    if (found.Count > max) found.RemoveRange(max, found.Count - max);
+                    // Every cell on this ring is at Euclidean distance >= ring.
+                    if (ring > found[max - 1].Dist) break;
+                }
+                if (examined >= ExamineCap) { capped = true; break; }
+
+                foreach (var centre in RingCells(near, ring))
+                {
+                    if (++examined > ExamineCap) { capped = true; break; }
+                    var origin = new IntVec3(centre.x - offX, 0, centre.z - offZ);
                     var rect = new CellRect(origin.x, origin.z, w, h);
                     if (rect.minX < 0 || rect.minZ < 0 || rect.maxX >= map.Size.x || rect.maxZ >= map.Size.z)
                     {
                         Tally(rejected, "out-of-bounds");
                         continue;
                     }
-                    string fail = CheckRect(map, rect, require, reachFrom);
+                    var fail = CheckRect(map, rect, require, reachFrom);
                     if (fail != null)
                     {
-                        Tally(rejected, fail);
+                        Tally(rejected, fail.Reason);
+                        Record(blockers, fail);
                         continue;
                     }
-                    var center = rect.CenterCell;
-                    candidates.Add(new Dictionary<string, object>
+                    // rect.CenterCell == centre by construction; recomputed
+                    // rather than asserted so the published pair can never
+                    // disagree with the game's own arithmetic.
+                    var actualCentre = rect.CenterCell;
+                    found.Add(new Candidate
                     {
-                        ["at"] = Positions.Out(origin),
-                        ["center"] = Positions.Out(center),
-                        ["dist"] = Math.Round(near.DistanceTo(center), 1),
+                        Origin = origin,
+                        Centre = actualCentre,
+                        Dist = near.DistanceTo(actualCentre),
                     });
                 }
+                searchedRadius = ring;
+                if (capped) break;
             }
-            // Ring order sorts by ORIGIN distance; the score is center
-            // distance, so make the ordering match the score.
-            candidates.Sort((a, b) =>
-                ((double)((Dictionary<string, object>)a)["dist"]).CompareTo(
-                    (double)((Dictionary<string, object>)b)["dist"]));
+            if (ring > MaxRing) capped = true;
+
+            found.Sort((a, b) => a.Dist.CompareTo(b.Dist));
+            if (found.Count > max) found.RemoveRange(max, found.Count - max);
+            var candidates = new List<object>();
+            foreach (var c in found)
+                candidates.Add(new Dictionary<string, object>
+                {
+                    ["at"] = Positions.Out(c.Origin),
+                    ["center"] = Positions.Out(c.Centre),
+                    ["dist"] = Math.Round(c.Dist, 1),
+                });
+
             return new Dictionary<string, object>
             {
                 ["candidates"] = candidates,
                 ["examined"] = examined,
+                // How far the walk actually looked, in cells, around `near` in
+                // centre space; -1 means it never completed even ring 0.
+                ["searched_radius"] = searchedRadius,
+                // true = stopped on a budget, not on a proof. Candidates may be
+                // incomplete AND a closer one may exist beyond searched_radius.
+                ["capped"] = capped,
                 ["rejected"] = ToTree(rejected),
+                ["blockers"] = TopBlockers(blockers, BlockerCap, out int blockersMore),
+                ["blockers_more"] = blockersMore,
             };
         }
 
-        private static IEnumerable<IntVec3> RingOrigins(IntVec3 near, int ring)
+        private sealed class Candidate
+        {
+            public IntVec3 Origin;
+            public IntVec3 Centre;
+            public float Dist;
+        }
+
+        // Why one candidate rect was rejected: the tally key, plus the cell and
+        // (where there is one) the thing standing in the way.
+        private sealed class RectFail
+        {
+            public string Reason;
+            public Thing Thing;
+            public IntVec3 At;
+        }
+
+        private sealed class BlockerTally
+        {
+            public string Def, Label, Removal, Reason, Why;
+            public int Count;
+            public IntVec3 At;
+        }
+
+        private const int BlockerCap = 8;
+
+        // Ring r of CENTRES around `near`: the square shell at Chebyshev
+        // distance r. Unchanged in shape from 2.3's RingOrigins; what changed is
+        // what the yielded cell MEANS (a centre, not an origin).
+        private static IEnumerable<IntVec3> RingCells(IntVec3 near, int ring)
         {
             if (ring == 0)
             {
@@ -120,29 +228,37 @@ namespace AutoRimmer
             }
         }
 
-        private static string CheckRect(Map map, CellRect rect, List<string> require, IntVec3 reachFrom)
+        private static RectFail CheckRect(Map map, CellRect rect, List<string> require, IntVec3 reachFrom)
         {
             foreach (var c in rect)
             {
+                // Checked for every requirement set, not just "buildable": a
+                // fogged cell is unknown ground whatever the caller asked about.
+                if (c.Fogged(map)) return new RectFail { Reason = "fogged", At = c };
                 foreach (var req in require)
                 {
                     switch (req)
                     {
                         case "buildable":
+                        {
                             // Heavy affordance carries walls and every normal
                             // building; no standing edifice in the footprint.
-                            if (c.GetEdifice(map) != null) return "edifice-in-way";
+                            var edifice = c.GetEdifice(map);
+                            if (edifice != null)
+                                return new RectFail { Reason = "edifice-in-way", Thing = edifice, At = c };
                             if (!map.terrainGrid.TerrainAt(c).affordances.Contains(TerrainAffordanceDefOf.Heavy))
-                                return "terrain-not-buildable";
+                                return new RectFail { Reason = "terrain-not-buildable", At = c };
                             break;
+                        }
                         case "walkable":
-                            if (!c.Walkable(map)) return "not-walkable";
+                            if (!c.Walkable(map))
+                                return new RectFail { Reason = "not-walkable", Thing = c.GetEdifice(map), At = c };
                             break;
                         case "unroofed":
-                            if (c.Roofed(map)) return "roofed";
+                            if (c.Roofed(map)) return new RectFail { Reason = "roofed", At = c };
                             break;
                         case "roofed":
-                            if (!c.Roofed(map)) return "unroofed";
+                            if (!c.Roofed(map)) return new RectFail { Reason = "unroofed", At = c };
                             break;
                         default:
                             if (!req.StartsWith("reachable-from:", StringComparison.Ordinal))
@@ -154,8 +270,67 @@ namespace AutoRimmer
             if (reachFrom.IsValid
                 && !map.reachability.CanReach(reachFrom, rect.CenterCell, PathEndMode.OnCell,
                         TraverseParms.For(TraverseMode.PassDoors)))
-                return "unreachable";
+                return new RectFail { Reason = "unreachable", At = rect.CenterCell };
             return null;
+        }
+
+        // Aggregate rejections into "what is in the way, and how does it clear".
+        // Keyed by (def, why) so one wall type is one line however many rects it
+        // spoiled; a cell-level rejection (fog, terrain, roof) keys on its own
+        // reason and carries removal "none".
+        private static void Record(Dictionary<string, BlockerTally> into, RectFail fail)
+        {
+            string removal, reason, def = null, label = null;
+            if (fail.Thing != null)
+            {
+                Blockers.Classify(fail.Thing, out removal, out reason);
+                def = fail.Thing.def.defName;
+                label = fail.Thing.def.label;
+            }
+            else
+            {
+                removal = Blockers.None;
+                reason = fail.Reason == "fogged" ? Blockers.FoggedReason : null;
+            }
+            string key = (def ?? "-") + "|" + fail.Reason + "|" + removal;
+            if (!into.TryGetValue(key, out var tally))
+                into[key] = tally = new BlockerTally
+                {
+                    Def = def,
+                    Label = label,
+                    Removal = removal,
+                    Reason = reason,
+                    Why = fail.Reason,
+                    At = fail.At,
+                };
+            tally.Count++;
+        }
+
+        private static List<object> TopBlockers(Dictionary<string, BlockerTally> tallies, int cap, out int more)
+        {
+            var all = new List<BlockerTally>(tallies.Values);
+            all.Sort((a, b) =>
+            {
+                int c = b.Count.CompareTo(a.Count);
+                return c != 0 ? c : string.CompareOrdinal(a.Def ?? a.Why, b.Def ?? b.Why);
+            });
+            more = all.Count > cap ? all.Count - cap : 0;
+            var list = new List<object>();
+            for (int i = 0; i < all.Count && i < cap; i++)
+            {
+                var t = all[i];
+                list.Add(new Dictionary<string, object>
+                {
+                    ["why"] = t.Why,
+                    ["def"] = t.Def,
+                    ["label"] = t.Label,
+                    ["removal"] = t.Removal,
+                    ["reason"] = t.Reason,
+                    ["count"] = t.Count,
+                    ["at"] = Positions.Out(t.At),
+                });
+            }
+            return list;
         }
 
         [Verb("nearest")]
@@ -172,7 +347,14 @@ namespace AutoRimmer
                 what = ctx.Args.Str("def");
                 var def = DefDatabase<ThingDef>.GetNamedSilentFail(what)
                     ?? throw new VerbArgsException($"no ThingDef named '{what}'");
-                pool = new List<Thing>(map.listerThings.ThingsOfDef(def));
+                // ListerThings.ThingsOfDef Log.ErrorOnce's on MinifiedThing and
+                // tells you to use the group instead (decompiled
+                // Verse/ListerThings.cs). A red error raised by agent-supplied
+                // args is a breach of the zero-red-errors invariant, so take the
+                // route the game itself names.
+                pool = def == ThingDefOf.MinifiedThing
+                    ? new List<Thing>(map.listerThings.ThingsInGroup(ThingRequestGroup.MinifiedThing))
+                    : new List<Thing>(map.listerThings.ThingsOfDef(def));
             }
             else
             {
@@ -192,10 +374,15 @@ namespace AutoRimmer
 
             pool.Sort((a, b) => a.PositionHeld.DistanceToSquared(from).CompareTo(b.PositionHeld.DistanceToSquared(from)));
             var hits = new List<object>();
+            int skippedFogged = 0, skippedUnspawned = 0;
             for (int i = 0; i < pool.Count && hits.Count < max; i++)
             {
                 var t = pool[i];
-                if (!t.Spawned || t.PositionHeld.Fogged(map)) continue;
+                if (!t.Spawned) { skippedUnspawned++; continue; }
+                // Fog: the same rule the rest of the surface follows. Counted
+                // rather than silently dropped, so "no medicine" and "no
+                // medicine you have found yet" are distinguishable.
+                if (t.PositionHeld.Fogged(map)) { skippedFogged++; continue; }
                 hits.Add(new Dictionary<string, object>
                 {
                     ["id"] = t.thingIDNumber,
@@ -206,7 +393,20 @@ namespace AutoRimmer
                     ["count"] = t.stackCount,
                 });
             }
-            return new Dictionary<string, object> { ["query"] = what, ["from"] = Positions.Out(from), ["hits"] = hits };
+            return new Dictionary<string, object>
+            {
+                ["query"] = what,
+                ["from"] = Positions.Out(from),
+                ["hits"] = hits,
+                ["pool"] = pool.Count,
+                ["skipped"] = new Dictionary<string, object>
+                {
+                    // removal "none", reason "unexplored" — a fogged thing is
+                    // not blocked, it is simply not known to the colony.
+                    ["fogged"] = skippedFogged,
+                    ["unspawned"] = skippedUnspawned,
+                },
+            };
         }
 
         [Verb("reachable")]
@@ -219,21 +419,30 @@ namespace AutoRimmer
             if (ctx.Args.Has("pawn")) pawn = FindPawn(map, ctx.Args.IntReq("pawn"));
             var parms = pawn != null ? TraverseParms.For(pawn) : TraverseParms.For(TraverseMode.PassDoors);
             bool ok = map.reachability.CanReach(from, to, PathEndMode.OnCell, parms);
-            string note = null;
-            if (!ok)
-            {
-                if (!from.Walkable(map)) note = "from-cell is not walkable";
-                else if (!to.Walkable(map)) note = "to-cell is not walkable (wall or impassable)";
-                else note = "no path: separated by walls/terrain" + (pawn != null ? " for this pawn" : "");
-            }
             var data = new Dictionary<string, object>
             {
                 ["reachable"] = ok,
                 ["from"] = Positions.Out(from),
                 ["to"] = Positions.Out(to),
+                // Not gated on fog (see the class comment): pawns path into
+                // undiscovered ground in the normal game. Flagged so the caller
+                // knows the answer concerns ground the colony has not explored.
+                ["from_fogged"] = from.Fogged(map),
+                ["to_fogged"] = to.Fogged(map),
             };
             if (pawn != null) data["pawn"] = pawn.LabelShortCap.ToString();
-            if (note != null) data["note"] = note;
+            if (!ok)
+            {
+                string note;
+                if (!from.Walkable(map)) note = "from-cell is not walkable";
+                else if (!to.Walkable(map)) note = "to-cell is not walkable (wall or impassable)";
+                else note = "no path: separated by walls/terrain" + (pawn != null ? " for this pawn" : "");
+                data["note"] = note;
+                // A rejected cell says HOW it clears, not just that it blocks.
+                var blocker = !to.Walkable(map) ? to.GetEdifice(map)
+                    : (!from.Walkable(map) ? from.GetEdifice(map) : null);
+                if (blocker != null) data["blocker"] = Blockers.Describe(blocker);
+            }
             return data;
         }
 
@@ -242,17 +451,42 @@ namespace AutoRimmer
         {
             var map = Map();
             var at = Positions.Resolve(map, ctx.Args.Raw("at") ?? throw new VerbArgsException("needs 'at'"));
+            // Fog: no room detail out of unexplored ground. Reported as a
+            // rejected cell in the standard shape rather than as an error — the
+            // agent is allowed to ASK about anywhere, it just gets told the
+            // colony has not been there.
+            if (at.Fogged(map))
+            {
+                var fogged = Blockers.Cell(at, Blockers.FoggedReason);
+                fogged["room"] = null;
+                fogged["fogged"] = true;
+                return fogged;
+            }
             var room = at.GetRoom(map);
+            var edifice = at.GetEdifice(map);
             if (room == null)
-                return new Dictionary<string, object> { ["at"] = Positions.Out(at), ["room"] = null };
+            {
+                var none = new Dictionary<string, object> { ["at"] = Positions.Out(at), ["room"] = null, ["fogged"] = false };
+                if (edifice != null) none["blocker"] = Blockers.Describe(edifice);
+                return none;
+            }
             var data = new Dictionary<string, object>
             {
                 ["at"] = Positions.Out(at),
+                ["fogged"] = false,
                 ["id"] = room.ID,
+                // LAZY: Room.Role runs UpdateRoomStatsAndRole() when
+                // statsAndRoleDirty — a full room analysis. See DigestVerb's
+                // header; it is idempotent and RNG-free, so read-only holds,
+                // but it is not free.
                 ["role"] = room.Role?.label,
                 ["outdoors"] = room.PsychologicallyOutdoors,
                 ["cells"] = room.CellCount,
             };
+            // The thing standing on the queried cell, with how it clears — what
+            // 3.3's place-layout preflight needs to choose between "clear this
+            // and retry" and "site it elsewhere".
+            if (edifice != null) data["blocker"] = Blockers.Describe(edifice);
             if (!room.PsychologicallyOutdoors && !room.TouchesMapEdge)
             {
                 // The same lazy stat computation the inspect pane triggers.
@@ -275,13 +509,22 @@ namespace AutoRimmer
             var path = map.pathFinder.FindPathNow(from, to, parms);
             try
             {
+                // Same rule as `reachable`: reported, not refused.
+                bool fromFogged = from.Fogged(map), toFogged = to.Fogged(map);
                 if (path == null || !path.Found)
-                    return new Dictionary<string, object> { ["found"] = false };
+                    return new Dictionary<string, object>
+                    {
+                        ["found"] = false,
+                        ["from_fogged"] = fromFogged,
+                        ["to_fogged"] = toFogged,
+                    };
                 return new Dictionary<string, object>
                 {
                     ["found"] = true,
                     ["cost"] = Math.Round(path.TotalCost, 1),
                     ["length"] = path.NodesLeftCount,
+                    ["from_fogged"] = fromFogged,
+                    ["to_fogged"] = toFogged,
                 };
             }
             finally
