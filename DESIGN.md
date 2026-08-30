@@ -31,7 +31,7 @@ Status: spec stage. The build plan is the git-bug spec issues (start at the
     [_RimWorld-Agent: native Linux build, Hyprland special workspace, fps-capped]
         AutoRimmer mod (C#): verb registry · serializers · tick driver · journal
             ⇅ file protocol under save-data AutoRimmer/
-    [rwa CLI, python, in rimworld-tools] ⇄ [Claude session | rwtest runner]
+    [rwa CLI, python, in THIS repo: rwa/] ⇄ [Claude session | rwtest runner]
 
 Prior art in-tree — copy, don't reinvent:
 - `analyzerbridge/` — the protocol + threading pattern (its CLAUDE.md "How to
@@ -217,3 +217,12 @@ queue by default (an agent flailing mid-experiment must not page triage).
   copy (a symlink re-roots the game at the Steam install), and the parked
   window needs `render_unfocused` or its frame-bound tick loop stalls. See
   FINDINGS.md.
+- 2026-08-30 — `rwa` (1.4) and `rwtest` (5.1) live in THIS repo as `rwa/` and
+  `rwtest/`, not in `rimworld-tools`. Reverses the original split. The CLI is
+  the client half of a protocol whose server half is here, so a verb and its
+  CLI surface change in one commit, one clone is a working system, and rwtest
+  asserts against `JOURNAL.md`, which is also here. `rimworld-tools` has no git
+  at all (467MB, 206MB of it decompiled RimWorld and ~60 third-party mods), so
+  the original split also had no review trail and no route to the second bench.
+  It stays unversioned and reference-only. 2.5 still REUSES `baseviz/`'s
+  catalog and canvas — that reuse is a code dependency, not a location.
