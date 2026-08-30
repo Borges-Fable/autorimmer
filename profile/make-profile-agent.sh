@@ -70,8 +70,11 @@ link "Mods/LogRelay"                "$REPOS/logrelay"
 link "Mods/AnalyzerBridge"          "$REPOS/analyzerbridge"
 link "Mods/DubsPerformanceAnalyzer" "$TESTING/DubsPerformanceAnalyzer"
 link "Mods/BaseVizCatalogDumper"    "$TOOLS/baseviz/BaseVizCatalogDumper"
-# AutoRimmer itself: spec 1.1 creates Mod/ in this repo; MISSING until then.
-link "Mods/AutoRimmer"              "$(dirname "$HERE")/Mod"
+# AutoRimmer itself: the repo root IS the mod folder, matching every sibling
+# mod repo (analyzerbridge, logrelay, Factions: About/ + Assemblies/ + Source/
+# at root, alongside docs) and spec 1.1's root-relative paths. MISSING until
+# spec 1.1 creates About/.
+link "Mods/AutoRimmer"              "$(dirname "$HERE")"
 
 echo "== own vanilla+DLC mods (live repos) =="
 link "Mods/Factions"                "$REPOS/Factions"
