@@ -96,6 +96,14 @@ namespace AutoRimmer
 
         public int IntReq(string key) => (int)NumReq(key);
 
+        // Journal seq is a `long` (Journal.CurrentSeq), and `since`/`since_seq`
+        // are compared against it. Int() would silently wrap anything past 2^31
+        // into a negative — a bug that would surface only on a long-lived
+        // session, which is the one place it must not (2.6 nit). JSON numbers
+        // arrive as double, so exact integers hold to 2^53; the narrowing that
+        // was actually reachable is gone.
+        public long Long(string key, long fallback) => (long)Num(key, fallback);
+
         public List<string> StrList(string key)
         {
             var result = new List<string>();
