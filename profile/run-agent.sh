@@ -77,13 +77,29 @@ fi
 # Dialect verified on Hyprland 0.55.1 (this box): inline dynamic rule via
 # `hyprctl keyword windowrule` with `match:class <regex>`. `silent` keeps the
 # workspace from being brought forward, so focus never moves.
+#
+# CRITICAL (spike 0.1 finding): Hyprland does not drive frames for windows on
+# a hidden special workspace — the game collapses to ~1-2 fps, and with it the
+# tick loop (ticks/frame is bounded, so 2 fps at Normal = ~4 tps). Measured:
+# hidden 1-2 fps, moved visible 30 fps instantly. Three-part remedy:
+#   1. render_unfocused windowrule (Hyprland's own mechanism for this), set
+#      BEFORE launch so it applies when the window maps;
+#   2. misc:render_unfocused_fps raised to the mangohud cap (its default 15
+#      would halve the unwatched frame budget);
+#   3. vblank_mode=0 (Mesa: swap never waits for a vblank/frame callback) so
+#      the frame loop free-runs even if the compositor never presents;
+#      mangohud's fps_limit then does ALL the pacing.
 if [ "$USE_XVFB" -eq 0 ] && [ "$BATCHMODE" -eq 0 ] && [ "$APPLY_RULE" -eq 1 ] \
    && command -v hyprctl >/dev/null 2>&1 && [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]; then
     hyprctl keyword windowrule \
         "workspace special:rwagent silent, match:class ^(RimWorldLinux)$" >/dev/null \
         && echo "windowrule: RimWorldLinux -> special:rwagent (silent)" \
         || echo "WARN: hyprctl windowrule failed; window will open normally" >&2
+    hyprctl keyword windowrule \
+        "render_unfocused on, match:class ^(RimWorldLinux)$" >/dev/null 2>&1 || true
+    hyprctl keyword misc:render_unfocused_fps "$FPS" >/dev/null 2>&1 || true
 fi
+export vblank_mode=0
 
 # --- fps cap: mangohud, live-editable config file ----------------------------
 # MangoHud watches its config file; rewriting fps_limit re-caps the running
