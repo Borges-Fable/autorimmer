@@ -1,1 +1,1 @@
-{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":2,"timestamp":1788133166,"nonce":"Knolg9Od3kKS1u1FIt/XiR5Wb2Y=","title":"1.7 advance must not tick under a force-pausing modal","was":"Depends: 1.3 (the advance loop). Wave 1, p1. Found by the action-surface audit,"}]}
+{"author":{"id":"e0b5a45ee94df92761e1991b03f72f45cac91cde564e2faac1223bf52a3fe292"},"ops":[{"type":5,"timestamp":1788133890,"nonce":"RjXj6DaWxYerC+Pb9qhKtGQnBRw=","added":null,"removed":["state:next"]}]}
