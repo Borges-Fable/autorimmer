@@ -33,24 +33,40 @@ in the worktree**, so a plain `git clone` does not bring them and a plain
 git-bug bug --status open   # list open issues
 git-bug bug show <id>       # view an issue
 git-bug bug new -t "..." -m "..."
-git-bug pull origin         # fetch issues after cloning
-git-bug push origin         # publish issue changes
+git-bug bug comment new <id> -F body.md   # prefer -F; -m mangles apostrophes
 ```
 
 Cross-repo dashboard: see `../_meta/dashboard/`.
 
 ## Working from a fresh clone
 
+Verified end to end on 2026-08-30 — a plain clone gives you the code and none of
+the plan, and `git-bug pull` on a fresh clone fails with "No identity is set"
+until you create one. The working sequence is:
+
 ```bash
-git clone https://github.com/<owner>/autorimmer.git
+git clone https://github.com/Borges-Fable/autorimmer.git
 cd autorimmer
-git-bug pull origin          # <- the build plan lives here, not in the files
-git-bug bug --status open
+git-bug user new --name "<you>" --email "<you@example.com>" --non-interactive
+git-bug pull origin
+git-bug bug --status open        # 20 open + 1 closed
 ```
 
 Then read `DESIGN.md`, then the muster (`git-bug bug show 01f0b85`), then
-`RUNLOG.md` for where the last session left off. `ORCHESTRATION-PROMPT.md` is
-the exact prompt body that runs the build.
+`RUNLOG.md` for where the last session left off, then the amendments on the
+wave 1-3 specs. `ORCHESTRATION-PROMPT.md` is the exact prompt body that runs the
+build.
+
+**Pushing issue changes back.** `git-bug push origin` fails against an
+HTTPS remote authenticated through the `gh` credential helper
+(`authentication required: No anonymous write access` — git-bug does its own
+transport and does not consult the helper). Push the refs with git instead:
+
+```bash
+git push origin 'refs/bugs/*:refs/bugs/*' 'refs/identities/*:refs/identities/*'
+```
+
+Do that whenever you change issue state, or the next machine sees stale labels.
 
 The bench profile scripts in `profile/` are machine-portable through three env
 overrides, all defaulting to this workspace's layout:
