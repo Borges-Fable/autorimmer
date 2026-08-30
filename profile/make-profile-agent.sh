@@ -11,6 +11,12 @@
 # About.xml at build time. All DLCs. No CE, no PerspectiveShift (SeekAndKill
 # verified standalone — PSInterop.Init returns early when PS is absent).
 #
+# Machine-portable via three env overrides, all with the defaults this box uses:
+#   RIMWORLD_VAULT  the mod-repo workspace   (default /home/dorian/projects/rimworld)
+#   RIMWORLD_STEAM  the Steam RimWorld dir   (default $HOME/.steam/.../common/RimWorld)
+#   RIMWORLD_TOOLS  the rimworld-tools repo  (default <vault>/../rimworld-tools)
+# Anything it cannot find is reported as MISSING SRC and counted, never guessed.
+#
 # How curation works: gen-modsconfig.py activates whatever is present in Mods/,
 # so the active set IS the symlink set created below. Engine + Data are
 # symlinked from the Steam install (tiny, auto-tracks game updates). Re-running
@@ -22,8 +28,8 @@ set -u
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"   # autorimmer/profile
 REPOS="${RIMWORLD_VAULT:-/home/dorian/projects/rimworld}"
 ROOT="$REPOS/_RimWorld-Agent"
-STEAM="/home/dorian/.steam/steam/steamapps/common/RimWorld"
-TOOLS="/home/dorian/projects/rimworld-tools"
+STEAM="${RIMWORLD_STEAM:-$HOME/.steam/steam/steamapps/common/RimWorld}"
+TOOLS="${RIMWORLD_TOOLS:-$(dirname "$REPOS")/rimworld-tools}"
 MP="$REPOS/_upstream/Mods"               # canonical shared infra copies
 TESTING="$REPOS/_RimWorld-Testing/Mods"  # local library for third-party content
 

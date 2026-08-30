@@ -24,16 +24,47 @@ that runs the build.
 
 ## Issues
 
-This repo uses [git-bug](https://github.com/git-bug/git-bug) for local issue tracking.
-Issues live in `refs/bugs/*` inside this repo's `.git/`.
+This repo uses [git-bug](https://github.com/git-bug/git-bug) for issue tracking.
+Issues live in `refs/bugs/*` inside this repo's `.git/` — **they are not files
+in the worktree**, so a plain `git clone` does not bring them and a plain
+`git push` does not send them.
 
 ```bash
-git bug ls           # list open issues
-git bug show <id>    # view an issue
-git bug add          # create a new issue
+git-bug bug --status open   # list open issues
+git-bug bug show <id>       # view an issue
+git-bug bug new -t "..." -m "..."
+git-bug pull origin         # fetch issues after cloning
+git-bug push origin         # publish issue changes
 ```
 
 Cross-repo dashboard: see `../_meta/dashboard/`.
+
+## Working from a fresh clone
+
+```bash
+git clone https://github.com/<owner>/autorimmer.git
+cd autorimmer
+git-bug pull origin          # <- the build plan lives here, not in the files
+git-bug bug --status open
+```
+
+Then read `DESIGN.md`, then the muster (`git-bug bug show 01f0b85`), then
+`RUNLOG.md` for where the last session left off. `ORCHESTRATION-PROMPT.md` is
+the exact prompt body that runs the build.
+
+The bench profile scripts in `profile/` are machine-portable through three env
+overrides, all defaulting to this workspace's layout:
+
+| var | what | default |
+|---|---|---|
+| `RIMWORLD_VAULT` | the mod-repo workspace | `/home/dorian/projects/rimworld` |
+| `RIMWORLD_STEAM` | the Steam RimWorld install | `$HOME/.steam/steam/steamapps/common/RimWorld` |
+| `RIMWORLD_TOOLS` | the `rimworld-tools` repo | `<vault>/../rimworld-tools` |
+
+`make-profile-agent.sh` reports anything it cannot find as `MISSING SRC` and
+counts it; it never guesses. Note that the bench needs the sibling mod repos and
+a RimWorld install to be useful — on a machine without them, the spec work that
+does not touch the game still proceeds.
 
 ## License
 
