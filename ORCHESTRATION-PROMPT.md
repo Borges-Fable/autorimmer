@@ -60,13 +60,17 @@ normal and expected — that is not escalation.)
 that spec, and it got resolved three different ways inside one file — `nearest`
 skips fogged things, `map-view` renders full detail under undiscovered fog,
 `find-rect` returns "buildable" candidates in unexplored ground. No single
-decision was unreasonable; the absence of a decision was. That question is now
-open on the muster and is Dorian's.
+decision was unreasonable; the absence of a decision was. Escalated rather than
+patched, and Dorian settled it: fog is respected across the whole player-facing
+surface, `dev:*` exempt. He then added the thing neither reviewer had caught —
+a blocker must report HOW it clears (`mine` / `deconstruct` / `attack` / `none`),
+because some obstacles are mined, some deconstructed, and some have to be beaten
+down by a drafted colonist. That is the payoff for escalating: he knows the game,
+you do not.
 
 ## Hard gates — stop and wait for Dorian
 - **After 4.3 (M1)**: demo review. He may watch a run (`rwa watch`).
 - **5.2 (M3)** sign-off is his, not yours.
-- The **fog-of-war** contract question, before 3.2/3.3 start.
 
 ## Two machines
 This project runs on two benches and both are real test surfaces:
