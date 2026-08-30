@@ -330,6 +330,19 @@ def parse_op_args(tokens, known=None):
     return (args, mine) if known is not None else args
 
 
+def split_words(tokens):
+    """Leading positional words, then the flags. `rwa watch on --fps 60`.
+
+    Filtering the flag tokens out by `startswith("--")` looks equivalent and is
+    not: it drops each flag's VALUE too, which turns `--fps 60` into a bare
+    `--fps` and a spurious "needs a value".
+    """
+    i = 0
+    while i < len(tokens) and not tokens[i].startswith("-"):
+        i += 1
+    return tokens[:i], tokens[i:]
+
+
 def one(mine, flag, default=None):
     """Last value of a client flag collected by parse_op_args."""
     v = mine.get(flag)
@@ -1263,8 +1276,8 @@ def cmd_watch(opts, root, tokens):
     where "watching" means pointing a VNC client at localhost:5900 instead.
     """
     known = {"--fps": 1}
-    _, mine = parse_op_args([t for t in tokens if t.startswith("--")], known)
-    words = [t for t in tokens if not t.startswith("--")]
+    words, flags = split_words(tokens)
+    _, mine = parse_op_args(flags, known)
     if len(words) > 1:
         die("usage: rwa watch [on|off]")
     action = words[0] if words else "show"
@@ -1358,8 +1371,8 @@ def cmd_replay(opts, root, tokens):
     transcript would collide with each other.
     """
     known = {"--same-ids": 0, "--dry-run": 0, "--stop-on-error": 0}
-    _, mine = parse_op_args([t for t in tokens if t.startswith("--")], known)
-    words = [t for t in tokens if not t.startswith("--")]
+    words, flags = split_words(tokens)
+    _, mine = parse_op_args(flags, known)
     if len(words) != 1:
         die("usage: rwa replay <transcript-dir>")
     src = Path(words[0])
@@ -1458,9 +1471,14 @@ def main(argv):
     if opts.get("--version"):
         print("rwa " + VERSION)
         return EXIT_OK
-    if opts.get("--help") or opts.get("-h") or not rest or rest[0] in ("help", "--help"):
+    if opts.get("--help") or opts.get("-h") or (rest and rest[0] == "help"):
         print(USAGE)
-        return EXIT_OK if (rest or opts) else EXIT_USAGE
+        return EXIT_OK
+    if not rest:
+        # Not stdout: `rwa --json` with no op must not put prose where a caller
+        # is about to run json.loads.
+        print(USAGE, file=sys.stderr)
+        return EXIT_USAGE
 
     cmd, tokens = rest[0], rest[1:]
     root, why, cands = resolve_root(opts.get("--root") or os.environ.get("RWA_ROOT"))

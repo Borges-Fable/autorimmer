@@ -85,7 +85,11 @@ process-up") in one command.
 Every command that sends checks liveness **before** writing to the inbox. That
 is not just politeness: a command dropped into a dead bench's inbox is answered
 `stale-on-restart` at the next launch, so failing fast is the difference between
-"nothing happened" and "a ghost surfaces tomorrow".
+"nothing happened" and "a ghost surfaces tomorrow". Only `down` blocks, though —
+a `stalled` or `starved` bench still has a live poller thread and answers
+promptly (off-thread verbs succeed, main-thread verbs come back
+`no-active-game`), so refusing there would hide the mod's own better answer
+behind a guess.
 
 ## Argument syntax
 
@@ -108,7 +112,10 @@ silent misread. Two things worth knowing:
   too (`Positions.Resolve`).
 - Values are never split on commas. `--types letter --types death` is how you
   build `["letter","death"]`; `--rect:json '[10,20,5,5]'` is how you build a
-  number array.
+  number array. (The one exception is `rwa journal --type`/`rwa tail --type`,
+  which are this script's own flags rather than op arguments and do accept
+  `--type letter,death` as a convenience — journal type names never contain a
+  comma.)
 
 Worked examples, all of them real ops:
 
@@ -201,7 +208,7 @@ read through the protocol instead; the `data` shape is identical either way, and
 
 ```bash
 rwa journal --since 42                 # everything after seq 42
-rwa journal --type letter --type death # filter (repeat the flag)
+rwa journal --type letter --type death # filter (repeat the flag, or --type letter,death)
 rwa journal --since-tick 60000
 rwa journal --limit 0                  # no cap (the verb's own max is 2000)
 rwa journal --list                     # every session file under journal/

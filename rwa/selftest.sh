@@ -28,6 +28,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 export RWA="$HERE/rwa"
 export FAKE="$HERE/fakebench.py"
 
+export TMP
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/rwa-selftest.XXXXXX")"
 export RWA_ROOT="$TMP/AutoRimmer"
 export RWA_TRANSCRIPTS="$TMP/transcripts"
@@ -289,10 +290,17 @@ run 0 "watch on rewrites fps_limit in the file MangoHud is watching" -- \
 run 0 "the config now caps at 60 and still hides the HUD" -- cat "$BENCH/config/mangohud-agent.conf"
 has "fps_limit=60"
 has "no_display=1"
+run 0 "an explicit cap: a flag VALUE after a positional word is not eaten" -- \
+    env -u HYPRLAND_INSTANCE_SIGNATURE "$RWA" watch on --fps 144 --root "$WROOT"
+run 0 "…and it took" -- cat "$BENCH/config/mangohud-agent.conf"
+has "fps_limit=144"
 run 0 "watch off puts it back to the unwatched default" -- \
     env -u HYPRLAND_INSTANCE_SIGNATURE "$RWA" watch off --root "$WROOT"
 run 0 "…verified in the file" -- cat "$BENCH/config/mangohud-agent.conf"
 has "fps_limit=30"
+run 2 "usage errors go to stderr, never onto stdout as non-JSON" -- \
+    sh -c '"$RWA" --json > "$TMP/stdout.txt" 2>/dev/null; rc=$?; [ -s "$TMP/stdout.txt" ] && echo "STDOUT NOT EMPTY"; exit $rc'
+lacks "STDOUT NOT EMPTY"
 run 0 "bare watch reports state without changing anything" -- \
     env -u HYPRLAND_INSTANCE_SIGNATURE "$RWA" watch --root "$WROOT" --json
 hasre '"action": "show"'
