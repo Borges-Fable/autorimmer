@@ -72,9 +72,18 @@ link "Mods/DubsPerformanceAnalyzer" "$TESTING/DubsPerformanceAnalyzer"
 link "Mods/BaseVizCatalogDumper"    "$TOOLS/baseviz/BaseVizCatalogDumper"
 # AutoRimmer itself: the repo root IS the mod folder, matching every sibling
 # mod repo (analyzerbridge, logrelay, Factions: About/ + Assemblies/ + Source/
-# at root, alongside docs) and spec 1.1's root-relative paths. MISSING until
-# spec 1.1 creates About/.
-link "Mods/AutoRimmer"              "$(dirname "$HERE")"
+# at root, alongside docs) and spec 1.1's root-relative paths.
+#
+# Guarded on About/ rather than on the directory: the repo root always exists,
+# so an unguarded link would put an About-less folder in Mods/ the moment the
+# path was corrected — RimWorld logs that, and this bench holds a zero-red-
+# errors invariant. Until spec 1.1 writes About/, say so and link nothing.
+if [ -f "$(dirname "$HERE")/About/About.xml" ]; then
+    link "Mods/AutoRimmer"          "$(dirname "$HERE")"
+else
+    rm -f "$ROOT/Mods/AutoRimmer"
+    echo "  skipped Mods/AutoRimmer (no About/About.xml yet — spec 1.1 creates it)"
+fi
 
 echo "== own vanilla+DLC mods (live repos) =="
 link "Mods/Factions"                "$REPOS/Factions"
