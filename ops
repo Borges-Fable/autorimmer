@@ -1,1 +1,1 @@
-{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":5,"timestamp":1788132822,"nonce":"fudtKfIG3ZZbkLnkWNZWikPJWv8=","added":["mod:autorimmer","priority:p1","state:backlog","type:spec","wave:3","agent:opus"],"removed":null}]}
+{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":2,"timestamp":1788133166,"nonce":"AAe57QJwSNtfW9aBIVBkToQgPVY=","title":"3.6 Production bills + storage settings","was":"Wave 3 — hands. Depends: 1.1 (protocol), 2.4 (bills are read there). Gates M1."}]}
