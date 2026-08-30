@@ -27,6 +27,15 @@ issue states, and RUNLOG.md.
    below. One issue = one worker = one branch `spec/<num>-<slug>`.
    Parallelism: at most 2 workers, never two touching the same files, at
    most one whose acceptance needs the running game.
+   **Every parallel worker gets its own git worktree** (`isolation: "worktree"`),
+   or you run them one at a time. Session 4 dispatched two into the SAME
+   checkout: their files were genuinely disjoint, but they shared a HEAD, so the
+   second worker's commits stacked onto the first's branch while its own branch
+   sat at `main`. Nothing was lost only because the first worker reported the
+   collision and touched nothing instead of running a `reset --hard` that would
+   have deleted the other's work from disk. Disjoint files are NOT enough — a
+   shared HEAD is the hazard. Tell each worker which install and which bench it
+   owns, too; two clients driving one bench corrupt both runs.
 4. **Verify yourself.** Acceptance criteria are the definition of done.
    Run the build, run the acceptance commands, read the evidence — a
    worker's claim is not evidence. Re-derive headline numbers from raw
@@ -47,14 +56,37 @@ issue states, and RUNLOG.md.
    its text asks, say so in those words.
 7. **Log**: append to RUNLOG.md — issue, model, wall time, outcome, oddities.
 
-## Escalation — outranks progress
-Spec ambiguity, broken assumption, or cross-spec conflict: do NOT resolve it
-by judgment, do NOT let a worker guess. Comment the question on the issue AND
-the muster, set `state:next` with a `BLOCKED:` note in the comment, move to
-other work, and list it under "Needs Dorian" in RUNLOG.md. Silently
-reinterpreted specs are the failure mode this process exists to prevent.
+## Resolution — outranks progress
+**You resolve. You do not queue.** Dorian's instruction, session 4: "there
+should be nothing on the muster for me. you take care of these things through
+agents or a future session." There is no "Needs Dorian" list any more.
+
+Spec ambiguity, broken assumption, or cross-spec conflict: do NOT let a worker
+guess, and do NOT resolve it by taste. Resolve it by INVESTIGATION — the
+decompiled source at `rimworld-tools/Info/decompiled/RimWorldBase/` answers most
+of these, and a research agent answers the rest. Then:
+
+1. Record the decision AND its reasoning in DESIGN.md's decisions log, so it
+   lands in a diff rather than in a comment nobody re-reads.
+2. If the resolution reveals real missing work, file it as a spec issue with
+   deps and an Acceptance section — never leave it as a word in a list nobody
+   implemented (that is exactly how `until:condition` sat unbuilt from spec
+   stage to session 4).
+3. Comment the resolution on the affected issues so a worker reading only the
+   issue is not following stale prose.
+
+The bar is **"did I check this against the game's own source"**, not "am I
+allowed to decide". Silently reinterpreted specs are still the failure mode this
+process exists to prevent; the fix is a recorded decision, not a queued one.
 (Workers resolving their spec's own Open-questions section on-issue is
 normal and expected — that is not escalation.)
+
+**The one thing still worth routing to him:** a question that is genuinely about
+how RimWorld should be PLAYED rather than how this code should work. That is
+game knowledge, not a design call, and it belongs in the playbook (4.1), which
+DESIGN already establishes as the channel he reviews in diffs. See the worked
+example below — his answer was better than either reviewer's, and the part he
+ADDED is the part no amount of source-reading would have produced.
 
 **A worked example of the failure, from spec 2.3:** fog of war is nowhere in
 that spec, and it got resolved three different ways inside one file — `nearest`
@@ -117,7 +149,9 @@ CRLF on Windows (`WriteLine` uses `Environment.NewLine`), which matters for
 
 ## Bookkeeping
 RUNLOG.md is append-only, one section per orchestrator session, ending with:
-issues done / in flight / blocked, "Needs Dorian" list, next pick. Push issue
+issues done / in flight / blocked, decisions recorded, next pick. (There is no
+"Needs Dorian" list — see Resolution above; if you find yourself writing one,
+resolve the items instead.) Push issue
 changes with
 `git push origin 'refs/bugs/*:refs/bugs/*' 'refs/identities/*:refs/identities/*'`
 — `git-bug push` cannot authenticate through gh's credential helper. If your
