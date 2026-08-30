@@ -64,8 +64,15 @@ AnalyzerBridge's, generalized:
 
 Paused by default. The agent acts, then explicitly advances:
 
-    advance { ticks:N | until:{letter|alert|event-match|condition},
+    advance { ticks:N | until:{letter|threat|alert|event},
               max_tps:T, timeout_ticks:M }
+
+Every `until` matcher is a **journal tap over discrete events** — it hooks
+`Journal.OnEvent` and halts on a match, so it can only fire on something that
+HAPPENS. `threat` is `letter` narrowed to `ThreatBig`/`ThreatSmall`. There is
+deliberately no state-predicate matcher here; see the 2026-08-30 decisions-log
+entry, which records why the original `condition` was moved out of this line and
+into its own issue rather than dropped.
 
 Vanilla ceiling (decompiled `TickManager.cs`): `TickRateMultiplier * 2` ticks
 per frame inside a ~45ms budget; Ultrafast = 15×, dev UltraSpeedBoost = 150×.
@@ -93,8 +100,18 @@ Four layers of play, each with its own channel:
    FSWA auto-arm, medical/firefighting via work priorities). The agent
    intervenes by exception, not by micro.
 
-Context budgets are part of every observer spec (digest ~1–2KB; everything else
-drill-down on demand). jq-side filtering is expected and encouraged.
+Context budgets are part of every observer spec; everything outside the digest is
+drill-down on demand, and jq-side filtering is expected and encouraged.
+
+**Digest budget, measured rather than guessed (2026-08-30).** This line said
+"~1–2KB" from spec stage, before anything had been built. Measured on real
+colonies: **0.7–2.0KB typical, 2.6KB worst case** with every cap saturated
+(12 alerts, 10 colonists, 20 of each present). The budget is the WORST case,
+because that is the one that bites — call it **≤3KB, ~1KB typical**. What makes
+it a budget rather than a hope is that every list-valued section is capped and
+reports what it dropped; an uncapped section is the defect, not a large number.
+Do not buy headroom by cutting the alert cap: alerts are the attention model,
+and 2.6 exists partly because truncating them badly hid a Critical.
 
 ## Action model
 
@@ -235,6 +252,18 @@ queue by default (an agent flailing mid-experiment must not page triage).
   it has never explored; and an agent with information no player has weakens
   the colony as a test substrate, since exploration-triggered mod bugs would
   never be provoked.
+- 2026-08-30 — **`advance until:` is journal-tap only; `condition` becomes its
+  own issue rather than a line in this document.** This section advertised
+  `until:{letter|alert|event-match|condition}` while `TimeDriver` shipped
+  `letter|threat|alert|event` — so `condition` did not exist and `threat` was
+  undocumented. Found by 1.4's worker reading the C# against this prose. The
+  line now describes what runs. `condition` is NOT dropped: a state predicate is
+  categorically different from an event tap (nothing is emitted when a
+  continuous value crosses a threshold), and it is the direct answer to this
+  document's own observation that **alerts fire late** — `Alert_LowFood` is a
+  lagging indicator, `food_days < 3` is a leading one. Filed as its own spec so
+  it has a home, dependencies and an acceptance section instead of being a word
+  in a list nobody implemented.
 - 2026-08-30 — **Blockers report HOW they are removable, not merely that they
   block.** A bare "not buildable" is useless: some obstacles are mined, some
   deconstructed, and some must be beaten down by a drafted colonist. The game
