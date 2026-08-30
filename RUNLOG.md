@@ -175,6 +175,25 @@ in-session per the machine model rule, opus specs dispatched as workers.
 | issue | model | wall time | outcome |
 |---|---|---|---|
 | 1.1 Skeleton: protocol, verb registry, main-thread loop (097f33a) | fable (in-session) | ~35 min incl. bench build | merged ff 5c751e7..4f61933; closed, all acceptance verified |
+| 1.2 Journal: events.ndjson (45d01a3) | fable (in-session) | ~30 min | a1a6b76 + Build da35c3c; closed, all acceptance verified |
+
+**1.2 — what landed.** Journal core (per-session NDJSON keyed by sid, atomic
+seq, poller-thread flusher), 7 decompile-verified Harmony postfixes + 2
+GameComponent virtuals, cadenced alert diff (no notify path exists), `journal`
++ `journal-selftest` verbs, JOURNAL.md schema contract. Verified live: the
+scripted raid/letter/error/downed/break sequence in causal order (the raid's
+own letter lands before its dev-provenance event, alerts trail 11 ticks —
+exactly the documented semantics); save/load round-trip with zero duplication
+and no seq gaps; overhead 0.0039 ms/frame measured through AnalyzerBridge
+driving DPA. First boot exposed mapgen corpse-setup flooding death/downed at
+tick 0 — gated on ProgramState.Playing; and SteamAPI.Init predates any mod
+ctor, so the journal's log capture starts at its boot marker (LogRelay's
+backfill owns the pre-ctor window; JOURNAL.md documents both boundaries).
+
+**Process slip, owned:** 1.2's commits landed directly on main instead of a
+spec branch — the `spec/1.2-journal` pointer was created after the fact at the
+Build commit. Tree identical to a branch + ff-merge; nothing lost but the
+ordering discipline. Branch-first restored from 1.3 on.
 
 **1.1 — what landed.** `About/`, `Source/AutoRimmer/` (7 files, AnalyzerBridge's
 shape generalized), `Assemblies/AutoRimmer.dll` in its own `Build:` commit, and
