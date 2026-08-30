@@ -315,3 +315,112 @@ v1 modlist; 38 active regardless (AutoRimmer joined).
 - Boot-to-ticking-quicktest ≈ 40-70s on this box vs 2-4 min on dorian's — the
   12700H worldgens fast. tps floor differs too; do not port throughput numbers
   across machines.
+
+## Session 3 — 2026-08-30 (dorian's Linux box)
+
+Opus orchestrator. No specs implemented: this session reviewed session 2's five
+closed specs, verified them on the Linux bench, and filed the remediation the
+review turned up. BORGES unavailable until 20:00, so the plan is scoped to this
+machine.
+
+### Review of session 2
+
+Three reviewers: two opus on the code (wave-1 substrate; wave-2 observers), one
+sonnet on scope and process discipline.
+
+**Process: clean.** No hidden or uncommitted scope — every file maps to a spec,
+`profile/`, or a doc. The `profile/*.ps1` ports are faithful where they can be
+and divergent only where Windows requires it, documented in-file. The one
+undeclared addition, `journal-selftest`, was disclosed and justified on its
+issue. Five `Build:` commits, each DLL-only; no commit anywhere mixes source and
+binary. Nothing left behind. One real gap: branch-first discipline is
+*unverifiable* for four of five specs — the history is fully linear with no
+merge commits, so a real branch-then-ff and a direct-to-main commit labelled
+afterwards are indistinguishable. 1.2's slip is admitted in their own RUNLOG;
+it may not have been the only one.
+
+**Code: good work, above average — and not mergeable as-is.** Hook points were
+chosen from decompiled source rather than guessed, the observer discipline holds
+under inspection, the tick loop matches FINDINGS section 9 exactly, and the
+closing comments are unusually honest about what was and was not demonstrated.
+Both code reviewers nonetheless landed on real defects, none of which the
+acceptance runs could have reached.
+
+Filed as two issues, both `state:next`, `agent:opus`, neither requiring any
+revert:
+- **1.5 (4b65a28)** — three blockers, all the same shape, state outliving its
+  owner: `TimeDriver` state survives a game unload (an in-flight advance never
+  gets a result and RESUMES against the next colony); `Runtime.Pending` is not
+  drained at a game boundary (consumed commands, zero results); and the
+  red-error dedupe cap silently disables `halt_on_error` after four occurrences.
+  All three violate 1.1's stated absolute invariant.
+- **2.6 (3dce29a)** — `find-rect` returns candidates that are not the nearest
+  (it sorts by CENTER distance after terminating a ring walk over ORIGINS —
+  visible in 2.3's own closing evidence); alert truncation drops by discovery
+  order rather than severity, so a Critical alert can be the one cut; the
+  digest's `colonists` section is the only one with no cap; `map-view
+  radius:30` is documented-legal and always errors on an off-by-one.
+
+**Sequencing consequence:** 2.6 gates 2.2 and 2.4, which are told to copy 2.1's
+exemplar — and that exemplar has an uncommented per-colonist `Room.Role` (a lazy
+full room analysis), the uncapped list, and a `DangerWatcher` hazard a copy of
+the pattern would trip. Both moved to `state:backlog` with GATED comments. 2.6
+also gates 3.2/3.3, which build UX on `find-rect`.
+
+Both reviewers independently judged 2.1's two stated caveats to be the right
+instinct aimed at the wrong thing: each framed a structural gap as merely
+unmeasured. The extrapolated 2.1KB digest size is already outside the stated
+1-2KB budget, and "power validated at zero only" hides that gen and draw are
+not separable at all, which is invisible precisely at zero.
+
+### Verified on the Linux bench
+
+The Windows-built DLL loads and runs correctly here — full protocol round-trip
+(`ping`, `version` reporting `bench:"dorian"`, structured `unknown-op` listing
+all 16 verbs), `digest` at 1201 bytes inside budget, `advance ticks:60000`
+landing exactly +60000 and returning paused, 0 red errors against the same
+9-warning baseline. **No Linux/Windows behavioural divergence in the substrate.**
+
+A 3000-tick advance reported 1123.6 tps against a 1000 cap, which looked like a
+breach; the 60000-tick run came in at 1000.84. The cap holds at sustained scale
+and overshoots only on bursts shorter than a few seconds.
+
+Two genuine box-to-box differences worth carrying:
+- The source builds clean on Linux (0 warnings) once `RIMWORLD_MANAGED` is set
+  — the csproj's fallback default is a hardcoded BORGES Windows path, which
+  fails loud rather than wrong, but is documented nowhere outside a csproj
+  comment. Same source, same output size, **32,941 of 68,608 bytes differ**
+  (different Roslyn; this box is on SDK 10.0.104). Binary comparison is
+  therefore not a cross-box parity check — behavioural testing is the only one.
+- `Journal.cs` uses `WriteLine`, so journals are LF here and CRLF on BORGES.
+  Confirmed LF-only on this box. Spec 5.1 makes the journal its primary
+  assertion substrate, so golden files will not port between machines.
+
+Thermals deliberately dropped as a test target: that governor exists for this
+old laptop, and BORGES handles its own.
+
+### Needs Dorian
+
+1. **Fog of war is a spec ambiguity that must not be a worker's call.** It is
+   nowhere in spec 2.3 and got resolved three different ways in one file:
+   `nearest` skips fogged things, `map-view` renders full detail under
+   undiscovered fog, `find-rect` will return a "buildable" candidate in
+   unexplored ground. On a fresh crashlanded map that is most of the map. Three
+   defensible answers (agent sees what the player sees / agent sees everything /
+   per-verb flag) and it changes 3.2/3.3's contract. Parked as a question in 2.6
+   and on the muster.
+2. Carried forward unchanged: `_RimWorld-Test` re-rooting bug; catalog.py
+   cross-check (only doable on this box, gates 3.2/3.3 glyph UX);
+   WirelessChargingMech missing on BORGES; Storefront/Guests version clash.
+
+### State at session end
+
+- **Done:** nothing new closed. 0.1, 1.1, 1.2, 1.3, 2.1, 2.3 remain closed.
+- **In flight:** none.
+- **Blocked:** 2.2, 2.4 gated on 2.6 (`state:backlog`).
+- **Next picks, in order:** 2.6 (3dce29a) first — it unblocks the most. Then
+  1.5 (4b65a28); the two touch disjoint files (observers vs poller/driver/
+  journal) so they can run as a parallel pair, and only one needs the bench at a
+  time. Then 2.2 + 2.4. **1.4 and 2.5 need `rimworld-tools`, which exists only
+  on this box** — they are the natural picks here whenever a slot is free, and
+  BORGES structurally cannot take them.
