@@ -46,6 +46,16 @@ git-bug bug new -t "..." -m "..."
 git-bug bug comment new <id> -F body.md   # prefer -F; -m mangles apostrophes
 ```
 
+Two traps, both found the hard way:
+
+- **`git-bug bug show` mangles the body** — it eats lines beginning with `#`, so
+  markdown headings vanish and a spec can look like it is missing sections. Read
+  bodies with
+  `git-bug bug show --format json <id> | python3 -c "import json,sys; d=json.load(sys.stdin); [print(c['message']) for c in d['comments']]"`.
+- **`git-bug bug new -t "..." -F body.md` silently DISCARDS `-t`** and uses the
+  file's first line as the title. Either pass the body on stdin, or fix it
+  afterwards with `git-bug bug title edit <id> -t "..." --non-interactive`.
+
 Cross-repo dashboard: see `../_meta/dashboard/`.
 
 ## Working from a fresh clone
