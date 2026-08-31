@@ -1306,3 +1306,58 @@ is a 1.7-class wedge not previously in the list, and is concrete evidence for
    helper. Both workers left the same comment saying the orchestrator owns it.
    They differ in one behaviour: 3.2 drops null-valued extras, 3.4 keeps them.
 5. **2.5** is unblocked here — it needed dorian's box and this is it.
+
+### Session 7, round 2 — 3.4 closed (16 of 25)
+
+Cleanup round at Evan's call, before designing an orchestration session. 3.4 is
+CLOSED: 139 of 147, all four bullets in ONE run, zero red errors, merged
+fast-forward at `7996fe6`.
+
+**One code fix, four fixture rounds.** The score went 130 -> 133 -> 138 -> 139
+and only the first step was a code change. Everything after it was the fixture.
+That ratio is the finding worth carrying into how we plan sessions.
+
+- **The defect (`0a5085d`):** `warden` ran the `mode` gate — which reads
+  `pawn.guest.Recruitable` via `ModeHidden` — two levers before it applied
+  `recruitable`. So `{mode:"AttemptRecruit", recruitable:true}`, the call 3.4's
+  own acceptance makes, returned ok:true with the mode silently unapplied. Order
+  is now clear -> recruitable -> mode -> …, which is also how the tab behaves.
+- **Bullet 2** needed the stockpile moved off the colonists: phase 2 spawns the
+  steel at `pawn:A`, and on top of the zone it lands already-stored, so there is
+  no haul job. Now: *"hauling steel x75 to Stockpile zone 1."*
+- **Bullet 3** needed a rested pawn. `JobGiver_OptimizeApparel` runs at a free
+  think tick and the pawn had been going to sleep first.
+- **Bullet 4** needed doctor capacity. Cutting the colony to two pawns, where
+  the patient could not doctor, left one doctor at flat priority and the surgery
+  never happened.
+- **5.3 fired for the first time ever** — the disabled-work-type red-error
+  pre-check had been a NOTE in every previous run because no actor happened to
+  have a disabled work type.
+
+**The fixture table in `accept/3.4-pawn-orders.md` is wrong by omission.** It
+asks for "at least 2 visible colonists". It actually needs an actor capable of
+Hauling and Doctor, enough doctor capacity, rested pawns, and a stockpile sited
+away from where colonists idle. Each missing row cost a full bench cycle.
+
+**And the actor is not deterministic.** `pawns {filter:"colonist"}` returned a
+different order for the same colony across two calls in one session — spawning a
+pawn reordered it. Phase 0 keys A and B on `roster[0]`/`roster[1]`, so the
+acceptance rides an unstable index. Worked around by making every colonist in
+the fixture suitable, which is a workaround. Either `pawns` should promise a
+stable order or phase 0 should SELECT by capability. **Decide this before more
+position-keyed acceptance is written — 3.6 and 4.3 will hit it.**
+
+Remaining 8 failures are all `e8f2c32` (work priorities 1 and 2 unreachable with
+manual priorities off, and no verb turns them on). Not fixable inside 3.4.
+
+**Bench fixture, `autostart.rws` at tick 58205:** quicktest map, 4 colonists at
+100% health with needs topped up and none with Hauling or Doctor disabled, a
+144-cell stockpile with 115 free sited 16+ cells clear of the pawns, research
+bench, 32 startable projects, Anesthetize addable. Start here.
+
+**Process note against myself:** I left ~15 stray shells running. My waiters were
+`until ! pgrep -f '<pattern>'` where the waiter's own command line contains the
+pattern, so `pgrep` matched itself and the loop could never exit. I hit this
+once with `1.8-game-clock`, said so, then wrote it four more times. Use the
+task-completion notification instead of polling, or match on something the
+waiter does not itself contain.
