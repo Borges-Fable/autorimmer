@@ -65,12 +65,18 @@ time control returns. Nothing below invents a fourth.
 
 Player verbs only: `designate`, `zone`, `equip`/`wear`/`drop`, `forbid`/
 `unforbid`, `work-priorities`, `schedule`, `policies`/`policy-*`, `assign`,
-`research-set`, `surgery-add`/`surgery-remove`, `draft`/`undraft`, `orders`
-(`move-to`, `attack`, `rescue`, `capture`, `tend`, …), `seek-at-will`,
-`fire-at-will`, `flick`, `repair`-class designations, `landmark`, and 3.3's
-`place-layout` when it ships. Batch by the plural form — one rect, one call
-(DESIGN §Action model); a shell loop over `rwa` is the ragged-tail escape
-hatch, at 0.25–1s per round trip.
+`research-set`, `surgery-add`/`surgery-remove`, `draft`/`undraft`, `move-to`,
+`attack`, `rescue`, `capture`, `tend`, `seek-at-will`, `fire-at-will`,
+`flick`, `repair`-class designations, `landmark`, and 3.3's `place-layout`
+when it ships — each its own independent `[Verb(...)]`, not subcommands of
+anything. `orders` (`PawnOrderVerbs.cs`, member `Orders`) is a different,
+diagnostic verb — the right-click-menu probe for "what work could this pawn
+do here" — and is NOT read-only: it can delete an incompletable bill
+(`BillStack.RemoveIncompletableBills`), consumes a scribed job id per
+candidate, and rewrites every bill's scribed `paused` flag on the map (see
+its own header comment and DESIGN.md's decisions log). Batch by the plural
+form — one rect, one call (DESIGN §Action model); a shell loop over `rwa` is
+the ragged-tail escape hatch, at 0.25–1s per round trip.
 
 - **`dev:*` is forbidden during play.** Fixture staging before the session
   proper is the only sanctioned use, and it journals as cheats either way.
