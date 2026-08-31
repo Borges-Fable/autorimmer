@@ -415,7 +415,11 @@ namespace AutoRimmer
                 // cannot see.
                 if (AlreadyDoing(p, job))
                 { outcome.No(p, GateAlready, AlreadyWhy(queued), AlreadyLine(p, queued)); continue; }
-                if (!p.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
+                // ac407f1 (c) — PawnActs.TakeOrder, not a bare TryTakeOrderedJob.
+                // `queue` below is the caller's FLAG; `order_effect` is what the
+                // game did with it, which for an idle pawn is "started, and your
+                // existing queue was cleared".
+                if (!TakeOrder(p, job, JobTag.Misc, queued, out var eff))
                 { outcome.No(p, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job"); continue; }
                 try { FleckMaker.Static(dest, map, FleckDefOf.FeedbackGoto); } catch { }
 
@@ -423,6 +427,7 @@ namespace AutoRimmer
                 var line = JobLine(p);
                 line["dest"] = Positions.Out(dest);
                 line["queue"] = queued;
+                Merge(line, eff);
                 outcome.Ok(p, line);
             }
 
@@ -983,6 +988,11 @@ namespace AutoRimmer
             // too keeps the traffic byte-identical to the click.
             job.workGiverDef = scanner.def;
             bool took;
+            // ac407f1 (c). Both branches end in TryTakeOrderedJob — the
+            // prioritized one via Pawn_JobTracker.TryTakeOrderedJobPrioritized-
+            // Work, which calls it and only then stamps workGiverDef and
+            // priorityWork — so one snapshot before the fork measures both.
+            int queueBefore = QueueDepth(pawn);
             if (queue)
             {
                 // TryTakeOrderedJob's queue branch is keyboard-gated
@@ -1017,7 +1027,7 @@ namespace AutoRimmer
             outcome.Ok(pawn);
             long seq = PrioritizeRow(outcome, V, pawn, giverDef, label, thing, cell, job);
 
-            var data = JobLine(pawn);
+            var data = Merge(JobLine(pawn), OrderEffect(pawn, job, queue, queueBefore));
             data["verb"] = V;
             data["ok"] = true;
             data["pawn"] = pawn.thingIDNumber;
@@ -1211,7 +1221,7 @@ namespace AutoRimmer
                     outcome.No(doer, GateAlready, AlreadyWhy(queued), AlreadyLine(doer, queued));
                     continue;
                 }
-                if (!doer.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
+                if (!TakeOrder(doer, job, JobTag.Misc, queued, out var eff))
                 {
                     outcome.No(doer, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job "
                         + "(pre-toil reservations failed)");
@@ -1220,6 +1230,7 @@ namespace AutoRimmer
                 ids.Add(doer.thingIDNumber);
                 var line = JobLine(doer);
                 if (bed != null) line["bed"] = bed.thingIDNumber;
+                Merge(line, eff);
                 outcome.Ok(doer, line);
             }
 
@@ -1402,12 +1413,12 @@ namespace AutoRimmer
                 return outcome.Result(V, EquipRow(outcome, V, label, pawn, thing),
                     new Dictionary<string, object> { ["thing"] = thing.thingIDNumber, ["label"] = label });
             }
-            if (!pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
+            if (!TakeOrder(pawn, job, JobTag.Misc, queued, out var eff))
             {
                 outcome.No(pawn, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job");
                 return outcome.Result(V, EquipRow(outcome, V, label, pawn, thing));
             }
-            outcome.Ok(pawn, JobLine(pawn));
+            outcome.Ok(pawn, Merge(JobLine(pawn), eff));
             long seq = EquipRow(outcome, V, label, pawn, thing);
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
@@ -1481,12 +1492,12 @@ namespace AutoRimmer
                 return outcome.Result(V, WearRow(outcome, V, pawn, apparel),
                     new Dictionary<string, object> { ["thing"] = apparel.thingIDNumber });
             }
-            if (!pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
+            if (!TakeOrder(pawn, job, JobTag.Misc, queued, out var eff))
             {
                 outcome.No(pawn, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job");
                 return outcome.Result(V, WearRow(outcome, V, pawn, apparel));
             }
-            outcome.Ok(pawn, JobLine(pawn));
+            outcome.Ok(pawn, Merge(JobLine(pawn), eff));
             long seq = WearRow(outcome, V, pawn, apparel);
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
@@ -1526,12 +1537,13 @@ namespace AutoRimmer
                 // 4087644 — PawnActs.AlreadyDoing.
                 if (AlreadyDoing(p, job))
                 { outcome.No(p, GateAlready, AlreadyWhy(queued), AlreadyLine(p, queued)); continue; }
-                if (!p.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
+                if (!TakeOrder(p, job, JobTag.Misc, queued, out var eff))
                 { outcome.No(p, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job"); continue; }
                 ids.Add(p.thingIDNumber);
                 var line = JobLine(p);
                 line["dropped"] = primary.thingIDNumber;
                 line["dropped_def"] = primary.def?.defName;
+                Merge(line, eff);
                 outcome.Ok(p, line);
             }
 
@@ -1606,12 +1618,12 @@ namespace AutoRimmer
                 return outcome.Result(V, ConsumeRow(outcome, V, pawn, thing, count),
                     new Dictionary<string, object> { ["thing"] = thing.thingIDNumber });
             }
-            if (!pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
+            if (!TakeOrder(pawn, job, JobTag.Misc, queued, out var eff))
             {
                 outcome.No(pawn, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job");
                 return outcome.Result(V, ConsumeRow(outcome, V, pawn, thing, count));
             }
-            outcome.Ok(pawn, JobLine(pawn));
+            outcome.Ok(pawn, Merge(JobLine(pawn), eff));
             long seq = ConsumeRow(outcome, V, pawn, thing, count);
             return outcome.Result(V, seq, new Dictionary<string, object>
             {

@@ -548,29 +548,99 @@ def phase3():
     e = state_of(S["A"])
     shape("3.1", "pawn", e, "data.state.job_queue")
 
-    # PUT A KNOWN JOB IN curJob FIRST. Phase 2 ended with an advance, so A is
-    # back on its own think tree; without this, the "colliding" order below
-    # would find nothing to collide with and would simply enqueue - which is a
-    # green run that proved the opposite of what it claims.
-    send("wear", {"pawn": S["A"], "thing": S["ap"]})
+    # ---- STAGE A RUNNING, NON-IDLE JOB. This is the part that was wrong, and
+    # it is worth spelling out because the failure looked like a mod defect.
+    #
+    # git-bug ac407f1 (c): this phase used to stage with `wear S["ap"]`. By the
+    # time phase 3 runs, phase 2 has ended with `advance 2500` - long enough for
+    # A to FINISH wearing that item - and a worn apparel is UNSPAWNED, so it is
+    # not in map.listerThings and PawnActs.ThingArg refuses it as "no visible
+    # thing". The stage therefore did nothing, silently, and left A idle.
+    #
+    # An idle pawn is exactly the case where `queue:true` does not queue.
+    # Verse.AI/Pawn_JobTracker.cs TryTakeOrderedJob:
+    #
+    #     bool flag2 = mindState.IsIdle || CurJob == null || CurJob.def.isIdle;
+    #     isDownEvent = KeyBindingDefOf.QueueOrder.IsDownEvent || requestQueueing;
+    #     if (num2 && (!isDownEvent || flag2)) { ClearQueuedJobs();
+    #         EnqueueFirst(job); curDriver.EndJobWith(InterruptForced); }
+    #
+    # With requestQueueing the `!isDownEvent` half is false, so that branch is
+    # reached only via flag2 - and it EnqueueFirsts and ends the current job in
+    # the same call, so ThinkNode_QueuedJob dequeues the order immediately and it
+    # RUNS. `job_queue.total` then reads 0 because the order STARTED, not because
+    # it was lost. That is vanilla shift-click behaviour, not a dropped flag.
+    #
+    # So the stage is a DRAFTED GOTO instead: JobDefOf.Goto is not isIdle and is
+    # player-interruptible, so the queued order below takes TryTakeOrderedJob's
+    # EnqueueLast branch. It also costs no fixture - a reachable cell, probed
+    # rather than assumed, the same idiom phase 6C uses.
+    here = dig(e, "data.state.at")
+    if ARGS.dry_run:
+        here = [100, 100]
+    dest = None
+    if isinstance(here, list) and len(here) == 2 and all(
+            isinstance(v, (int, float)) for v in here):
+        send("draft", {"pawns": [S["A"]]})
+        for d in (12, 8, 5, 3):
+            cand = [int(here[0]) + d, int(here[1])]
+            if dig(send("reachable", {"pawn": S["A"], "from": here, "to": cand}),
+                   "data.reachable"):
+                dest = cand
+                break
+        if ARGS.dry_run:
+            dest = [int(here[0]) + 12, int(here[1])]
+
+    staged = False
+    if dest is not None:
+        e = send("move-to", {"pawns": [S["A"]], "to": dest})
+        staged = dig(e, "data.counts.accepted") == 1 or ARGS.dry_run
+    if not staged:
+        note("3.2", "could not stage a running Goto for A (no reachable "
+                    "destination, or the move-to was refused); the queue-growth "
+                    "and collision checks were not driven. FIXTURE gap, not a "
+                    "spec failure.")
+        send("undraft", {"pawns": [S["A"]]})
+        return
+
     e = state_of(S["A"])
     before = dig(e, "data.state.job_queue.total", 0)
+    running = dig(e, "data.state.job_def")
+    check("3.2z", "the stage put a real, non-idle job in curJob - without one "
+                  "TryTakeOrderedJob's idle branch runs the order instead of "
+                  "queueing it and the rest of this phase proves nothing",
+          running == "Goto" or ARGS.dry_run, "job_def Goto", running)
 
-    # Queue a DIFFERENT target, so JobIsSameAs does not match and the order is
-    # genuinely enqueued behind the running one. NOT `equip` - that verb refuses
-    # apparel outright (EquipmentUtility.CanEquip), so an equip of our fixture
-    # would be rejected `cannot-equip` and the queue would never move, which
-    # reads as the queue being broken rather than the call being wrong.
-    queued_ok = False
+    # Queue something the pawn is NOT already doing. `wear` of the second
+    # apparel item where phase 0 could stage one - a different verb from the
+    # stage, so this is not just move-to twice - and a second move-to otherwise,
+    # so the check is EXERCISED rather than skipped on a bare bench.
     if S.get("ap2") or ARGS.dry_run:
         e = send("wear", {"pawn": S["A"], "thing": S["ap2"], "queue": True})
-        queued_ok = dig(e, "data.counts.accepted") == 1 or ARGS.dry_run
-        if not queued_ok:
-            note("3.2", "the queued wear was refused (%s); queue growth "
-                        "unexercised" % show(dig(e, "data.rejected")))
+        qverb = "wear"
     else:
-        note("3.2", "no second apparel item, so a non-colliding queued order "
-                    "could not be staged")
+        note("3.2", "no second apparel item, so the queued order is a second "
+                    "move-to rather than a wear")
+        e = send("move-to", {"pawns": [S["A"]],
+                             "to": [int(here[0]) - 6, int(here[1])],
+                             "queue": True})
+        qverb = "move-to"
+    queued_ok = dig(e, "data.counts.accepted") == 1 or ARGS.dry_run
+    if not queued_ok:
+        note("3.2", "the queued %s was refused (%s); queue growth unexercised"
+                    % (qverb, show(dig(e, "data.rejected"))))
+    else:
+        # ac407f1 (c). The verb now publishes WHAT THE ORDER DID, not the flag
+        # it was handed: PawnActs.OrderEffect reads curJob and jobQueue after
+        # the take. "queued" here is the measured EnqueueLast; "started" would
+        # mean the stage above had left the pawn idle after all, and the
+        # envelope says so in its own words rather than leaving 3.2a to fail
+        # with no explanation attached.
+        shape("3.2d", qverb, e, "data.accepted.0.order_effect")
+        eq("3.2e", "the order was measured as QUEUED, not started - the flag is "
+                   "the request, order_effect is the result",
+           e, "data.accepted.0.order_effect", "queued")
+
     e = state_of(S["A"])
     if queued_ok:
         ge("3.2a", "the queued order appears in the queue", e,
@@ -586,31 +656,31 @@ def phase3():
                   "present and null", rows[0].get("job_start_tick"))
             check("3.2c", "and the queued row names its own job_def, not the "
                           "running one",
-                  rows[0].get("job_def") is not None, "a job_def",
+                  rows[0].get("job_def") is not None
+                  and (rows[0].get("job_def") != running or ARGS.dry_run),
+                  "a job_def other than %s" % show(running),
                   rows[0].get("job_def"))
         else:
-            note("3.2", "queue total moved but no rows came back")
+            note("3.2", "no rows came back from job_queue.list")
 
     # THE POINT OF THE PHASE. A queued order that collides enqueues NOTHING, so
     # the queue cannot be read as proof the order landed - only the gate can.
+    # Driven off the STAGED Goto rather than off whatever A happened to be
+    # doing, so the collision is produced every run instead of most runs -
+    # ac407f1's acceptance asks for this gate to be exercised, not skipped.
+    # TryTakeOrderedJob compares against curJob only, never against the queue.
     e = state_of(S["A"])
     depth = dig(e, "data.state.job_queue.total", 0)
-    cur = dig(e, "data.state.job_def") or (ARGS.dry_run and "<jobdef>")
-    if cur:
-        # The SAME target as the running job, with queue:true. TryTakeOrderedJob
-        # compares against curJob only - never against the queue - so this is
-        # specifically a current-job collision swallowing a queue request.
-        e = send("wear", {"pawn": S["A"], "thing": S["ap"], "queue": True})
-        gated = dig(e, "data.rejected.0.gate") == "already-doing-it" or ARGS.dry_run
-        e2 = state_of(S["A"])
-        if gated:
-            eq("3.3", "a COLLIDING queued order enqueued nothing - the queue is "
-                      "unchanged, which is why an empty queue is not evidence "
-                      "the order was refused",
-               e2, "data.state.job_queue.total", depth)
-        else:
-            note("3.3", "no collision produced on the queued path this run "
-                        "(current job %s); the gate was not exercised" % cur)
+    e = send("move-to", {"pawns": [S["A"]], "to": dest, "queue": True})
+    eq("3.3a", "a colliding queued order takes 4087644's gate", e,
+       "data.rejected.0.gate", "already-doing-it")
+    e2 = state_of(S["A"])
+    eq("3.3", "a COLLIDING queued order enqueued nothing - the queue is "
+              "unchanged, which is why an empty queue is not evidence "
+              "the order was refused",
+       e2, "data.state.job_queue.total", depth)
+
+    send("undraft", {"pawns": [S["A"]]})
 
 
 # ------------------------------------------------------------------- phase 4 --

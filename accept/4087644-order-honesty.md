@@ -14,10 +14,12 @@ BY HAND from the tables below** — that is how the first acceptance run went.
     ./accept/4087644-order-honesty.py             # against a live bench
 
 **Fixture:** the agent bench (`_RimWorld-Agent/run-agent.sh`) and a colony with
-two or more colonists. Two loose apparel items are wanted and one is required;
-with none, phase 0 stages two with `dev:spawn-thing {def:"Apparel_Parka",
-count:2}` and says so in its output. With only one, phase 3's queue-growth check
-is skipped by note and its collision check still runs. Paused is fine; the
+two or more colonists. Two loose apparel items are wanted and one is
+required; with none, phase 0 stages two with `dev:spawn-thing
+{def:"Apparel_Parka", count:2}` and says so in its output. With only one,
+phase 3's queued order falls back to a second `move-to` so the check is still
+exercised rather than skipped, and phase 3's collision check is fixture-free
+either way. Paused is fine; the
 driver advances where it needs to.
 
 **Exit codes:** 0 all passed · 1 at least one FAIL · 2 a fixture precondition
@@ -234,10 +236,59 @@ this field.
 | # | call | expect |
 |---|---|---|
 | 3.1 | `pawn {id:A, sections:["state"]}` | a `job_queue` block exists |
-| 3.2a | `wear {pawn:A, thing:AP2, queue:true}` then state | `job_queue.total` grew by one |
+| 3.2z | `draft` + `move-to {to:P1}` then state | `job_def == "Goto"` — the stage really staged |
+| 3.2d | `wear {pawn:A, thing:AP2, queue:true}` | the accepted line carries `order_effect` |
+| 3.2e | ″ | `order_effect == "queued"` — measured, not the flag echoed back |
+| 3.2a | ″ then state | `job_queue.total` grew by one |
 | 3.2b | ″ | the queued row has `job_start_tick` **present and null** |
 | 3.2c | ″ | the queued row names its own `job_def`, not the running one |
-| 3.3 | `wear {pawn:A, thing:AP, queue:true}` colliding, then state | `job_queue.total` **unchanged** |
+| 3.3a | `move-to {to:P1, queue:true}` colliding | `gate == "already-doing-it"` |
+| 3.3 | ″ then state | `job_queue.total` **unchanged** |
+
+### The stage was wrong, and it looked like a mod defect — git-bug ac407f1 (c)
+
+This phase used to stage its running job with `wear {thing:AP}`. By the time
+phase 3 runs, phase 2 has ended with `advance {ticks:2500}` — long enough for A
+to **finish** wearing that item — and a worn apparel is unspawned, so it is not
+in `map.listerThings` and `PawnActs.ThingArg` refuses it as "no visible thing".
+The stage did nothing, silently, and left A **idle**.
+
+An idle pawn is exactly the case where `queue:true` does not queue.
+`Verse.AI/Pawn_JobTracker.cs` `TryTakeOrderedJob`:
+
+    bool flag2 = mindState.IsIdle || CurJob == null || CurJob.def.isIdle;
+    isDownEvent = KeyBindingDefOf.QueueOrder.IsDownEvent || requestQueueing;
+    if (num2 && (!isDownEvent || flag2)) { ClearQueuedJobs();
+        EnqueueFirst(job); curDriver.EndJobWith(InterruptForced); }
+
+With `requestQueueing` the `!isDownEvent` half is false, so that branch is
+reached **only** via `flag2` — and it `EnqueueFirst`s and ends the current job
+in the same call, so `ThinkNode_QueuedJob` dequeues the order immediately and it
+*runs*. `job_queue.total` then reads 0 because the order **started**, not
+because it was lost. That is vanilla shift-click behaviour, not a dropped flag,
+and it is the most likely reading of the measured "3.2a — a queued order does
+not appear in the queue".
+
+Two further consequences of the same three branches, both previously invisible
+and both now published on the accepted line (`PawnActs.OrderEffect`):
+
+* **Branches A and C call `ClearQueuedJobs()` first**, so an *unqueued* order
+  silently destroys every order already stacked up — reported as
+  `queue_dropped`.
+* **An order the caller did not ask to queue can still be queued.** Branch C is
+  reached when the current job is not `IsCurrentJobPlayerInterruptible` (or is
+  `forceCompleteBeforeNextJob`): the job goes to the queue and **the pawn keeps
+  doing what it was doing**, while the verb answers `accepted:1`. That is a
+  false "it is doing it now", and `order_effect:"queued"` against
+  `queue:false` is what exposes it.
+
+So the stage is a **drafted Goto**: `JobDefOf.Goto` is not `isIdle` and is
+player-interruptible, so the queued order takes the `EnqueueLast` branch. It
+costs no fixture — a reachable cell, probed rather than assumed, the same idiom
+phase 6C uses — and 3.2z asserts the stage actually staged, so a fixture gap
+can no longer masquerade as a publication bug. The collision (3.3) is driven off
+that same staged Goto rather than off whatever A happened to be doing, which is
+what makes the gate exercised every run instead of most runs.
 
 **3.3 is the sharpest check in the suite.** `requestQueueing` is not read until
 `isDownEvent = isDownEvent || requestQueueing`, eight lines past the early
