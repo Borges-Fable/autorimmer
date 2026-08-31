@@ -282,6 +282,56 @@ so and points at the Xvfb fallback: a bench started with `run-agent.sh --xvfb
 workspace (FINDINGS §8). Off Hyprland entirely — the Windows bench, a TTY — the
 fps half still works and the command says the reveal was skipped.
 
+## `rwa render` — the PNG channel
+
+Spec 2.5. `map-dump` publishes per-cell planes; `render` draws them. The mod
+does no image work at all, so a render is a pure function of (dump, catalog,
+options) and **the same dump always produces the same bytes** — which is the
+acceptance, and is checked in `selftest.sh` §12 rather than asserted here.
+
+```bash
+rwa catalog-dump                                       # once per bench session
+rwa render --rect 100,110,40,30 --out base.png --scale 16
+rwa render --around base-center --radius 25 --out base.png --landmarks
+rwa render --whole-map --out map.png --scale 3
+rwa render --dump saved.json --out base.png            # offline, no bench at all
+```
+
+Two things worth knowing before you use it:
+
+- **The catalog is what makes it mod-aware.** Colours, footprints and the 2-char
+  glyph token all resolve out of `<root>/catalog.json`, written by the
+  `catalog-dump` verb. Without it the render still answers every geometry
+  question — rooms, doors, walls, where the stove is — but in fallback greys,
+  and both the legend and the command's own output say so. It is not silent
+  about it, because a grey base that looks authoritative is worse than a warning.
+- **The offline path is not a convenience.** `--dump FILE` renders a saved dump
+  with no bench running and no protocol root at all; `--save-dump FILE` on a
+  live render writes the file to replay. That is what makes the determinism
+  claim checkable, and what lets a post-mortem redraw its evidence months later.
+
+**This is a different alphabet from `map-view`, deliberately.** `map-view` says
+`#` for a wall in a fixed-width ASCII grid where glyph collisions are fatal;
+the PNG says a coloured block labelled `WA`, where colour disambiguates and two
+characters are affordable. Both channels report the identity of the symbol
+system they used (`channel.alphabet`), and **a glyph from one must never be
+compared against a glyph from the other**. Independence is the point: 2.5 exists
+to be a second opinion on 2.3's ASCII, and a second opinion computed from the
+same collapsed cell would not be one.
+
+Fog is respected, exactly as it is on every other player-facing verb: an
+unexplored cell is empty in every plane and hatched in the image. The agent does
+not get to see the shape of ground the colony has never visited just because it
+asked for a picture instead of text.
+
+`--layers a,b,c` restricts what is dumped and drawn (`terrain`, `things`,
+`zones`, `rooms`, `roof`, `pawns`). `--scale` is pixels per cell — 12 is the
+default and roughly the floor for glyph labels; below that the labels are
+dropped rather than drawn illegibly. `--max-side` guards the output dimensions
+at 8000px, and it is worth respecting: a very large PNG is also the wrong thing
+to hand an agent, because it gets downsampled and the glyphs stop being readable
+before the guard ever trips.
+
 ## Environment
 
 | var | what | default |
