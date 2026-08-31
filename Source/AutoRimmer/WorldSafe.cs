@@ -74,6 +74,20 @@ namespace AutoRimmer
     //       write. This is the observer form of DESIGN's "the gate lives in
     //       the widget, so re-implement it and cite it".
     //
+    //  * RecipeDef.AvailableNow — Verse/RecipeDef.cs. Its first clause is
+    //    `researchPrerequisite.IsFinished`, so it is the SAME trap one level
+    //    up: asking "can this bench make this?" over a bench's AllRecipes adds
+    //    a zero entry per research-gated recipe to the save. Reached from
+    //    ITab_Bills.FillTab's options maker and from HealthCardUtility's
+    //    recipeOptionsMaker — i.e. from every obvious way to answer "what can
+    //    I build a bill for".
+    //    => RecipeAvailableNow(): AvailableNow clause for clause with
+    //       Finished() in place of IsFinished. Moved here from
+    //       MedicalBillVerbs (spec 3.6) so there is ONE catalogue: 3.4 wrote
+    //       it privately six minutes after 3.6's issue body was last edited,
+    //       and two identical re-derivations of a vanilla getter is exactly
+    //       the fork this file exists to prevent.
+    //
     //  * Bill_Production.ShouldDoNow — RimWorld/Bill_Production.cs. Writes
     //    `paused` on three separate paths (unconditionally to false when the
     //    repeat mode is not TargetCount; to true when pauseWhenSatisfied and
@@ -287,6 +301,82 @@ namespace AutoRimmer
             try { if (!proj.InspectionRequirementsMet) { blockedBy = "grav-engine"; return false; } }
             catch { }
             return true;
+        }
+
+        // ------------------------ recipes, guarded --------------------------
+        // Verse/RecipeDef.cs AvailableNow, clause for clause, with
+        // WorldSafe.Finished in place of ResearchProjectDef.IsFinished. The
+        // ideology/faction clauses do not write and are evaluated as vanilla
+        // does; the role-apparel `Check()` unlock is reproduced because without
+        // it an ideo-unlocked recipe would read as unavailable.
+        //
+        // Moved here from MedicalBillVerbs.PawnActs by spec 3.6 (git-bug
+        // 48f666c comment #2, correction 3): 3.4 had already written this
+        // privately, so the recipe-level re-derivation existed in one file
+        // while the research-level one lived here. One catalogue.
+        public static bool RecipeAvailableNow(RecipeDef recipe)
+        {
+            if (recipe == null) return false;
+            try
+            {
+                if (recipe.researchPrerequisite != null && !Finished(recipe.researchPrerequisite)) return false;
+                if (recipe.researchPrerequisites != null)
+                    for (int i = 0; i < recipe.researchPrerequisites.Count; i++)
+                        if (!Finished(recipe.researchPrerequisites[i])) return false;
+
+                if (recipe.memePrerequisitesAny != null)
+                {
+                    bool any = false;
+                    foreach (var meme in recipe.memePrerequisitesAny)
+                        if (Faction.OfPlayer.ideos.HasAnyIdeoWithMeme(meme)) { any = true; break; }
+                    if (!any) return false;
+                }
+
+                if (recipe.factionPrerequisiteTags != null)
+                {
+                    bool anyMissing = false;
+                    foreach (var tag in recipe.factionPrerequisiteTags)
+                    {
+                        var tags = Faction.OfPlayer.def.recipePrerequisiteTags;
+                        if (tags == null || !tags.Contains(tag)) { anyMissing = true; break; }
+                    }
+                    if (anyMissing && !UnlockedByRoleApparel(recipe)) return false;
+                }
+
+                if (recipe.fromIdeoBuildingPreceptOnly
+                    && (!ModsConfig.IdeologyActive || !IdeoUtility.PlayerHasPreceptForBuilding(recipe.ProducedThingDef)))
+                    return false;
+            }
+            catch { return false; }
+            return true;
+        }
+
+        // Verse/RecipeDef.cs AvailableNow's local Check(): a faction-tag-gated
+        // recipe is still available when one of the player's ideo roles
+        // REQUIRES a piece of apparel this recipe produces.
+        private static bool UnlockedByRoleApparel(RecipeDef recipe)
+        {
+            try
+            {
+                if (!ModsConfig.IdeologyActive) return false;
+                foreach (var ideo in Faction.OfPlayer.ideos.AllIdeos)
+                {
+                    foreach (var role in ideo.RolesListForReading)
+                    {
+                        if (role.apparelRequirements == null) continue;
+                        foreach (var req in role.apparelRequirements)
+                        {
+                            ThingDef want = null;
+                            foreach (var d in req.requirement.AllRequiredApparel()) { want = d; break; }
+                            if (want == null) continue;
+                            foreach (var product in recipe.products)
+                                if (product.thingDef == want) return true;
+                        }
+                    }
+                }
+            }
+            catch { }
+            return false;
         }
 
         // ------------------------- bills, guarded ---------------------------

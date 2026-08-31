@@ -13,14 +13,14 @@ namespace AutoRimmer
     // with `kind:"pawn"`. This file is the write half, in the same vocabulary.
     //
     // THE GATE LIVES IN THE WIDGET, AND HERE IT IS THE WHOLE VERB.
-    // `Verse/BillStack.cs AddBill` is four lines and checks NOTHING —
+    // `RimWorld/BillStack.cs AddBill` is four lines and checks NOTHING —
     //     bill.billStack = this; bills.Add(bill);
     // — not the 15-bill cap, not the recipe's research prerequisite, not
     // whether the recipe applies to this pawn at all. DESIGN §Action model
     // names it as one of the three worked examples of the invariant. Every
     // check below therefore comes from RimWorld/HealthCardUtility.cs
     // DrawMedOperationsTab's `recipeOptionsMaker` and from
-    // Verse/BillStack.cs DoListing, cited inline:
+    // RimWorld/BillStack.cs DoListing, cited inline:
     //
     //   DoListing               `if (Count < 15)` — the Add Bill button is not
     //                           drawn at all on a full stack (BillStack.MaxCount)
@@ -45,9 +45,11 @@ namespace AutoRimmer
     // scribed dictionary on a miss. Asking "what surgeries are available?" would
     // otherwise add an entry per research-gated recipe to the save, permanently
     // — the identical trap 2.4 found and routed around for the `bills` and
-    // `research` observers. WorldSafe.Finished is the shipped guarded route and
-    // is reused here; the ideology and faction-tag clauses of AvailableNow do
-    // not write and are evaluated normally.
+    // `research` observers. The re-derivation now lives in
+    // `WorldSafe.RecipeAvailableNow` (moved there by spec 3.6, git-bug 48f666c
+    // comment #2): it was written here first, six minutes after 3.6's issue
+    // body was last edited, and two clause-for-clause copies of one vanilla
+    // getter is exactly the forked catalogue WorldSafe exists to prevent.
     internal static partial class PawnActs
     {
         // --------------------------------------------------------------------
@@ -118,7 +120,7 @@ namespace AutoRimmer
             var recipe = Dev.Named<RecipeDef>(ctx.Args.StrReq("recipe"), "recipe");
             string partArg = ctx.Args.Str("part");
 
-            // Verse/BillStack.cs DoListing: the Add Bill button is not drawn at
+            // RimWorld/BillStack.cs DoListing: the Add Bill button is not drawn at
             // all once the stack is full. AddBill itself does not check.
             int count = pawn.BillStack?.Count ?? 0;
             if (count >= BillStack.MaxCount)
@@ -290,7 +292,7 @@ namespace AutoRimmer
         // --------------------------------------------------------------------
         // surgery-remove {pawn, index?|uid?|recipe?, all?}
         //
-        // WIDGET GATE — Verse/BillStack.cs Delete(bill), which is what the X
+        // WIDGET GATE — RimWorld/BillStack.cs Delete(bill), which is what the X
         // button on a bill row calls; it flags the bill deleted and notifies the
         // giver. Removing from the list directly would leave a live Bill object
         // pointing at a stack it is no longer in.
@@ -385,8 +387,10 @@ namespace AutoRimmer
                 {
                     // RE-DERIVED, never RecipeDef.AvailableNow: that reads
                     // ResearchProjectDef.IsFinished, which INSERTS into a
-                    // scribed dictionary (WorldSafe Class A).
-                    if (!RecipeAvailableNow(recipe)) continue;
+                    // scribed dictionary (WorldSafe Class A). The re-derivation
+                    // lives in WorldSafe (moved there by spec 3.6) so the
+                    // bill-add path and the surgery path share one catalogue.
+                    if (!WorldSafe.RecipeAvailableNow(recipe)) continue;
 
                     AcceptanceReport report;
                     try { report = recipe.Worker.AvailableReport(pawn); }
@@ -435,75 +439,6 @@ namespace AutoRimmer
                     Journal.EmitWarning("surgery-options: recipe " + recipe.defName + " threw: " + e.Message);
                 }
             }
-        }
-
-        // Verse/RecipeDef.cs AvailableNow, clause for clause, with
-        // WorldSafe.Finished in place of ResearchProjectDef.IsFinished. The
-        // ideology/faction clauses do not write and are evaluated as vanilla
-        // does; the role-apparel `Check()` unlock is reproduced because without
-        // it an ideo-unlocked recipe would read as unavailable.
-        private static bool RecipeAvailableNow(RecipeDef recipe)
-        {
-            try
-            {
-                if (recipe.researchPrerequisite != null && !WorldSafe.Finished(recipe.researchPrerequisite)) return false;
-                if (recipe.researchPrerequisites != null)
-                    for (int i = 0; i < recipe.researchPrerequisites.Count; i++)
-                        if (!WorldSafe.Finished(recipe.researchPrerequisites[i])) return false;
-
-                if (recipe.memePrerequisitesAny != null)
-                {
-                    bool any = false;
-                    foreach (var meme in recipe.memePrerequisitesAny)
-                        if (Faction.OfPlayer.ideos.HasAnyIdeoWithMeme(meme)) { any = true; break; }
-                    if (!any) return false;
-                }
-
-                if (recipe.factionPrerequisiteTags != null)
-                {
-                    bool anyMissing = false;
-                    foreach (var tag in recipe.factionPrerequisiteTags)
-                    {
-                        var tags = Faction.OfPlayer.def.recipePrerequisiteTags;
-                        if (tags == null || !tags.Contains(tag)) { anyMissing = true; break; }
-                    }
-                    if (anyMissing && !UnlockedByRoleApparel(recipe)) return false;
-                }
-
-                if (recipe.fromIdeoBuildingPreceptOnly
-                    && (!ModsConfig.IdeologyActive || !IdeoUtility.PlayerHasPreceptForBuilding(recipe.ProducedThingDef)))
-                    return false;
-            }
-            catch { return false; }
-            return true;
-        }
-
-        // Verse/RecipeDef.cs AvailableNow's local Check(): a faction-tag-gated
-        // recipe is still available when one of the player's ideo roles
-        // REQUIRES a piece of apparel this recipe produces.
-        private static bool UnlockedByRoleApparel(RecipeDef recipe)
-        {
-            try
-            {
-                if (!ModsConfig.IdeologyActive) return false;
-                foreach (var ideo in Faction.OfPlayer.ideos.AllIdeos)
-                {
-                    foreach (var role in ideo.RolesListForReading)
-                    {
-                        if (role.apparelRequirements == null) continue;
-                        foreach (var req in role.apparelRequirements)
-                        {
-                            ThingDef want = null;
-                            foreach (var d in req.requirement.AllRequiredApparel()) { want = d; break; }
-                            if (want == null) continue;
-                            foreach (var product in recipe.products)
-                                if (product.thingDef == want) return true;
-                        }
-                    }
-                }
-            }
-            catch { }
-            return false;
         }
 
         private static Dictionary<string, object> SurgeryRow(Pawn pawn, RecipeDef recipe, BodyPartRecord part,
