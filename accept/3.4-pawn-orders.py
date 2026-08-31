@@ -327,10 +327,31 @@ def phase0():
 
 
 def phase0_journal():
-    e = send("journal", {"limit": 1})
+    # since_seq past the end, NOT limit:1 — see the .ps1 for why (last_seq is
+    # updated before the since_seq skip; the limit break precedes the append).
+    e = send("journal", {"since_seq": 999999999, "limit": 1})
     S["seq0"] = int(dig(e, "data.last_seq", 0) or 0)
     eq("0.4", "journal readable (watermark recorded)", e, "ok", True)
     print("          journal watermark seq0 = %s" % S["seq0"])
+
+    # 0.5  MANUAL WORK PRIORITIES — the fixture precondition 4.7 and 5.1 need,
+    #      and the one this driver could not satisfy until git-bug e8f2c32.
+    #      PlaySettings.useWorkPriorities scribes defaultValue:false, so on any
+    #      colony the agent staged itself the Work tab is a checkbox column,
+    #      work-priorities correctly refuses priorities 1/2/4, and eight checks
+    #      (4.7a-e, 5.1a-c) were unreachable. The checkbox now belongs to
+    #      work-priorities itself, because MainTabWindow_Work draws it in the
+    #      same window as the matrix. Staged, not asserted: the verb's own
+    #      acceptance is accept/manual-work-priorities.md.
+    e = send("work-priorities", {"manual": True})
+    precondition(
+        "0.5", "manual work priorities are ON (4.7 and 5.1 use priorities 1 and 2)",
+        dig(e, "data.manual.after") is True,
+        "work-priorities {manual:true} did not take: %s. Without it 4.7 and 5.1 "
+        "are refused by design, not by defect." % show(e))
+    print("          manual priorities: %s -> %s (%s pawn work rows notified)"
+          % (dig(e, "data.manual.before"), dig(e, "data.manual.after"),
+             dig(e, "data.manual.pawns_notified")))
 
 
 # ------------------------------------------------------------------- phase 1 --
@@ -710,8 +731,9 @@ def phase4():
        "data.counts.unit", "matrix cells")
     eq("4.7d", "the doctor priority is now 1", e, "data.changes.0.after", 1)
     ge("4.7e", "an `action` row was written", e, "data.action.journal_seq", 1)
-    print("          use_priorities = %s (with manual priorities OFF, GetPriority "
-          "returns a flat 3)" % dig(e, "data.use_priorities"))
+    print("          use_priorities = %s (0.5 turned this on; with it OFF this "
+          "call is REFUSED, because GetPriority would return a flat 3)"
+          % dig(e, "data.use_priorities"))
 
     # 4.8 the patient into the medical bed. This is 3.4's own rest-until-healed,
     #     which sets job.restUntilHealed - a pawn with only a BILL will not go to

@@ -35,6 +35,7 @@ namespace AutoRimmer
         // --------------------------------------------------------------------
         // work-priorities {set:[{pawns|pawn, works|work, priority}], …}
         //                 {copy_from:<id>, to:[…]}
+        //                 {manual:true|false}          — the Work tab's checkbox
         //
         // WIDGET GATE — RimWorld/PawnColumnWorker_WorkPriority.cs DoCell:
         //   `pawn.Dead || pawn.workSettings == null || !pawn.workSettings.EverWork`
@@ -57,6 +58,70 @@ namespace AutoRimmer
         // play setting OFF, GetPriority returns a flat 3 for every active work
         // type, so the numbers read back are not the numbers stored — and a
         // `copy_from` taken in that state copies threes.
+        //
+        // ---------------- `manual`: THE CHECKBOX ABOVE THE MATRIX ------------
+        // git-bug e8f2c32. The refusal below ("priority 2 is meaningless with
+        // manual priorities off") is correct and stays, but it named a lever no
+        // verb owned: `useWorkPriorities` defaults FALSE on a new colony
+        // (RimWorld/PlaySettings.cs ExposeData — `defaultValue: false`), so a
+        // colony the agent staged itself could never reach priorities 1, 2 or 4
+        // at all.
+        //
+        // The lever is an ARGUMENT ON THIS VERB rather than a verb of its own
+        // because the game puts the control in this window: RimWorld/
+        // MainTabWindow_Work.cs DoManualPrioritiesCheckbox draws it at (5,5) of
+        // the SAME MainTabWindow whose body is the priority matrix. DESIGN's
+        // 2026-08-31 decision — "when two specs claim the same verb, the split
+        // follows where the GAME puts the control" — answers this the same way,
+        // and it keeps the flip and the cells one round trip and one ordering.
+        // See DESIGN's decisions log for the full reasoning and for why
+        // PlaySettings is NOT one verb's territory.
+        //
+        // WIDGET GATE — there is none, and saying so IS the citation. The
+        // checkbox is unconditional inside the window; the only precondition is
+        // the tab itself, RimWorld/MainButtonWorker.cs Disabled =>
+        // `Find.CurrentMap == null && !def.validWithoutMap`, which the Map()
+        // call at the top of this verb already reproduces. (Tutorial mode can
+        // deny OPENING a tab — MainButtonWorker.InterfaceTryActivate's
+        // TutorSystem.AllowAction — but that gates a UI mode we never enter,
+        // not the setting.)
+        //
+        // WIDGET EFFECT — and this half is NOT optional. The checkbox does two
+        // things, and reproducing only the first leaves the flip inert:
+        //
+        //     Widgets.CheckboxLabeled(rect, "ManualPriorities".Translate(),
+        //         ref Current.Game.playSettings.useWorkPriorities);
+        //     if (changed)
+        //         foreach (Pawn p in PawnsFinder.AllMapsWorldAndTemporary_Alive)
+        //             if (p.Faction == Faction.OfPlayer && p.workSettings != null)
+        //                 p.workSettings.Notify_UseWorkPrioritiesChanged();
+        //
+        // RimWorld/Pawn_WorkSettings.cs Notify_UseWorkPrioritiesChanged sets
+        // `workGiversDirty = true`, and WorkGiversInOrderNormal/Emergency —
+        // what JobGiver_Work actually walks — are rebuilt only when that flag
+        // is set. Flip the field alone and every colonist keeps dispatching off
+        // an order computed under the OLD reading until some unrelated
+        // SetPriority happens to dirty it. That is a silent, delayed, wrong
+        // answer, which is the exact failure mode the gate-in-the-widget rule
+        // exists to prevent, seen from the effect side rather than the gate side.
+        //
+        // NOTHING IS DESTROYED BY THE FLIP, and the verb says so rather than
+        // leaving the agent to guess. `useWorkPriorities` is a READ-TIME MASK
+        // and nothing else: Pawn_WorkSettings.GetPriority is
+        //     int num = priorities[w];
+        //     if (pawn.RaceProps.Humanlike && num > 0 && !Find.PlaySettings.useWorkPriorities)
+        //         return 3;
+        //     return num;
+        // — SetPriority writes the raw number either way, ExposeData scribes the
+        // raw DefMap, and Notify_UseWorkPrioritiesChanged touches one bool. So a
+        // stored 1 survives a trip to off and back, and the flip is lossless in
+        // both directions. (Two real consequences that are NOT the flip: a WRITE
+        // while off can only be 0 or 3 — vanilla's own checkbox column,
+        // WidgetsWork.DrawWorkBoxFor's else-branch, writes exactly those — so
+        // writing while off flattens a stored 1/2/4; and `copy_from` while off
+        // copies the masked threes, which this verb already warns about. Note
+        // also that the mask is gated on `RaceProps.Humanlike`: a Biotech mech's
+        // priorities read raw regardless of the setting.)
         // --------------------------------------------------------------------
         [Verb("work-priorities")]
         public static object WorkPriorities(VerbContext ctx)
@@ -68,6 +133,42 @@ namespace AutoRimmer
             var changes = new List<object>();
             bool usePriorities = true;
             try { usePriorities = Find.PlaySettings.useWorkPriorities; } catch { }
+
+            // The checkbox runs FIRST, so `work-priorities {manual:true, set:[…
+            // priority 1 …]}` is one call: the refusal below is judged against
+            // the value this call just installed, not the one it replaced.
+            //
+            // THE COST OF THAT ORDER, stated rather than discovered: everything
+            // after this point can still throw bad-args (an unknown pawn id, a
+            // misspelled work type, a priority out of range), and the flip has
+            // ALREADY landed and been journaled by then. So an `ok:false` from
+            // this verb does NOT imply the colony is unchanged — check
+            // `use_priorities`, or the `manual-priorities` journal step, before
+            // assuming a rejected call was inert. Removing that would mean
+            // resolving every `set` block before the flip and re-checking the
+            // refusal after it; it is not free and it is not this branch's.
+            Dictionary<string, object> manual = null;
+            if (a.Has("manual"))
+            {
+                manual = SetManualPriorities(a.Bool("manual", usePriorities));
+                usePriorities = (bool)manual["after"];
+            }
+
+            // `manual` alone is a whole call — turning the Work tab from a
+            // checkbox column into a priority column is the operation, and the
+            // matrix may well be somebody else's next call.
+            if (manual != null && !a.Has("set") && !a.Has("copy_from"))
+            {
+                return new Dictionary<string, object>
+                {
+                    ["verb"] = V,
+                    ["mode"] = "manual",
+                    ["manual"] = manual,
+                    ["use_priorities"] = usePriorities,
+                    ["action"] = ManualFallbackStamp(manual),
+                    ["note"] = (string)manual["note"],
+                };
+            }
 
             if (a.Has("copy_from"))
             {
@@ -113,7 +214,7 @@ namespace AutoRimmer
                     ? Act(V, "copy-row", PawnSafe.Name(src) + " -> " + outcome.Count + " pawn(s)",
                           new Dictionary<string, object> { ["from"] = src.thingIDNumber })
                     : 0;
-                return outcome.Result(V, copySeq, new Dictionary<string, object>
+                var copyResult = outcome.Result(V, copySeq, new Dictionary<string, object>
                 {
                     ["mode"] = "copy",
                     ["from"] = src.thingIDNumber,
@@ -121,14 +222,22 @@ namespace AutoRimmer
                     ["note"] = usePriorities
                         ? "the whole row was copied in one call (PawnColumnWorker_CopyPasteWorkPriorities)"
                         : "MANUAL PRIORITIES ARE OFF: GetPriority returns a flat 3 for every active work "
-                          + "type, so this copy wrote threes, not the source pawn's stored numbers",
+                          + "type, so this copy wrote threes, not the source pawn's stored numbers. "
+                          + "Pass manual:true in the same call to copy the stored numbers instead",
                 });
+                if (manual != null) copyResult["manual"] = manual;
+                // A copy that accepted nobody still mutated if the `manual`
+                // flip in the same call took. See ManualFallbackStamp.
+                if (outcome.Count == 0) copyResult["action"] = ManualFallbackStamp(manual);
+                return copyResult;
             }
 
             if (!a.Has("set"))
                 throw new VerbArgsException(
                     "pass 'set' (an array of {pawns|pawn, works|work, priority} blocks — the matrix form) "
-                    + "or 'copy_from' with 'to' (the copy-a-whole-row form)");
+                    + "or 'copy_from' with 'to' (the copy-a-whole-row form) "
+                    + "or 'manual' (a bool — the Work tab's manual-priorities checkbox, which must be "
+                    + "on before priorities 1, 2 and 4 mean anything)");
             if (!(a.Raw("set") is List<object> blocks))
                 throw new VerbArgsException("'set' must be an array of {pawns|pawn, works|work, priority} objects");
 
@@ -146,7 +255,9 @@ namespace AutoRimmer
                     throw new VerbArgsException(
                         $"priority {priority} is meaningless with manual priorities off: the Work tab is a "
                         + "checkbox then and GetPriority returns a flat 3. Use 0 or 3, or turn manual "
-                        + "priorities on in the play settings.");
+                        + "priorities on in the play settings — this verb owns that checkbox, so "
+                        + "`work-priorities {manual:true}`, or add manual:true to THIS call and the "
+                        + "priorities below are judged against the new value.");
 
                 var pawns = PawnList(map, bargs);
                 var works = WorkTypeList(bargs);
@@ -212,7 +323,132 @@ namespace AutoRimmer
                 ["unit"] = "matrix cells",
             };
             result["accepted"] = changes;
+            if (manual != null) result["manual"] = manual;
+            // THE PROVENANCE STAMP HAS TO COUNT THE SAME UNIT `counts` DOES.
+            // Outcome.Result stamps `action` off Accepted.Count, and this path
+            // never calls Outcome.Ok — it fills `changes` instead, because its
+            // unit is matrix CELLS, not pawns. So Accepted.Count was always 0
+            // and every successful matrix write returned
+            // `action:{journal_seq:null, provenance:"…nothing was mutated"}`
+            // over a call that had just written journal line `seq`. That is a
+            // false negative on the one field the journal join key lives in,
+            // and 3.4's own acceptance asserts against it (4.7e,
+            // `action.journal_seq >= 1`) — a check that never ran until this
+            // branch's step 0.5 made priority 1 reachable at all.
+            result["action"] = changes.Count > 0 ? Stamp(seq) : ManualFallbackStamp(manual);
             return result;
+        }
+
+        // `action` for a call whose matrix/copy half wrote nothing but whose
+        // `manual` flip DID land: the flip is a mutation and it has a journal
+        // line, so "not applicable — nothing was mutated" would be untrue.
+        // Falls through to NoStamp() when there was no flip, or none that
+        // changed anything, which is what Outcome.Result would have said.
+        private static Dictionary<string, object> ManualFallbackStamp(Dictionary<string, object> manual)
+        {
+            if (manual != null && manual["changed"] is bool changed && changed)
+                return Stamp(manual["journal_seq"] is long s ? s : 0L);
+            return NoStamp();
+        }
+
+        // ------------------- the Work tab's manual-priorities checkbox -------
+        // RimWorld/MainTabWindow_Work.cs DoManualPrioritiesCheckbox, both
+        // halves. See this verb's header for why the second half is mandatory
+        // and why the flip destroys nothing.
+        //
+        // The `after` value is RE-READ from the field rather than echoed from
+        // the request: durable state is reported from a read, so a write that
+        // silently did not take reads back as `changed:false` instead of as a
+        // success.
+        private static Dictionary<string, object> SetManualPriorities(bool want)
+        {
+            PlaySettings ps;
+            try { ps = Find.PlaySettings; } catch { ps = null; }
+            if (ps == null)
+                throw new VerbArgsException(
+                    "no PlaySettings — Current.Game is not loaded, so there is no Work tab to check");
+
+            bool before = ps.useWorkPriorities;
+            ps.useWorkPriorities = want;
+            bool after = ps.useWorkPriorities;      // read back, never assumed
+            bool changed = after != before;
+
+            int notified = changed ? NotifyUseWorkPrioritiesChanged() : 0;
+            long seq = changed
+                ? Act("work-priorities", "manual-priorities",
+                      (before ? "on" : "off") + " -> " + (after ? "on" : "off"),
+                      new Dictionary<string, object>
+                      {
+                          ["before"] = before,
+                          ["after"] = after,
+                          ["pawns_notified"] = notified,
+                      })
+                : 0;
+
+            return new Dictionary<string, object>
+            {
+                ["requested"] = want,
+                ["before"] = before,
+                ["after"] = after,
+                ["changed"] = changed,
+                // How many work rows had their cached WorkGiver order rebuilt.
+                // 0 with changed:true would mean the flip is inert this tick.
+                ["pawns_notified"] = notified,
+                ["journal_seq"] = seq,
+                ["note"] = changed
+                    ? (after
+                        ? "manual priorities ON: the Work tab is a 1..4 priority column, GetPriority "
+                          + "returns the stored number, and priorities 1, 2 and 4 are now writable. "
+                          + "Stored priorities were NOT altered — the setting is a read-time mask in "
+                          + "Pawn_WorkSettings.GetPriority, so any 1/2/4 saved before it was last "
+                          + "turned off has just reappeared"
+                        : "manual priorities OFF: the Work tab is a checkbox column, GetPriority "
+                          + "returns a flat 3 for every active humanlike work type, and this verb will "
+                          + "refuse priorities 1, 2 and 4 until it is turned back on. Stored numbers "
+                          + "are NOT erased and will reappear — but a write made while off can only be "
+                          + "0 or 3, and such a write DOES overwrite a stored 1/2/4")
+                    : "already " + (after ? "on" : "off") + "; nothing was written and no pawn was notified",
+            };
+        }
+
+        // The checkbox's own fan-out, verbatim in shape:
+        //   foreach (Pawn p in PawnsFinder.AllMapsWorldAndTemporary_Alive)
+        //       if (p.Faction == Faction.OfPlayer && p.workSettings != null)
+        //           p.workSettings.Notify_UseWorkPrioritiesChanged();
+        //
+        // Two departures from the literal source, both deliberate:
+        //  * SNAPSHOT FIRST. Every PawnsFinder property is
+        //    `<static field>.Clear(); …AddRange(…); return <static field>`
+        //    (RimWorld/PawnsFinder.cs), so the returned list is a shared buffer
+        //    the next PawnsFinder read clears underneath you. The widget gets
+        //    away with iterating it live because nothing in its loop body reads
+        //    PawnsFinder; copying costs one allocation and removes the trap.
+        //  * per-pawn try/catch, because a modded workSettings override must not
+        //    take the whole flip down halfway through the roster.
+        //
+        // Notify_UseWorkPrioritiesChanged (RimWorld/Pawn_WorkSettings.cs) is
+        // `workGiversDirty = true` and nothing else — it does NOT route through
+        // ConfirmInitializedDebug, so unlike GetPriority/SetPriority it is safe
+        // on a pawn that never had work settings, and vanilla accordingly gates
+        // on `workSettings != null` rather than on EverWork. Reproduced as-is.
+        private static int NotifyUseWorkPrioritiesChanged()
+        {
+            Faction player;
+            try { player = Faction.OfPlayer; } catch { player = null; }
+            if (player == null) return 0;
+
+            List<Pawn> all;
+            try { all = new List<Pawn>(PawnsFinder.AllMapsWorldAndTemporary_Alive); }
+            catch { return 0; }
+
+            int notified = 0;
+            for (int i = 0; i < all.Count; i++)
+            {
+                var p = all[i];
+                if (p == null || p.Faction != player || p.workSettings == null) continue;
+                try { p.workSettings.Notify_UseWorkPrioritiesChanged(); notified++; } catch { }
+            }
+            return notified;
         }
 
         // `works` / `work`, plus "all" for every visible work type in the Work
