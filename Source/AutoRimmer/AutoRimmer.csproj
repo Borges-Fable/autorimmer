@@ -7,9 +7,12 @@
         <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
         <!-- Game refs come from the agent bench profile, never Steam directly.
              Machine-portable: set RIMWORLD_MANAGED (env) or -p:RimWorldManaged to
-             your bench's Managed dir; the default is the BORGES bench. dorian:
-             /home/dorian/projects/rimworld/_RimWorld-Agent/RimWorldLinux_Data/Managed -->
+             your bench's Managed dir. Failing that the default follows $(OS), so a
+             bare `dotnet build -c Release` works on both benches. Before that
+             third line existed this box fell through to the BORGES path and threw
+             630 "type or namespace not found" errors that read as a broken tree. -->
         <RimWorldManaged Condition="'$(RimWorldManaged)' == ''">$(RIMWORLD_MANAGED)</RimWorldManaged>
+        <RimWorldManaged Condition="'$(RimWorldManaged)' == '' AND '$(OS)' != 'Windows_NT'">/home/dorian/projects/rimworld/_RimWorld-Agent/RimWorldLinux_Data/Managed</RimWorldManaged>
         <RimWorldManaged Condition="'$(RimWorldManaged)' == ''">C:/Users/EvanKornoelje/misc/rimworld/_RimWorld-Agent/RimWorldWin64_Data/Managed</RimWorldManaged>
     </PropertyGroup>
 
