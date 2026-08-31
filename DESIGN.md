@@ -12,8 +12,9 @@ through the `rwa` CLI. The driving loop:
 That loop is also the test substrate: `rwtest` scenarios are the same loop with
 assertions instead of judgment.
 
-Status: spec stage. The build plan is the git-bug spec issues (start at the
-`type:muster` issue); this document is the shared context they all reference.
+Status: building. The build plan is the git-bug spec issues (start at the
+`type:muster` issue); this document is the shared context they all reference,
+and it outranks any spec body that disagrees with it.
 
 ## Non-goals (v1)
 
@@ -143,6 +144,15 @@ Two layers:
 
 Every mutation echoes evidence (before/after crop for spatial verbs, result
 data otherwise) and lands in the journal.
+
+**The plural form IS the verb; the singular is its degenerate case.** Each verb
+call is one round trip through the agent's attention, so a verb that does one
+thing at a time turns a 40-cell job into 40 turns of thinking. Every verb whose
+job can plausibly be asked of N things takes the N: `designate --cells rect`,
+`place-layout` over a whole house, work priorities as a matrix, `zone` over a
+rect. A verb that can only be called in a loop is the defect. The client-side
+escape hatch — a shell loop over `rwa` — exists and is fine for the ragged
+tail, but it costs a 0.25–1s round trip each and hands back N envelopes to read.
 
 **The gate lives in the widget, not in the model — so every player verb must
 re-implement its precondition and cite it.** This is the standing invariant that
@@ -331,3 +341,104 @@ queue by default (an agent flailing mid-experiment must not page triage).
   thing) · `none` (permanent), plus the game's own reason string verbatim.
   This is the concrete form of the standing "candidates + reasons, never bare
   booleans" invariant.
+- 2026-08-31 — **When two specs claim the same verb, the split follows where
+  the GAME puts the control.** 3.2 and 3.4 both listed "allowed area assign".
+  The generalizable rule, and the same reasoning that produced the
+  gate-lives-in-the-widget invariant: a verb belongs to the spec that owns the
+  widget the player uses for it. So creating, renaming and painting an
+  `Area_Allowed` is 3.2's (it is `AreaManager` plus cell writes — the
+  `Dialog_ManageAreas` and area-designator surface, the same drag-a-rect
+  vocabulary as its designations), and assigning a pawn to one is 3.4's (it is
+  `Pawn_PlayerSettings.AreaRestrictionInPawnCurrentMap`, a column of the Assign
+  tab beside `medCare`, `hostilityResponse` and `selfTend`, which 3.4 already
+  owns — and it carries its own widget gate, `SupportsAllowedAreas` plus the
+  player-faction test in `PawnColumnWorker_AllowedArea`). Deciding it by which
+  spec "feels" spatial or "feels" pawn-ish would have split the same control
+  two ways, which is the 2.3 fog-of-war failure in a different costume.
+- 2026-08-31 — **A new hazard class: write-on-SAVE, not just write-on-read —
+  and it means "save and read the Scribe XML" is not a neutral second reader
+  for bills.** `Bill.ExposeData` (`RimWorld/Bill.cs`) runs this during the
+  SAVING pass, before scribing the filter:
+
+      if (Scribe.mode == LoadSaveMode.Saving && recipe.fixedIngredientFilter != null)
+          foreach (ThingDef d in DefDatabase<ThingDef>.AllDefs)
+              if (!recipe.fixedIngredientFilter.Allows(d))
+                  ingredientFilter.SetAllow(d, false);
+
+  So saving a game NARROWS the live `ingredientFilter` of every bill whose
+  recipe has a `fixedIngredientFilter`, in memory, as a side effect of writing
+  the file. It only ever removes allowances and it converges after one save,
+  but two consequences are real. First, an observer can report a bill's filter,
+  an autosave can fire with no player action, and the next read differs —
+  correctly, with nothing wrong. Second, and the reason this is here rather
+  than only in a code comment: **sessions 2.2 and 2.4 established "save the
+  game and read the save's Scribe XML" as the independent second reader that
+  makes an acceptance claim credible.** For bill ingredient filters that reader
+  perturbs what it measures, so it is not independent and must not be cited as
+  though it were. Use a live model read plus a game-acted change (the
+  arrange-act-read lesson) instead. The known write-on-read accessors are
+  catalogued in `WorldSafe.cs`; this one is a different class and the file's
+  header should not be read as covering it.
+- 2026-08-31 — **A vanilla helper can end in a tutorial modal, and a tutorial
+  modal is a force-pause — so it wedges the run.** Found by 3.2's worker in
+  `FlickUtility.UpdateFlickDesignation`, which unconditionally ends with
+  `TutorUtility.DoModalDialogIfNotKnown(ConceptDefOf.SwitchFlickingDesignation)`.
+  That helper does `Find.WindowStack.Add(new Dialog_MessageBox(msg))` whenever
+  the concept has not been demonstrated (`RimWorld/TutorUtility.cs`), and
+  `Dialog_MessageBox` sets `forcePause = true` (`Verse/Dialog_MessageBox.cs`).
+  `PlayerKnowledgeDatabase.IsComplete` is a bare knowledge-lookup with **no
+  tutor-enabled short-circuit**, so it fires on any save where the concept is
+  fresh, whatever the tutorial settings say. Per 1.7 a force-pausing window
+  halts every later `advance` at 0 ticks, and nothing clears it until 3.5's
+  routing ships — so **one call to an innocuous-looking utility permanently
+  wedges an unattended run.** A colony's first power switch would have done it.
+  There are exactly five call sites in the 1.6 tree, and three are in specs we
+  are still building: `FlickUtility` (3.2), `FloatMenuOptionProvider_Arrest`
+  (3.4), `TradeShip.TradeGoodsMustBeNearBeacon` (3.5); `Settlement` is
+  world-map (a v1 non-goal) and `Dialog_Options` is the settings UI. **The rule:
+  a player verb reproduces the helper's gate and its effect, and drops the
+  tutorial line** — never calls the wrapper. This is the same shape as the
+  gate-lives-in-the-widget invariant seen from the other side: there the UI held
+  a check the model lacked, here a "model" helper drags UI in with it. Treat any
+  vanilla utility reaching `Dialog_MessageBox` as UI code wearing a
+  model-shaped name.
+- 2026-08-31 — **Amendment to the entry above: the modal hazard is wider than
+  the tutorial helper, and it has two distinct shapes.** 3.4's worker found a
+  sixth site my grep missed, because I searched for
+  `DoModalDialogIfNotKnown` rather than for what actually hurts:
+  `new Dialog_MessageBox`. The two shapes are not equally dangerous, and
+  telling them apart is what keeps this rule cheap to follow:
+
+  * **Behind an option delegate — safe if you never invoke one.**
+    `FloatMenuOptionProvider_Equip`, `Building_OutfitStand`,
+    `FloatMenuOptionProvider_Arrest` and friends build the modal INSIDE the
+    `FloatMenuOption`'s action closure. Reproducing a provider's GATE and then
+    taking the job yourself never runs that closure. This is already our
+    practice and it is why arrest and equip were never exposed.
+  * **On a utility's own execution path — dangerous.** The method raises the
+    window as a side effect of doing its job, with no delegate in between:
+    `FlickUtility.UpdateFlickDesignation` (tutorial modal), and
+    `HealthCardUtility.CreateSurgeryBill(…, sendMessages: true)` ->
+    `Bill.CreateNoPawnsWithSkillDialog` -> `new Dialog_MessageBox`, which fires
+    from the ORDINARY surgery-bill path whenever no colonist meets the recipe's
+    skill floor. **`sendMessages` defaults to true.** The same helper is reached
+    from `ITab_Bills`, so 3.6's add-bill path inherits it.
+
+  Vanilla itself shows the escape hatch — `Pawn_GuestTracker` calls
+  `CreateSurgeryBill(…, sendMessages: false)` for its non-UI path. Prefer the
+  game's own suppression flag where one exists; re-implement and drop the line
+  where one does not; and re-derive whatever the suppressed message would have
+  said as RESULT FIELDS, so the agent still learns what a player would have
+  been told. The grep to run before any new verb spec is
+  `new Dialog_MessageBox`, not the tutorial helper's name.
+- 2026-08-31 — **The flick trap was live on the bench, and the counterfactual is
+  measured rather than argued.** `Knowledge.xml` on `_RimWorld-Agent` has
+  `SwitchFlickingDesignation` at **0**, and no concept in that file is above 0 —
+  nothing has ever been demonstrated on this save. `PlayerKnowledgeDatabase
+  .IsComplete` is `value > 0.999f`, so vanilla's `FlickUtility
+  .UpdateFlickDesignation` WOULD have stacked a force-pausing `Dialog_MessageBox`
+  on the colony's first power switch, wedging every later `advance`. 3.2's
+  re-implementation was verified live on that exact save: `flick` designated the
+  lamp and `interactions` reported `force_pause {count:0}` afterwards. Recorded
+  because "we avoided a trap" is worth much less than "the trap was armed, here
+  is the reading, and it did not fire."
