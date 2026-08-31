@@ -66,12 +66,18 @@ namespace AutoRimmer
         // any between-glance window; a since older than the ring says so.
         private const int RingSize = 4096;
         private static readonly ValueTuple<long, string>[] ring = new ValueTuple<long, string>[RingSize];
-        private static readonly object ringLock = new object();
+
+        // One lock over the whole emit critical section — seq claim, line
+        // build, queue enqueue, ring write — and over the ring read, so a
+        // CountsSince never straddles a half-recorded event either. Nothing
+        // inside it calls out to non-journal code, which is what makes it
+        // provably deadlock-free.
+        private static readonly object journalLock = new object();
 
         public static Dictionary<string, int> CountsSince(long since, out long lastSeq, out bool truncated)
         {
             var counts = new Dictionary<string, int>();
-            lock (ringLock)
+            lock (journalLock)
             {
                 lastSeq = seq;
                 truncated = since < lastSeq - RingSize;
@@ -106,31 +112,63 @@ namespace AutoRimmer
             });
         }
 
-        // Thread-safe: seq is atomic, the queue is concurrent, serialization
-        // happens on the emitting thread (events are rare; the cost is a small
-        // string build). exactTick comes from main-thread hook sites; everything
-        // else stamps the last published snapshot tick (±1 frame — the schema
-        // documents the approximation).
-        // Returns the seq it claimed, or 0 if the journal is not open — callers
-        // that need to cite the line they just wrote (EmitError) must not
-        // re-read CurrentSeq, which another thread may have moved on.
+        // exactTick comes from main-thread hook sites; everything else stamps
+        // the last published snapshot tick (±1 frame — the schema documents the
+        // approximation). Returns the seq it claimed, or 0 if the journal is not
+        // open — callers that need to cite the line they just wrote (EmitError)
+        // must not re-read CurrentSeq, which another thread may have moved on.
+        //
+        // Claim, serialize and enqueue happen under ONE lock. They used not to:
+        // seq was an interlocked increment and the enqueue followed, so two
+        // emitting threads could interleave and put seq 6 in the file ahead of
+        // seq 5. Filters are order-independent and never noticed; rwtest (5.1)
+        // assertions would not be, and JOURNAL.md calls monotonic seq an
+        // invariant (git-bug 4b65a28). Events are rare and the body is a small
+        // string build, so the contention is nil.
+        //
+        // OnEvent fires OUTSIDE the lock, deliberately: it runs arbitrary
+        // handler code (TimeDriver's halt matchers) and holding the journal's
+        // lock across that is how a deadlock gets built. Handlers may therefore
+        // observe two events out of order; they are matchers, not readers, and
+        // each carries its own seq.
         public static long Emit(string type, Dictionary<string, object> payload, int? exactTick = null)
         {
             if (writer == null) return 0;
-            long n = Interlocked.Increment(ref seq);
             int tick = exactTick ?? Runtime.GameState.tick;
-            var evt = new Dictionary<string, object>
+            long n;
+            lock (journalLock)
             {
-                ["seq"] = n,
-                ["tick"] = tick,
-                ["wall"] = DateTime.UtcNow.ToString("o"),
-                ["type"] = type,
-                ["payload"] = payload,
-            };
-            var sb = new StringBuilder(256);
-            MiniJson.Write(sb, evt);
-            pending.Enqueue(sb.ToString());
-            lock (ringLock) { ring[(int)(n % RingSize)] = ValueTuple.Create(n, type); }
+                n = Interlocked.Increment(ref seq);
+                var evt = new Dictionary<string, object>
+                {
+                    ["seq"] = n,
+                    ["tick"] = tick,
+                    ["wall"] = DateTime.UtcNow.ToString("o"),
+                    ["type"] = type,
+                    ["payload"] = payload,
+                };
+                // The seq is claimed by this point, so SOMETHING must be
+                // enqueued or the file gets the gap this lock exists to
+                // prevent. MiniJson.Write is throw-proof as of 1.5; this is
+                // the backstop that keeps the invariant true even if it is not.
+                string line;
+                try
+                {
+                    var sb = new StringBuilder(256);
+                    MiniJson.Write(sb, evt);
+                    line = sb.ToString();
+                }
+                catch (Exception e)
+                {
+                    line = "{\"seq\":" + n + ",\"tick\":" + tick
+                        + ",\"wall\":" + MiniJson.J(DateTime.UtcNow.ToString("o"))
+                        + ",\"type\":" + MiniJson.J(type)
+                        + ",\"payload\":{\"autorimmer_serialize_error\":"
+                        + MiniJson.J(Truncate(e.ToString(), 500)) + "}}";
+                }
+                pending.Enqueue(line);
+                ring[(int)(n % RingSize)] = ValueTuple.Create(n, type);
+            }
             try { OnEvent?.Invoke(type, payload, tick, n); }
             catch { }
             return n;
@@ -191,13 +229,56 @@ namespace AutoRimmer
         }
 
         // Poller thread only.
+        //
+        // PEEK, write, THEN dequeue. It used to dequeue first, inside a
+        // catch-all: any writer failure discarded the line it had already
+        // taken, producing exactly the seq gap JOURNAL.md calls an invariant
+        // rather than a hope (git-bug 4b65a28, defect 5). The line now stays
+        // in the queue until the write has actually returned, so a transient
+        // failure — a locked file, a full disk that frees up — costs a retry
+        // next cycle instead of a hole in the chronology.
+        //
+        // The bounded part matters as much as the peek: an unbounded retry
+        // against a permanently dead writer would grow the queue without
+        // limit. After FlushFailuresBeforeReopen consecutive failed cycles the
+        // stream is reopened once in append mode; if that fails too the journal
+        // is closed for the session, which makes Emit a no-op — no more seq
+        // claims, so what was written stays gapless and the file simply stops.
+        private const int FlushFailuresBeforeReopen = 20; // ~10s at PollMs=500
+        private static int flushFailures;
+
         public static void Flush()
         {
+            if (writer == null) return;
             try
             {
-                while (pending.TryDequeue(out var line)) writer.WriteLine(line);
+                while (pending.TryPeek(out var line))
+                {
+                    writer.WriteLine(line);
+                    pending.TryDequeue(out _);
+                }
+                flushFailures = 0;
             }
-            catch { }
+            catch (Exception e)
+            {
+                if (++flushFailures < FlushFailuresBeforeReopen) return;
+                flushFailures = 0;
+                try
+                {
+                    writer = new StreamWriter(
+                        new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read),
+                        new UTF8Encoding(false)) { AutoFlush = true };
+                }
+                catch
+                {
+                    writer = null;
+                    // A sibling file, not Log.Warning: this is the poller
+                    // thread, which never touches Verse, and Log.Warning is
+                    // patched straight back into this class.
+                    try { File.WriteAllText(path + ".error", DateTime.UtcNow.ToString("o") + "\n" + e); }
+                    catch { }
+                }
+            }
         }
 
         public static string Truncate(string s, int max)
