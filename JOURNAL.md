@@ -36,6 +36,7 @@ contract and grow them additively.
 | `mental_break` | `pawn`, `faction?`, `state`, `causedByMood`, `reason?` | successful starts only, during play |
 | `red_error` | `msg` (≤2000) or `msg`+`suppressed:true`, `overflow?` | per-text cap 3 per session, then one suppression marker. **The cap is a FILE policy only** — `advance {halt_on_error:true}` halts on every occurrence including the ones not written here (1.5 blocker 3), so a repeat count in the file is a floor, not a total |
 | `warning` | `msg` (≤2000), `overflow?` | first occurrence per exact text per session; repeats are LogRelay's job |
+| `dialog` | `count`, `windows`: `[{type,type_full,title?,layer}]`, `opened`: same shape, `letters?` (≤10 labels) | a **force-pausing** modal went up. See below — this is why `advance` stops |
 
 Log hooks attach when AutoRimmer's ctor runs — last in the load order — so
 engine-init and earlier-mod load warnings (the bench's SteamAPI.Init line,
@@ -57,6 +58,36 @@ wording obscured: `OpenAutomaticLetters` opens **at most one** letter per call
 and `break`s, so a burst still cannot be reconstructed from letter-opens no
 matter how often it runs. The per-tick call is also what makes spec 1.7 real —
 a letter can open a force-pausing dialog from inside our own tick loop.
+
+## `dialog`, and why `advance` halts on it (spec 1.7)
+
+`LetterStack.OpenAutomaticLetters` — the only thing that opens a timing-out
+letter — early-returns for as long as `Find.WindowStack.WindowsForcePause` is
+true. Vanilla is fine with that because a `forcePause` window really does pause
+the game. AutoRimmer's `advance` pins `CurTimeSpeed = Paused` and calls
+`DoSingleTick` itself, so nothing pauses it: a modal stacked mid-advance means
+every subsequent trade offer, quest offer and timed threat expires **without
+ever being shown**, for the rest of the session, with no exception and no red
+error. The run looks healthy and the colony stops being told things.
+
+So:
+
+- `advance` halts with **`reason:"dialog"`** the moment a force-pausing window
+  is up — checked per TICK, because a `LetterWithTimeout` opens itself from
+  `LetterStackTick`, inside `DoSingleTick`. Reason set is now
+  `ticks | timeout | interrupted | letter | threat | alert | event |
+  red_error | dialog`.
+- **Standing invariant: `advance` returns with an empty force-pause stack, or
+  it says so.** When it does not, the result carries `force_pause_windows` in
+  the same shape as this event's payload — computed live at halt, so a window
+  that went up during the final frame shows up even when the halt reason is
+  something else.
+- The halt is **not suppressible and does not close anything.** There is no
+  honest "plough on" while `OpenAutomaticLetters` is dead, and deciding what a
+  dialog means is spec 3.5's job. Journaling it, halting, and leaving the queue
+  intact is the whole of 1.7.
+- Journaled whether or not an advance is running: a modal going up is a
+  first-class event.
 
 ## Alert timing — read before asserting on ticks
 
