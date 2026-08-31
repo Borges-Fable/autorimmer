@@ -12,6 +12,7 @@ no opinion).
 | [[weapons-have-no-alert]] | Critical | verified-in-source | day 0, every roster change, every raid — no alert will ever fire |
 | [[unforbid-before-expecting-pickup]] | Critical | observed-at-bench | after raids, drops, colony start — autonomy skips forbidden gear |
 | [[who-will-actually-do-it]] | Critical | verified-in-source | after queuing any bill — skill is not assignment, the patient never counts |
+| [[zzzt-letter-is-a-fire-already-burning]] | Critical | verified-in-source | a Zzzt or fire letter — act on the letter; the alert is home-scoped and late (**graduated**: `triggered.md §power-incident` + `templates/power-room`) |
 | [[materials-are-a-standing-loop]] | Important | evan-stated | any input trending to zero — designate, don't retry the bill |
 | [[benches-go-indoors]] | Important | evan-stated | siting any bench — enclosure plus the right room |
 | [[growing-zone-default-is-potato]] | Important | verified-in-source | creating/reading growing zones — one raw read commits potato forever |
