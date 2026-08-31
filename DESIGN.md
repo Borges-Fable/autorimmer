@@ -302,6 +302,21 @@ queue by default (an agent flailing mid-experiment must not page triage).
   lagging indicator, `food_days < 3` is a leading one. Filed as its own spec so
   it has a home, dependencies and an acceptance section instead of being a word
   in a list nobody implemented.
+- 2026-08-30 — **The observer surface has its own gate-in-the-widget rule:
+  where the game's accessor writes, the serializer re-implements the
+  derivation and cites the member.** 2.4's audit found four vanilla accessors
+  whose READ mutates scribed state or the RNG, none visible at the call site:
+  `ResearchManager.GetProgress` inserts a zero entry into a scribed dictionary
+  on a miss (and `IsFinished`/`CanStartNow`/`RecipeDef.AvailableNow` all
+  bottom out there); `Bill_Production.ShouldDoNow` writes the scribed `paused`
+  on three paths; `Zone_Growing.PlantDefToGrow` assigns and scribes a default
+  on a never-configured zone; `Zone.Cells` Fisher-Yates-shuffles a scribed
+  list over the shared `Rand` stream. `WorldSafe`/`PawnSafe` hold the guarded
+  routes; a serializer never touches a raw accessor those files ban, and each
+  guarded route names the member it reproduces. Every result whose data came
+  through a backing-field route publishes `source:"backing-field"` so "not
+  configured" and "we could not look" never read alike. (2.3's `map-view`
+  tripped the growing-zone write in shipped code; fixed session 5.)
 - 2026-08-30 — **Blockers report HOW they are removable, not merely that they
   block.** A bare "not buildable" is useless: some obstacles are mined, some
   deconstructed, and some must be beaten down by a drafted colonist. The game

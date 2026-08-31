@@ -46,11 +46,15 @@ git-bug bug new -t "..." -m "..."
 git-bug bug comment new <id> -F body.md   # prefer -F; -m mangles apostrophes
 ```
 
-Two traps, both found the hard way:
+Three traps, all found the hard way:
 
-- **`git-bug bug show` mangles the body** — it eats lines beginning with `#`, so
-  markdown headings vanish and a spec can look like it is missing sections. Read
-  bodies with
+- **Lines beginning with `#` are dropped AT STORAGE, not merely in `show`** —
+  a `-F` body loses every markdown heading permanently the moment it is
+  committed (session 5 measured it: the JSON export lacks them too, so this
+  is not a rendering problem). Write comment/spec bodies with `#`-free
+  headings (bold lines work). The `--format json` recipe below still helps
+  for bodies that predate this rule, but it cannot recover what was never
+  stored:
   `git-bug bug show --format json <id> | python3 -c "import json,sys; d=json.load(sys.stdin); [print(c['message']) for c in d['comments']]"`.
 - **`git-bug bug new -t "..." -F body.md` silently DISCARDS `-t`** and uses the
   file's first line as the title. Either pass the body on stdin, or fix it
