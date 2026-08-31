@@ -11,8 +11,14 @@ namespace AutoRimmer
     // No prefixes, no __result writes, no Rand, no lazy-init getters.
     //
     // Letters are captured from the LetterStack funnel, NOT from letter-opened
-    // side effects: OpenAutomaticLetters runs once per FRAME, so under
-    // fast-forward several letters arrive before the first opens (0.1 finding).
+    // side effects. The 0.1 finding said this was because OpenAutomaticLetters
+    // "runs once per FRAME"; that is half wrong and corrected here (1.5 doc
+    // correction). It runs once per frame from Game.UpdatePlay AND once per
+    // TICK from LetterStack.LetterStackTick, which is inside DoSingleTick —
+    // i.e. inside our own advance loop. The hook was right anyway, for the
+    // stronger reason: OpenAutomaticLetters opens at most ONE letter per call
+    // and breaks, so a burst can never be reconstructed from letter-opens
+    // however often it runs.
     public static class JournalHooks
     {
         private static readonly AccessTools.FieldRef<Pawn_HealthTracker, Pawn> HealthPawn =
