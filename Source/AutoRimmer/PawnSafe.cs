@@ -229,6 +229,42 @@ namespace AutoRimmer
     //       game's code and can only disclose. Where the two layers touch the
     //       same field, say which one is choosing and which one is stuck.
     //
+    // ------------- CLASS H: THE COMPARISON THAT ALLOCATES -------------------
+    // A method whose NAME, SIGNATURE and return type all say "pure predicate"
+    // and whose body lazily constructs an object on its receiver. Class A wears
+    // a property's clothing; this wears a comparison's, which is worse, because
+    // nobody audits an `if`.
+    //
+    //  * Verse.AI/Job.cs `JobIsSameAs(Pawn, Job)` — the test behind
+    //    `already-doing-it` (PawnActs.AlreadyDoing) and behind `prioritize`'s
+    //    shipped "already doing exactly this". It calls GetCachedDriver(pawn),
+    //    which is
+    //        if (cachedDriver == null) cachedDriver = MakeDriver(driverPawn);
+    //        if (cachedDriver.pawn != driverPawn) Log.Error("Tried to use the
+    //            same driver for 2 pawns: ...");
+    //    so on a job with no driver it ALLOCATES one and caches it on that job,
+    //    and on a job belonging to another pawn it emits a RED ERROR — which
+    //    would breach the zero-red-errors invariant from an expression that
+    //    reads as a field comparison.
+    //    => THE INVARIANT, and it is a direction rule, not a ban:
+    //         THE RECEIVER MUST BE THE RUNNING JOB.
+    //       `curJob.JobIsSameAs(pawn, candidate)` is free and correct — curJob
+    //       is executing, so it already holds its driver for exactly this pawn,
+    //       and it is the order vanilla itself uses in
+    //       Pawn_JobTracker.TryTakeOrderedJob. Inverted —
+    //       `candidate.JobIsSameAs(pawn, curJob)` — it allocates a JobDriver on
+    //       a throwaway Job we are about to discard. The two spellings look
+    //       interchangeable and are not.
+    //    => no guarded route is offered here on purpose. Wrapping it would hide
+    //       the direction, and the direction IS the guard.
+    //    => what it compares, for whoever reimplements it rather than calls it:
+    //       def, verbToUse and bill, then — only if JobDriver.IsSameJobAs
+    //       declines, which it does by default, JobDriver_StudyInteract being
+    //       vanilla's one override — targetA, targetB, targetC and commTarget.
+    //       It does NOT compare count, targetQueueA/B, jobGiver, workGiverDef
+    //       or playerForced. A candidate that differs only in `count` counts as
+    //       the same job.
+    //
     // -------------------------- NOT USED, WHY ------------------------------
     //  * SocialCardUtility.* other than GetPawnSituationLabel: static
     //    cachedForPawn/cachedEntries and a cleared-and-refilled shared static.
