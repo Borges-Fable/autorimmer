@@ -165,6 +165,50 @@ namespace AutoRimmer
     //    when thoughtsDirty — the same recompute opening the Needs tab triggers,
     //    on the game's own dirty flag, into a non-scribed cache.
     //
+    // ------------- CLASS G: NOT THE GETTER, THE CALL ------------------------
+    // Every class above is a property getter that writes when you read it.
+    // This is the same hazard one level up, and it is the one that actually
+    // shipped broken: a verb that is read-only in INTENT, invoking a whole
+    // vanilla subroutine for its return value, where that subroutine's writes
+    // are gated on an AMBIENT STATIC the caller never thinks to set. Nothing
+    // in this file's technique helps — there is no getter to route around.
+    //
+    //  * WorkGiver_Scanner.HasJobOnThing / JobOnThing, i.e. the work-giver scan
+    //    behind `orders` and `prioritize` (PawnOrderVerbs.ScanWorkGivers).
+    //    RimWorld/FloatMenuMakerMap.cs GetOptions sets `makingFor = context
+    //    .FirstSelectedPawn` around its ENTIRE option-building pass, and
+    //    RimWorld/WorkGiver_DoBill.cs StartOrResumeBillJob branches on it: with
+    //    `makingFor != pawn`, a failed ingredient search WRITES
+    //    bill.nextTickToSearchForIngredients = TicksGame + IntRange(500,600)
+    //    .RandomInRange — a Rand.RangeInclusive off the shared stream
+    //    (WorldSafe Class R) into a field the same method reads back with no
+    //    pawn qualifier, so it suppresses that bill for the WHOLE COLONY.
+    //    Verse/DangerUtility.cs NormalMaxDanger branches on it too, and so does
+    //    every JobFailReason the player would have been shown.
+    //    The verb was a faithful clause-for-clause copy of the game's own
+    //    FloatMenuOptionProvider_WorkGivers, it said "Read-only: no job is
+    //    taken", and it still mutated — because what it omitted was not in the
+    //    provider at all. It was in the provider's CALLER.
+    //    => no guarded route exists. The fix is to set the ambient argument in
+    //       a try/finally, cited in ScanWorkGivers. git-bug 32b9e01.
+    //    => THE RULE THIS LEAVES BEHIND: when a verb reproduces a widget, read
+    //       the widget's CALLER too, and grep every member you invoke for the
+    //       statics it branches on. "I only called a getter that returns a
+    //       value" is not an argument, and neither is a faithful copy.
+    //    => what setting the static does NOT close gets DISCLOSED, not hidden:
+    //       the same scan runs BillStack.RemoveIncompletableBills (it DELETES
+    //       bills), burns one scribed job id per candidate, and — via
+    //       WorkGiver_DoBill.ShouldSkip -> BillStack.AnyShouldDoNow ->
+    //       Bill_Production.ShouldDoNow — rewrites the scribed `paused` flag on
+    //       potentially every bill on the map. All three are genuine
+    //       click-parity, and all three are named in the header of `orders`.
+    //    => note the asymmetry with WorldSafe Class A, which BANS
+    //       Bill_Production.ShouldDoNow outright so that `bills` can read a
+    //       stack without writing it. Both are right. A serializer picks its own
+    //       route and so can refuse; a verb reproducing a widget calls the
+    //       game's code and can only disclose. Where the two layers touch the
+    //       same field, say which one is choosing and which one is stuck.
+    //
     // -------------------------- NOT USED, WHY ------------------------------
     //  * SocialCardUtility.* other than GetPawnSituationLabel: static
     //    cachedForPawn/cachedEntries and a cleared-and-refilled shared static.

@@ -22,3 +22,6 @@ transcripts/
 .DS_Store
 Thumbs.db
 .claude/
+
+# acceptance evidence (raw result envelopes, per-run)
+.accept-evidence/

@@ -484,3 +484,46 @@ queue by default (an agent flailing mid-experiment must not page triage).
   On cost, since that is what drove the question: the mod route is not "zero
   tokens", it is ONE round trip per firing instead of N. For a procedure that
   fires every raid and has roughly six steps, that difference is the argument.
+- 2026-08-31 — **A verb can be a faithful clause-for-clause copy of the game's
+  own widget and still mutate, because the state that made vanilla safe lives
+  in the widget's CALLER.** `orders`/`prioritize` reproduce
+  `FloatMenuOptionProvider_WorkGivers.GetWorkGiverOption` exactly, and both
+  documented themselves "read-only". Neither set
+  `FloatMenuMakerMap.makingFor`, which `FloatMenuMakerMap.GetOptions` — the
+  caller, not the provider — sets around the whole option-building pass. Four
+  members downstream branch on that static: `WorkGiver_DoBill
+  .StartOrResumeBillJob` writes `bill.nextTickToSearchForIngredients =
+  TicksGame + IntRange(500,600).RandomInRange` when it is unset (a
+  `Rand.RangeInclusive` burn AND a bill suppression that applies to every
+  colonist, since the field is read back with no pawn qualifier);
+  `DangerUtility.NormalMaxDanger` returns `Deadly` only when it is set, so
+  reachability was evaluated at a different threshold than the menu we claim
+  parity with; and the `JobFailReason` strings the agent needs ("missing 30
+  steel", from `WorkGiver_ConstructDeliverResources.JobOnThing`) are gated on
+  it, along with the loop that collects ALL the missing defs instead of
+  breaking at the first. Asking what a cook could do at a stove stopped the
+  colony cooking. **The rule: reproducing a widget means reading its caller
+  too, and grepping every member you invoke for the ambient statics it branches
+  on.** Recorded as PawnSafe Class G — the hazard is not always a getter, and a
+  read-only intention is not a guarantee. git-bug 32b9e01.
+- 2026-08-31 — **Where an unavoidable side effect is genuine click-parity, it is
+  DISCLOSED in the verb's own result, not suppressed.** The same work-giver scan
+  still runs `BillStack.RemoveIncompletableBills` — which deletes a bill whose
+  body part is gone — and still consumes one `UniqueIDsManager.nextJobID` per
+  candidate job, a counter that IS scribed. Neither can be removed without
+  ceasing to ask the game the question, and a player's right-click does both.
+  A THIRD, wider than either and not in the issue — found while writing the
+  acceptance: `WorkGiver_DoBill.ShouldSkip` asks every potential bill giver on
+  the map for `BillStack.AnyShouldDoNow`, which is `Bill_Production.ShouldDoNow`
+  per bill, which WRITES the scribed `paused` flag. `bills` refuses to call that
+  method at all (the entry above; WorldSafe Class A) and `orders` cannot refuse,
+  because the call is inside vanilla's `JobOnThing` and declining it means
+  declining to ask. **Both are correct, and the difference is worth naming: a
+  serializer picks its own route, a widget reproduction calls the game's code.**
+  So `orders` names all three in its header and in its result note, and stops
+  saying "read-only". The complement of the gate-lives-in-the-widget rule: where a
+  player verb cannot be made cheaper than the click, it must at least be as
+  HONEST as the click, and the agent is told what asking cost. `bills` now
+  publishes `next_ingredient_search_tick` for the same reason — a bill can read
+  `active` and be worked by nobody, and that field is the only observable proof
+  that something ran a failing ingredient search on it.
