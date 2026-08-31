@@ -651,7 +651,11 @@ def phase6():
           dig(e, "data.state.job_id") == running or ARGS.dry_run,
           "job_id still %s" % show(running), dig(e, "data.state.job_id"))
 
-    send("advance", {"ticks": 150})
+    # 60 ticks, not the issue's 150: a colonist covers a cell every ~13-20
+    # ticks, so 150 would let it ARRIVE at a destination only 12 cells away,
+    # start the queued job, and make 6.13 test the wrong thing. Direction is
+    # all 6.12 needs.
+    send("advance", {"ticks": 60})
     e = state_of(S["A"])
     now = dig(e, "data.state.at")
     check("6.12", "the pawn walks to the FIRST destination first (x moves "
@@ -659,7 +663,12 @@ def phase6():
           (isinstance(now, list) and int(now[0]) > x) or ARGS.dry_run,
           "x > %d (toward %s)" % (x, p1), now)
 
+    still_first = dig(state_of(S["A"]), "data.state.job_queue.total")
     e = send("move-to", {"pawns": [S["A"]], "to": p1})
+    if still_first == 0 and not ARGS.dry_run:
+        note("6.13", "the first Goto had already finished and the queued one "
+                     "started, so the already-doing-it collision could not be "
+                     "staged; shorten the advance and re-run")
     eq("6.13a", "a move-to to the cell the pawn is ALREADY walking to is not "
                 "accepted", e, "data.counts.accepted", 0)
     eq("6.13b", "it takes 4087644's gate", e, "data.rejected.0.gate",

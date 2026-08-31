@@ -282,7 +282,7 @@ This is the issue's own reproduction, re-run.
 | 6.11b | then `pawn {pawn:A, sections:["state"]}` | `job_queue.total` **grew from 0 to 1** |
 | 6.11c | ″ | `job_queue.list[0].job_def == "Goto"`, with its own `job_id` and `job_start_tick: null` |
 | 6.11d | ″ | `state.job_def == "Goto"` still, and its `job_id` is the one from 6.10 — **the running job was not replaced** |
-| 6.12 | `advance {ticks:150}` then `pawn {pawn:A, sections:["state"]}` | the position has moved toward **P1**, not P2 — the first destination is walked first |
+| 6.12 | `advance {ticks:60}` then `pawn {pawn:A, sections:["state"]}` | the position has moved toward **P1**, not P2 — the first destination is walked first, and `job_queue.total` is still 1 |
 | 6.13a | `move-to {pawns:[A], to:P1}` while still walking to P1 | `counts.accepted == 0`, `rejected[0].gate == "already-doing-it"` |
 | 6.13b | ″ | the reason names `PawnGotoAction`'s own clause, and `action.journal_seq >= 1` |
 | 6.14 | `move-to {pawns:[A], to:<A's current cell>}` | `rejected[0].gate == "already-there"` — the shipped gate, untouched |
@@ -295,6 +295,12 @@ This is the issue's own reproduction, re-run.
 destination — the running job replaced and success reported. Either half alone
 would miss it: a grown queue with the running job also replaced is still wrong,
 and an unchanged running job with an empty queue means the order vanished.
+
+**Pick P1 and P2 at least ~10 cells out, and keep 6.12's advance short.** A
+colonist covers a cell every ~13–20 ticks, so the issue's original 150 would
+let it ARRIVE at a nearby P1, start the queued job, and make 6.13 test the
+wrong thing. If `job_queue.total` has dropped to 0 before 6.13, the collision
+was not staged — shorten the advance and re-run rather than recording a fail.
 
 **6.13 is the second defect the fix uncovered**, and it was never in either
 issue: `PawnGotoAction` returns `flag = true` for a pawn already walking to
