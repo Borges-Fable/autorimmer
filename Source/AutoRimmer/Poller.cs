@@ -70,6 +70,27 @@ namespace AutoRimmer
             t.Start();
         }
 
+        // The cycle order IS the "journal flushed before the result" invariant,
+        // and the old order did not establish it (git-bug 4b65a28, defect 6).
+        // Flush() and the Outgoing drain read two independent queues, so
+        // flushing and then draining proved nothing about what the drain would
+        // find; and ScanInbox ran BEFORE Flush, which executes the off-thread
+        // `journal` verb against a file that is up to one cycle stale.
+        //
+        // Correct order, and the reason for each step:
+        //   1. boundary check   — answer anything the vanished game orphaned
+        //   2. Flush            — the `journal` verb about to run in step 3
+        //                         reads the FILE; it must be current first
+        //   3. ScanInbox        — buffers its results rather than writing them,
+        //                         so no result escapes ahead of step 4
+        //   4. drain Outgoing   — into the SAME buffer, so the set of results
+        //                         this cycle will write is now fixed
+        //   5. Flush            — everything journaled before any of those
+        //                         results is now on disk
+        //   6. write the buffer — every result file is therefore
+        //                         journal-consistent by construction
+        private static readonly List<Result> batch = new List<Result>();
+
         private static void Loop()
         {
             while (true)
@@ -78,13 +99,13 @@ namespace AutoRimmer
                 {
                     Thread.Sleep(PollMs);
                     CheckGameBoundary();
-                    ScanInbox();
-                    // Journal before results, deliberately: an advance halt
-                    // enqueues its journal events strictly before its result,
-                    // so flushing here first makes every result
-                    // journal-consistent (spec 1.3 invariant).
                     Journal.Flush();
-                    while (Runtime.Outgoing.TryDequeue(out var result)) WriteResult(result);
+                    batch.Clear();
+                    ScanInbox(batch);
+                    while (Runtime.Outgoing.TryDequeue(out var result)) batch.Add(result);
+                    Journal.Flush();
+                    for (int i = 0; i < batch.Count; i++) WriteResult(batch[i]);
+                    batch.Clear();
                     if ((DateTime.UtcNow - lastStatusWrite).TotalSeconds >= 1)
                     {
                         lastStatusWrite = DateTime.UtcNow;
@@ -132,7 +153,11 @@ namespace AutoRimmer
             });
         }
 
-        private static void ScanInbox()
+        // Results are buffered into `sink` rather than written here: every
+        // result file this cycle produces must land AFTER the cycle's second
+        // Journal.Flush, and an off-thread verb executed inline would otherwise
+        // beat it to disk.
+        private static void ScanInbox(List<Result> sink)
         {
             foreach (var file in Directory.GetFiles(inboxDir, "*.json"))
             {
@@ -147,7 +172,7 @@ namespace AutoRimmer
                 var obj = MiniJson.Parse(text);
                 if (obj == null)
                 {
-                    WriteResult(Result.Fail(fallbackId, "?", Err.BadJson));
+                    sink.Add(Result.Fail(fallbackId, "?", Err.BadJson));
                     continue;
                 }
 
@@ -155,7 +180,7 @@ namespace AutoRimmer
                 string op = MiniJson.GetString(obj, "op");
                 if (op == null)
                 {
-                    WriteResult(Result.Fail(id, "?", Err.UnknownOp, "envelope has no 'op'"));
+                    sink.Add(Result.Fail(id, "?", Err.UnknownOp, "envelope has no 'op'"));
                     continue;
                 }
 
@@ -165,7 +190,7 @@ namespace AutoRimmer
                     args = rawArgs as Dictionary<string, object>;
                     if (args == null)
                     {
-                        WriteResult(Result.Fail(id, op, Err.BadArgs, "'args' must be an object"));
+                        sink.Add(Result.Fail(id, op, Err.BadArgs, "'args' must be an object"));
                         continue;
                     }
                 }
@@ -173,7 +198,7 @@ namespace AutoRimmer
                 var verb = VerbRegistry.Get(op);
                 if (verb == null)
                 {
-                    WriteResult(Result.Fail(id, op, Err.UnknownOp,
+                    sink.Add(Result.Fail(id, op, Err.UnknownOp,
                         "known ops: " + string.Join(", ", VerbRegistry.Ops)));
                     continue;
                 }
@@ -181,11 +206,11 @@ namespace AutoRimmer
                 var cmd = new PendingCommand { Id = id, Op = op, Verb = verb, Args = args };
                 if (!verb.MainThread)
                 {
-                    WriteResult(VerbRegistry.Execute(cmd)); // handler contract: no Verse access
+                    sink.Add(VerbRegistry.Execute(cmd)); // handler contract: no Verse access
                 }
                 else if (!GameLoaded())
                 {
-                    WriteResult(Result.Fail(id, op, Err.NoActiveGame,
+                    sink.Add(Result.Fail(id, op, Err.NoActiveGame,
                         "load a save first; this verb runs at the in-game safe point"));
                 }
                 else
