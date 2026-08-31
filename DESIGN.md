@@ -461,3 +461,18 @@ queue by default (an agent flailing mid-experiment must not page triage).
   prefix fires only in interface context and AutoRimmer's verbs run from
   `GameComponentUpdate`, so under MP the write would stay local. Out of scope
   for a single-player bench, recorded so nobody rediscovers it.
+- 2026-08-31 — **A modded column belongs on the verb that owns its tab, and its
+  gate is the UNION of every widget that reaches the setter** (git-bug
+  1a072fa). FindSuitableWeaponAndAmmo injects an auto-arm checkbox into the
+  Assign tab, so it is a lever on `assign` rather than a verb of its own — the
+  column strip is the verb's whole shape and a modded column is still a column.
+  Two widgets reach `AutoArmTracker.SetAutoArm`, and the spec cited only one of
+  them: `PawnColumnWorker_AutoArm.HasCheckbox` (`IsColonist && !WorkTagIsDisabled
+  (Violent)`) and the pawn gizmo (`IsColonistPlayerControlled ||
+  MechUtility.IsWeaponUsableMech`, which SKIPS the Violent check for mechs and
+  is a player mech's only route, since no column cell is drawn for one).
+  Enforcing just the column would have fabricated a restriction the player does
+  not have, so the verb honours both and cites both. A third gate is not a
+  widget at all and is the easiest to miss: the setter itself returns SILENTLY
+  unless `MpSync.Configurable(pawn)` holds, so a dead pawn would otherwise be
+  reported applied against a write that never happened.

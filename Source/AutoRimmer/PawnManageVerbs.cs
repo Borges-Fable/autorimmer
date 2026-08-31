@@ -438,13 +438,24 @@ namespace AutoRimmer
 
         // --------------------------------------------------------------------
         // assign {pawns:[…], apparel_policy?, food_policy?, drug_policy?,
-        //         reading_policy?, area?, med_care?, self_tend?, hostility?}
+        //         reading_policy?, area?, med_care?, self_tend?, hostility?,
+        //         auto_arm?}
         //
         // The Assign/Restrict tab's whole column strip, plural, in one call.
         // Any subset of the levers may be present; absent means "leave alone",
         // and `area:null` means "unrestricted", which is a real setting rather
         // than an omission (AreaAllowedGUI.DoAllowedAreaSelectors draws a null
         // selector first, labelled "Unrestricted").
+        //
+        // `auto_arm` is the ONE MODDED column here (git-bug 1a072fa):
+        // FindSuitableWeaponAndAmmo injects a checkbox into this same tab, so
+        // its natural home is this verb rather than a verb of its own. It is
+        // reached by reflection through `Fswa` — no compile-time reference —
+        // and on a bench without the mod it is REFUSED BY NAME while every
+        // other lever in the same call still applies. Its before/after value is
+        // `true`/`false`/`null`, where null is "we could not look" and never
+        // "off"; `auto_arm` is echoed in before/after on EVERY assign call, so
+        // the state can be read without setting it.
         //
         // WIDGET GATES, one per lever, each from its own column worker:
         //   apparel  RimWorld/PawnColumnWorker_Outfit.cs DoCell: `pawn.outfits != null`
@@ -469,6 +480,9 @@ namespace AutoRimmer
         //              `pawn.RaceProps.Humanlike`; and
         //              HostilityResponseModeUtility's own menu omits `Attack`
         //              when `WorkTagIsDisabled(WorkTags.Violent)`
+        //   auto_arm FSWA/PawnColumnWorker_AutoArm.cs HasCheckbox, plus the
+        //              gizmo's mech route — see AutoArmGate below, which cites
+        //              both and is where the reasoning lives
         //
         // POLICY READS STAY GUARDED, POLICY WRITES USE THE PUBLIC SETTER. The
         // getters (Pawn_OutfitTracker.CurrentApparelPolicy and friends) ASSIGN a
@@ -502,6 +516,8 @@ namespace AutoRimmer
             bool selfTend = wantSelfTend && a.Bool("self_tend", false);
             bool wantHostility = a.Has("hostility");
             HostilityResponseMode hostility = wantHostility ? Hostility(a.Str("hostility")) : HostilityResponseMode.Flee;
+            bool wantAutoArm = a.Has("auto_arm");
+            bool autoArm = wantAutoArm && a.Bool("auto_arm", false);
 
             if (apparel != null) touched.Add("apparel_policy");
             if (food != null) touched.Add("food_policy");
@@ -511,10 +527,11 @@ namespace AutoRimmer
             if (wantMed) touched.Add("med_care");
             if (wantSelfTend) touched.Add("self_tend");
             if (wantHostility) touched.Add("hostility");
+            if (wantAutoArm) touched.Add("auto_arm");
             if (touched.Count == 0)
                 throw new VerbArgsException(
                     "nothing to assign — pass at least one of apparel_policy, food_policy, drug_policy, "
-                    + "reading_policy, area, med_care, self_tend, hostility");
+                    + "reading_policy, area, med_care, self_tend, hostility, auto_arm");
 
             var ids = new List<object>();
             foreach (var p in pawns)
@@ -526,6 +543,11 @@ namespace AutoRimmer
                 before["med_care"] = p.playerSettings?.medCare.ToString();
                 before["self_tend"] = p.playerSettings?.selfTend;
                 before["hostility_response"] = p.playerSettings?.hostilityResponse.ToString();
+                // Echoed whether or not the lever was passed: this is how
+                // auto-arm is READ without being SET (1a072fa's acceptance).
+                // The reason for a null is left to the result-level
+                // `auto_arm_mod` block rather than repeated on every row.
+                Fswa.PublishAutoArm(p, before, inlineReason: false);
 
                 var applied = new List<object>();
                 var refused = new List<object>();
@@ -598,6 +620,27 @@ namespace AutoRimmer
                     p.playerSettings.hostilityResponse = hostility;
                     return null;
                 });
+                if (wantAutoArm) One(p, "auto_arm", applied, refused, () =>
+                {
+                    string why = AutoArmGate(p);
+                    if (why != null) return why;
+                    // READ THE WRITE BACK. FSWA's setter is `void` and returns
+                    // silently on a null tracker (FSWA/AutoArmTracker.cs
+                    // SetAutoArm's first clause), so "the invoke did not throw"
+                    // is not evidence that anything moved. The tracker is the
+                    // only authority on what it now holds, so ask it.
+                    if (!Fswa.TrySetAutoArm(p, autoArm, out string setError)) return setError;
+                    bool? now = Fswa.AutoArmOf(p, out string readError);
+                    if (now == null)
+                        return "SetAutoArm(" + (autoArm ? "true" : "false") + ") was called and did not "
+                            + "throw, but the result could not be read back, so this pawn's auto-arm state "
+                            + "is now UNKNOWN rather than unchanged: " + readError;
+                    if (now.Value != autoArm)
+                        return "the write did not take — SetAutoArm(" + (autoArm ? "true" : "false")
+                            + ") returned normally and IsAutoArm still answers "
+                            + (now.Value ? "true" : "false") + ". " + Fswa.WriteDiagnosis();
+                    return null;
+                });
 
                 var after = PawnSafe.Policies(p);
                 after["reading"] = ReadingPolicyOf(p)?.label;
@@ -605,6 +648,7 @@ namespace AutoRimmer
                 after["med_care"] = p.playerSettings?.medCare.ToString();
                 after["self_tend"] = p.playerSettings?.selfTend;
                 after["hostility_response"] = p.playerSettings?.hostilityResponse.ToString();
+                Fswa.PublishAutoArm(p, after, inlineReason: false);
 
                 var line = new Dictionary<string, object>
                 {
@@ -628,7 +672,7 @@ namespace AutoRimmer
                       new Dictionary<string, object> { ["ids"] = ids, ["levers"] = touched.ConvertAll(t => (object)t) })
                 : 0;
 
-            return outcome.Result(V, seq, new Dictionary<string, object>
+            var meta = new Dictionary<string, object>
             {
                 ["levers"] = touched.ConvertAll(t => (object)t),
                 ["note"] = "policy READS in before/after go through PawnSafe's guarded backing-field routes "
@@ -636,8 +680,15 @@ namespace AutoRimmer
                     + "setters, which is what the dropdown does. Assigning an apparel policy fires "
                     + "mindState.Notify_OutfitChanged, which sets nextApparelOptimizeTick to now — the pawn "
                     + "re-dresses at its next free moment rather than in 6000-9000 ticks. Assigning an area "
-                    + "can END the pawn's current job when a target falls outside it.",
-            });
+                    + "can END the pawn's current job when a target falls outside it. `auto_arm` is a MODDED "
+                    + "column (FindSuitableWeaponAndAmmo), reached by reflection and read back from the "
+                    + "tracker after every write; null there means the state could not be read, never off.",
+            };
+            // The provenance block earns its bytes exactly when a caller could
+            // otherwise misread a null: it asked for the lever, or the lever is
+            // not there to ask for.
+            if (wantAutoArm || !Fswa.AutoArmAvailable) meta["auto_arm_mod"] = Fswa.Describe();
+            return outcome.Result(V, seq, meta);
         }
 
         private static Dictionary<string, object> WithPawn(Pawn p, Dictionary<string, object> line)
@@ -680,6 +731,70 @@ namespace AutoRimmer
                 if (area != null && !area.AssignableAsAllowed())
                     return $"area '{area.Label}' is not assignable as an allowed area "
                         + "(Verse/Area.AssignableAsAllowed — BuildRoof, NoRoof and SnowClear are not)";
+            }
+            catch (Exception e) { return e.GetType().Name + ": " + e.Message; }
+            return null;
+        }
+
+        // FSWA's auto-arm checkbox, gated the way the widgets that draw it are.
+        //
+        // TWO widgets reach AutoArmTracker.SetAutoArm and this verb honours
+        // BOTH, because refusing a route the player actually has would be a
+        // fabricated restriction:
+        //
+        //   column  FSWA/PawnColumnWorker_AutoArm.cs HasCheckbox —
+        //             `pawn.IsColonist && !pawn.WorkTagIsDisabled(WorkTags.Violent)`
+        //           This is the Assign tab's own cell, i.e. precisely the strip
+        //           `assign` reproduces, so it is the primary gate.
+        //   gizmo   FSWA/HarmonyPatches.cs Patch_PawnGizmos.Postfix — drawn when
+        //             `pawn.IsColonistPlayerControlled
+        //              || MechUtility.IsWeaponUsableMech(pawn)`,
+        //           and then `Disable`d (drawn but unclickable) when
+        //             `!pawn.RaceProps.IsMechanoid
+        //              && pawn.WorkTagIsDisabled(WorkTags.Violent)`.
+        //           The mech half is the ONLY route a player mech has — no
+        //           column cell is drawn for one — and it deliberately skips
+        //           the Violent check, so mechs take their own branch below.
+        //
+        // AND ONE GATE THAT IS NOT A WIDGET AT ALL, which is why it is easy to
+        // miss: the setter itself refuses and returns SILENTLY unless
+        // `MpSync.Configurable(pawn)` holds (FSWA/MpSync.cs Configurable —
+        // `pawn != null && !pawn.Dead && !pawn.Destroyed`). Reproduced here so a
+        // dead pawn is refused with a reason rather than reported applied
+        // against a write that never happened. Deliberately NOT a Spawned check:
+        // MpSync's own comment says a caravan pawn is unspawned and still
+        // configurable from the Assign tab.
+        private static string AutoArmGate(Pawn p)
+        {
+            if (!Fswa.AutoArmAvailable) return Fswa.AutoArmUnavailable;
+            if (p.Dead || p.Destroyed)
+                return "FSWA's setter refuses a dead or destroyed pawn and returns silently "
+                    + "(FSWA/MpSync.cs Configurable), so the write would not have taken";
+            try
+            {
+                if (p.RaceProps != null && p.RaceProps.IsMechanoid)
+                {
+                    bool? usable = Fswa.IsWeaponUsableMech(p, out string mechError);
+                    // A probe we could not run is reported as such. Answering
+                    // "not a weapon-capable mech" here would be the same class
+                    // of lie as reporting auto-arm off because the read threw.
+                    if (usable == null)
+                        return "this pawn is a mechanoid and FSWA's mech route could not be checked, so "
+                            + "the gate is unknown rather than closed: " + mechError;
+                    if (!usable.Value)
+                        return "FSWA offers auto-arm to a mechanoid only when it can hold a weapon "
+                            + "(FSWA/MechUtility.cs IsWeaponUsableMech: player faction, an equipment "
+                            + "tracker, and a pawn class implementing Fortified.IWeaponUsable)";
+                    return null;
+                }
+                if (!p.IsColonist)
+                    return "the auto-arm checkbox is drawn for colonists only "
+                        + "(FSWA/PawnColumnWorker_AutoArm.cs HasCheckbox); the gizmo's only other route "
+                        + "is a weapon-capable player mechanoid";
+                if (p.WorkTagIsDisabled(WorkTags.Violent))
+                    return "this pawn is incapable of Violence: the Assign-tab checkbox is not drawn "
+                        + "(PawnColumnWorker_AutoArm.HasCheckbox) and the gizmo is disabled with "
+                        + "FSWA_CannotViolent";
             }
             catch (Exception e) { return e.GetType().Name + ": " + e.Message; }
             return null;
