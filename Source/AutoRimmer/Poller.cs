@@ -369,7 +369,11 @@ namespace AutoRimmer
               .Append(",\"speed\":").Append(MiniJson.J(snap.speed))
               .Append(",\"tick\":").Append(snap.tick)
               .Append(",\"fps\":").Append(MiniJson.N(snap.fps))
-              .Append(",\"activeOp\":").Append(MiniJson.J(snap.activeOp));
+              // The snapshot outlives the main thread that published it: after
+              // an unload, snap.activeOp still names the command the boundary
+              // reset already answered. gameLoaded:false governs, but a stale
+              // op name beside it reads as a contradiction — null it instead.
+              .Append(",\"activeOp\":").Append(MiniJson.J(loaded ? snap.activeOp : null));
             if (TimeDriver.Active)
             {
                 sb.Append(",\"advance\":{\"id\":").Append(MiniJson.J(TimeDriver.ActiveId))
