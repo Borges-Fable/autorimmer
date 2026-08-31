@@ -30,8 +30,24 @@ namespace AutoRimmer
         // Serializes an object tree. Unknown types fall back to their ToString()
         // as a JSON string — the writer must never throw, because every consumed
         // command owes exactly one result file.
-        public static void Write(StringBuilder sb, object value)
+        //
+        // "Must never throw" was a comment, not a property, until 1.5: the
+        // default arm called value.ToString() unguarded and AppendString NREd
+        // on a null string, and both are reachable the moment a wave-2/3 verb
+        // returns a Verse object (git-bug 4b65a28, defect 4). MaxDepth is the
+        // third guard: a self-referential tree would recurse to a
+        // StackOverflowException, which no try/catch in .NET can catch.
+        private const int MaxDepth = 64;
+
+        public static void Write(StringBuilder sb, object value) => Write(sb, value, 0);
+
+        private static void Write(StringBuilder sb, object value, int depth)
         {
+            if (depth > MaxDepth)
+            {
+                AppendString(sb, "<autorimmer: nesting past " + MaxDepth + " levels>");
+                return;
+            }
             switch (value)
             {
                 case null: sb.Append("null"); break;
@@ -51,7 +67,7 @@ namespace AutoRimmer
                         first = false;
                         AppendString(sb, kv.Key);
                         sb.Append(':');
-                        Write(sb, kv.Value);
+                        Write(sb, kv.Value, depth + 1);
                     }
                     sb.Append('}');
                     break;
@@ -62,30 +78,47 @@ namespace AutoRimmer
                     for (int idx = 0; idx < list.Count; idx++)
                     {
                         if (idx > 0) sb.Append(',');
-                        Write(sb, list[idx]);
+                        Write(sb, list[idx], depth + 1);
                     }
                     sb.Append(']');
                     break;
                 }
                 case IEnumerable<string> strings:
                 {
+                    // Per element through Write, not AppendString: a null
+                    // element is JSON null, not "".
                     sb.Append('[');
                     bool first = true;
                     foreach (var s in strings)
                     {
                         if (!first) sb.Append(',');
                         first = false;
-                        AppendString(sb, s);
+                        Write(sb, s, depth + 1);
                     }
                     sb.Append(']');
                     break;
                 }
-                default: AppendString(sb, value.ToString()); break;
+                default:
+                {
+                    // A Verse object's ToString() is arbitrary game code and
+                    // can throw or return null. Losing the whole result — and,
+                    // before 1.5, the rest of the poller cycle with it — over
+                    // one field is not a trade worth making.
+                    string s;
+                    try { s = value.ToString(); }
+                    catch (Exception e) { s = "<autorimmer: " + value.GetType().Name + ".ToString() threw " + e.GetType().Name + ">"; }
+                    AppendString(sb, s);
+                    break;
+                }
             }
         }
 
         private static void AppendString(StringBuilder sb, string s)
         {
+            // Belt and braces: Write routes nulls to the JSON `null` literal
+            // before they reach here, and Dictionary<string,object> cannot hold
+            // a null key — but this used to NRE and it is one branch to close.
+            if (s == null) { sb.Append("\"\""); return; }
             sb.Append('"');
             foreach (char c in s)
             {

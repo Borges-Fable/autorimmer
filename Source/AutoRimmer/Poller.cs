@@ -211,6 +211,22 @@ namespace AutoRimmer
 
         private static string IdOf(string file) => Path.GetFileNameWithoutExtension(file);
 
+        // One result FILE per command id. Sanitizing alone collapsed distinct
+        // ids onto one filename — "a/b" and "a_b" both became "a_b.json", so
+        // one command silently overwrote the other's result (git-bug 4b65a28).
+        // A clean id (letters, digits, - and _, which is every id rwa
+        // generates) is passed through byte-for-byte, so this changes no
+        // existing filename; anything the sanitizer had to touch gets the
+        // original id's hash appended, which makes the mapping injective again.
+        private static string ResultFileName(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return "unnamed.json";
+            string safe = Sanitize(id);
+            if (safe == id && id.Length <= 120) return safe + ".json";
+            if (safe.Length > 120) safe = safe.Substring(0, 120);
+            return safe + "-" + StableHash(id) + ".json";
+        }
+
         private static string Sanitize(string id)
         {
             if (string.IsNullOrEmpty(id)) return "unnamed";
@@ -220,10 +236,54 @@ namespace AutoRimmer
             return sb.ToString();
         }
 
+        // FNV-1a 32-bit. Deliberately not string.GetHashCode(): that is
+        // randomized per process on some runtimes, and the same id must map to
+        // the same filename across a relaunch (the stale-on-restart answer is
+        // written to it).
+        private static string StableHash(string s)
+        {
+            uint h = 2166136261;
+            foreach (char c in s)
+            {
+                h ^= c;
+                h *= 16777619;
+            }
+            return h.ToString("x8");
+        }
+
+        // Every consumed command owes exactly one result file, so the JSON
+        // BUILD has to be inside the guard too, not just the write. Before 1.5
+        // only AtomicWrite was guarded, and the result was already dequeued by
+        // then: a serializer throw lost that result permanently AND aborted the
+        // rest of the poller cycle — the remaining results, the journal flush
+        // and the status heartbeat with it (git-bug 4b65a28, defect 4).
+        //
+        // MiniJson.Write is now throw-proof in its own right; this is the
+        // second line of defence, and it degrades to a result file that says
+        // what happened rather than to silence.
+        private static void WriteResult(Result r)
+        {
+            if (r == null) return;
+            string path;
+            try { path = Path.Combine(resultsDir, ResultFileName(r.Id)); }
+            catch { return; } // nowhere to write it; nothing further is possible
+            string content;
+            try
+            {
+                content = BuildResultJson(r);
+            }
+            catch (Exception e)
+            {
+                try { content = FallbackResultJson(r, e); }
+                catch { return; }
+            }
+            AtomicWrite(path, content);
+        }
+
         // Envelope per DESIGN.md §Protocol, plus a small state header on every
         // response (open-question resolution: yes — the agent learns when its
         // command landed without a second round trip).
-        private static void WriteResult(Result r)
+        private static string BuildResultJson(Result r)
         {
             var snap = Runtime.GameState;
             var sb = new StringBuilder(512);
@@ -249,7 +309,26 @@ namespace AutoRimmer
             sb.Append(",\"sid\":").Append(MiniJson.J(Runtime.SessionId))
               .Append(",\"ts\":").Append(MiniJson.J(DateTime.UtcNow.ToString("o")))
               .Append('}');
-            AtomicWrite(Path.Combine(resultsDir, Sanitize(r.Id) + ".json"), sb.ToString());
+            return sb.ToString();
+        }
+
+        // Hand-built from nothing but MiniJson.J over known-safe strings, so it
+        // cannot fail the same way the real builder did. The command still gets
+        // its one result file and the caller still learns the id, the op and
+        // why.
+        private static string FallbackResultJson(Result r, Exception e)
+        {
+            var sb = new StringBuilder(384);
+            sb.Append("{\"id\":").Append(MiniJson.J(r.Id))
+              .Append(",\"op\":").Append(MiniJson.J(r.Op))
+              .Append(",\"ok\":false,\"error\":{\"code\":").Append(MiniJson.J(Err.Exception))
+              .Append(",\"detail\":").Append(MiniJson.J(
+                  "result serialization failed; the result data is lost but the command is answered: "
+                  + Journal.Truncate(e.ToString(), 1500)))
+              .Append("},\"sid\":").Append(MiniJson.J(Runtime.SessionId))
+              .Append(",\"ts\":").Append(MiniJson.J(DateTime.UtcNow.ToString("o")))
+              .Append('}');
+            return sb.ToString();
         }
 
         private static void WriteStatus()
