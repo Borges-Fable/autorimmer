@@ -461,11 +461,12 @@ namespace AutoRimmer
 
             var available = new List<object>();
             var blocked = new List<object>();
-            int total = 0;
-            string fatal = ScanWorkGivers(pawn, target, thing != null, cap,
+            int total = 0, availableTotal = 0, blockedTotal = 0;
+            string fatal = ScanWorkGivers(pawn, target, thing != null,
                 (giver, scanner, job, label, why) =>
                 {
                     total++;
+                    if (why == null) availableTotal++; else blockedTotal++;
                     var line = new Dictionary<string, object>
                     {
                         ["work"] = giver.defName,
@@ -495,7 +496,14 @@ namespace AutoRimmer
                     }
                     : new Dictionary<string, object> { ["kind"] = "cell", ["at"] = Positions.Out(cell) },
                 ["available"] = available,
+                // Truncation is a contract (2.1's rule, kept): the WALK covers
+                // every WorkGiverDef, only the printed lists are capped, and
+                // what was dropped is published rather than implied.
+                ["available_total"] = availableTotal,
+                ["available_more"] = Math.Max(0, availableTotal - available.Count),
                 ["blocked"] = blocked,
+                ["blocked_total"] = blockedTotal,
+                ["blocked_more"] = Math.Max(0, blockedTotal - blocked.Count),
                 ["total"] = total,
                 ["unavailable_reason"] = fatal,
                 ["note"] = "WorkGiverDef.directOrderable defaults true, so this list is as wide as the "
@@ -548,7 +556,7 @@ namespace AutoRimmer
             WorkGiver_Scanner scanner = null;
             string label = null, why = null;
             bool matched = false;
-            string fatal = ScanWorkGivers(pawn, target, thing != null, int.MaxValue,
+            string fatal = ScanWorkGivers(pawn, target, thing != null,
                 (g, s, j, l, w) =>
                 {
                     if (g != giverDef) return;
@@ -1168,7 +1176,7 @@ namespace AutoRimmer
         // (which acts). Returns a fatal reason when the pawn has no work think
         // node at all, else null; calls `sink` once per work giver with
         // (giverDef, scanner, job-or-null, label, reason-or-null).
-        private static string ScanWorkGivers(Pawn pawn, LocalTargetInfo target, bool hasThing, int cap,
+        private static string ScanWorkGivers(Pawn pawn, LocalTargetInfo target, bool hasThing,
             Action<WorkGiverDef, WorkGiver_Scanner, Job, string, string> sink)
         {
             try
@@ -1178,13 +1186,19 @@ namespace AutoRimmer
             }
             catch { return "this pawn's think tree could not be read"; }
 
-            int emitted = 0;
+            // NO EARLY EXIT. The walk always covers every WorkGiverDef, for two
+            // reasons: `prioritize` must see the one it was NAMED, wherever it
+            // sits in the order; and truncating the walk would truncate
+            // `total` silently, which breaks the project's standing
+            // truncation-is-a-contract rule (cap the OUTPUT, count the truth).
+            // The cost is bounded by the bench's WorkGiverDef count, not by map
+            // size, and each check is exactly what the float menu runs when it
+            // opens.
             foreach (var workType in DefDatabase<WorkTypeDef>.AllDefsListForReading)
             {
                 if (workType?.workGiversByPriority == null) continue;
                 foreach (var giver in workType.workGiversByPriority)
                 {
-                    if (emitted >= cap * 2) return null;
                     if (giver == null) continue;
                     try
                     {
@@ -1227,7 +1241,6 @@ namespace AutoRimmer
                             why = PrioritizeRejection(pawn, scanner, job, target, hasThing, out string better);
                             if (better != null) label = better;
                         }
-                        emitted++;
                         sink(giver, scanner, why == null ? job : null, label, why);
                     }
                     catch (Exception e)
