@@ -37,6 +37,7 @@ namespace AutoRimmer
         private static bool haltOnError;
         private static int timeoutTicks;
         private static int effMaxTps;
+        private static int askedMaxTps;
         private static int startTick;
         private static long startSeq;
         private static DateTime startWall;
@@ -115,8 +116,13 @@ namespace AutoRimmer
 
             haltOnError = args.Bool("halt_on_error", true);
             timeoutTicks = args.Int("timeout_ticks", until == Until.Ticks ? 0 : 600000);
+            // Config.MinTps is a FLOOR as well as MaxTpsCap being a ceiling,
+            // and both are enforced regardless of what the caller asked for.
+            // The floor was undocumented (1.5 nit); it is now named, explained
+            // where it is defined, and reported below when it actually bit.
             int askedTps = args.Int("max_tps", Config.MaxTpsCap);
-            effMaxTps = Math.Min(Math.Max(30, askedTps), Config.MaxTpsCap); // hard cap, always
+            effMaxTps = Math.Min(Math.Max(Config.MinTps, askedTps), Config.MaxTpsCap);
+            askedMaxTps = askedTps;
 
             // Own the pause. The CurTimeSpeed setter silently no-ops when the
             // player cannot control time (cutscenes, landing confirmations) —
@@ -354,6 +360,16 @@ namespace AutoRimmer
                     : new List<object>(),
                 ["slower_spans"] = new List<object>(slowerSpans),
             };
+            // Present ONLY when the caller's number was moved, so silence means
+            // "you got what you asked for". A floor nobody documents is a floor
+            // nobody can debug (1.5 nit).
+            if (askedMaxTps != effMaxTps)
+                data["max_tps_clamped"] = new Dictionary<string, object>
+                {
+                    ["asked"] = askedMaxTps,
+                    ["to"] = effMaxTps,
+                    ["by"] = askedMaxTps < Config.MinTps ? "floor" : "cap",
+                };
             if (haltEvent != null)
             {
                 data["halted_on"] = haltEvent;

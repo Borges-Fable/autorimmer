@@ -26,7 +26,13 @@ namespace AutoRimmer
                 float dt = Time.unscaledDeltaTime;
                 if (dt > 0) fpsEma = fpsEma * 0.95 + (1.0 / dt) * 0.05;
                 PublishSnapshot();
-                AlertScanner.Tick();
+                // Isolated, because it reads MODDED code (Alert.Label and
+                // Alert.Priority are both virtual). A throw here used to skip
+                // the rest of this body for the frame — the command drain and
+                // the advance loop included — which is how a third-party alert
+                // could silently stall the bridge (1.5 nit).
+                try { AlertScanner.Tick(); }
+                catch (Exception e) { Log.Warning("[AutoRimmer] alert scan error: " + e); }
                 DrainCommands();
                 TimeDriver.FrameStep();
             }
