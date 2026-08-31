@@ -105,11 +105,9 @@ namespace AutoRimmer
                 });
             }
 
-            long seq = outcome.Count > 0
-                ? Act(verb, want ? "drafted" : "undrafted",
-                      outcome.Count + " pawn(s)",
-                      new Dictionary<string, object> { ["ids"] = ids })
-                : 0;
+            long seq = ActOn(outcome, verb, want ? "drafted" : "undrafted",
+                outcome.Count + " pawn(s)",
+                new Dictionary<string, object> { ["ids"] = ids });
 
             return outcome.Result(verb, seq, new Dictionary<string, object>
             {
@@ -241,10 +239,8 @@ namespace AutoRimmer
                 outcome.Ok(p, line);
             }
 
-            long seq = outcome.Count > 0
-                ? Act(V, "goto", $"({to.x},{to.z})",
-                      new Dictionary<string, object> { ["ids"] = ids, ["to"] = Positions.Out(to) })
-                : 0;
+            long seq = ActOn(outcome, V, "goto", $"({to.x},{to.z})",
+                new Dictionary<string, object> { ["ids"] = ids, ["to"] = Positions.Out(to) });
 
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
@@ -370,22 +366,68 @@ namespace AutoRimmer
                         string.IsNullOrEmpty(failStr) ? "the game offers no attack option here" : failStr);
                     continue;
                 }
+                // 4087644. `attack` cannot take the pre-check the other job
+                // verbs take, because it never builds the Job:
+                // FloatMenuUtility.GetRangedAttackAction / GetMeleeAttackAction
+                // hand back a delegate that constructs and takes the order
+                // internally, and wrapping the game's own static beats
+                // reimplementing it (this file's header, the wrap-don't-reinvent
+                // rule). So the collision is caught BEHAVIOURALLY instead: what
+                // the pawn was doing before the delegate ran, against what it is
+                // doing after.
+                //
+                // THIS IS A PROBE, NOT A PREDICTION, and the difference is not
+                // cosmetic. Unchanged state cannot distinguish "was already
+                // doing it" from "the game's delegate declined silently" — both
+                // look identical from out here, and the reason string says so
+                // rather than picking one. Do NOT unify this with
+                // PawnActs.AlreadyDoing in a later pass: the pre-check knows
+                // WHY the order did nothing, this only knows THAT it did.
+                int beforeJob = -1, beforeQueue = -1;
+                try
+                {
+                    beforeJob = p.jobs?.curJob?.loadID ?? -1;
+                    beforeQueue = p.jobs?.jobQueue?.Count ?? -1;
+                }
+                catch { }
                 action();
+                int afterJob = -1, afterQueue = -1;
+                try
+                {
+                    afterJob = p.jobs?.curJob?.loadID ?? -1;
+                    afterQueue = p.jobs?.jobQueue?.Count ?? -1;
+                }
+                catch { }
+                if (beforeJob == afterJob && beforeQueue == afterQueue)
+                {
+                    var same = JobLine(p);
+                    same["attack"] = chosen;
+                    same["job_id_before"] = beforeJob;
+                    same["queued_before"] = beforeQueue;
+                    outcome.No(p, GateAlready,
+                        "the order changed nothing — the pawn's current job (id " + beforeJob
+                        + ") and its job queue are identical after it. Either the pawn was already "
+                        + "running an equivalent job, in which case "
+                        + "Pawn_JobTracker.TryTakeOrderedJob returns true without taking the order "
+                        + "(Job.JobIsSameAs against curJob), or the game's own attack delegate "
+                        + "declined silently. This is a before/after probe, so it cannot tell those "
+                        + "two apart; it can only tell you nothing happened.",
+                        same);
+                    continue;
+                }
                 ids.Add(p.thingIDNumber);
                 var line = JobLine(p);
                 line["attack"] = chosen;
                 outcome.Ok(p, line);
             }
 
-            long seq = outcome.Count > 0
-                ? Act(V, "attack", Safe(() => target.LabelShortCap.ToString()) ?? target.def?.defName,
-                      new Dictionary<string, object>
-                      {
-                          ["ids"] = ids,
-                          ["target"] = target.thingIDNumber,
-                          ["removal"] = removal,
-                      })
-                : 0;
+            long seq = ActOn(outcome, V, "attack", Safe(() => target.LabelShortCap.ToString()) ?? target.def?.defName,
+                new Dictionary<string, object>
+                {
+                    ["ids"] = ids,
+                    ["target"] = target.thingIDNumber,
+                    ["removal"] = removal,
+                });
 
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
@@ -776,12 +818,31 @@ namespace AutoRimmer
                 outcome.Ok(p, line);
             }
 
-            long seq = outcome.Count > 0
-                ? Act(V, "clear", outcome.Count + " pawn(s)",
-                      new Dictionary<string, object> { ["ids"] = ids })
-                : 0;
+            long seq = ActOn(outcome, V, "clear", outcome.Count + " pawn(s)",
+                new Dictionary<string, object> { ["ids"] = ids });
             return outcome.Result(V, seq);
         }
+
+        // `equip` / `wear` / `consume` each have refusal exits that return
+        // early, so their `action` row is factored out here and called from
+        // every exit — a refused order journals the same way an accepted one
+        // does (4087644 comment #1). ActOn decides whether a row is owed.
+        private static long EquipRow(Outcome outcome, string verb, string label, Pawn pawn, Thing thing)
+            => ActOn(outcome, verb, "equip", label,
+                new Dictionary<string, object> { ["pawn"] = pawn.thingIDNumber, ["thing"] = thing.thingIDNumber });
+
+        private static long WearRow(Outcome outcome, string verb, Pawn pawn, Apparel apparel)
+            => ActOn(outcome, verb, "wear", Safe(() => apparel.LabelShort) ?? apparel.def?.defName,
+                new Dictionary<string, object> { ["pawn"] = pawn.thingIDNumber, ["thing"] = apparel.thingIDNumber });
+
+        private static long ConsumeRow(Outcome outcome, string verb, Pawn pawn, Thing thing, int count)
+            => ActOn(outcome, verb, "ingest", Safe(() => thing.LabelShort) ?? thing.def?.defName,
+                new Dictionary<string, object>
+                {
+                    ["pawn"] = pawn.thingIDNumber,
+                    ["thing"] = thing.thingIDNumber,
+                    ["count"] = count,
+                });
 
         // ===================== rescue / capture / arrest / carry ==============
         // Four distinct orders that all end in "one colonist takes one downed
@@ -851,7 +912,15 @@ namespace AutoRimmer
                     // downed pawn is otherwise silently unreachable.
                     try { target.SetForbidden(value: false, warnOnFail: false); } catch { }
                 }
-                if (!doer.jobs.TryTakeOrderedJob(job, JobTag.Misc, ctx.Args.Bool("queue", false)))
+                bool queued = ctx.Args.Bool("queue", false);
+                // 4087644 — PawnActs.AlreadyDoing. All four kinds share this
+                // site, so all four get the gate.
+                if (AlreadyDoing(doer, job))
+                {
+                    outcome.No(doer, GateAlready, AlreadyWhy(queued), AlreadyLine(doer, queued));
+                    continue;
+                }
+                if (!doer.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
                 {
                     outcome.No(doer, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job "
                         + "(pre-toil reservations failed)");
@@ -863,10 +932,8 @@ namespace AutoRimmer
                 outcome.Ok(doer, line);
             }
 
-            long seq = outcome.Count > 0
-                ? Act(kind, kind, PawnSafe.Name(target),
-                      new Dictionary<string, object> { ["ids"] = ids, ["target"] = target.thingIDNumber })
-                : 0;
+            long seq = ActOn(outcome, kind, kind, PawnSafe.Name(target),
+                new Dictionary<string, object> { ["ids"] = ids, ["target"] = target.thingIDNumber });
 
             return outcome.Result(kind, seq, new Dictionary<string, object>
             {
@@ -1023,20 +1090,28 @@ namespace AutoRimmer
             if (gate != null)
             {
                 outcome.No(pawn, gate, reason);
-                return outcome.Result(V, 0, new Dictionary<string, object> { ["thing"] = thing.thingIDNumber, ["label"] = label });
+                return outcome.Result(V, EquipRow(outcome, V, label, pawn, thing),
+                    new Dictionary<string, object> { ["thing"] = thing.thingIDNumber, ["label"] = label });
             }
 
             // The provider's Equip() local: un-forbid, then order.
             try { thing.SetForbidden(value: false); } catch { }
-            if (!pawn.jobs.TryTakeOrderedJob(JobMaker.MakeJob(JobDefOf.Equip, thing), JobTag.Misc,
-                    ctx.Args.Bool("queue", false)))
+            bool queued = ctx.Args.Bool("queue", false);
+            var job = JobMaker.MakeJob(JobDefOf.Equip, thing);
+            // 4087644 — PawnActs.AlreadyDoing.
+            if (AlreadyDoing(pawn, job))
+            {
+                outcome.No(pawn, GateAlready, AlreadyWhy(queued), AlreadyLine(pawn, queued));
+                return outcome.Result(V, EquipRow(outcome, V, label, pawn, thing),
+                    new Dictionary<string, object> { ["thing"] = thing.thingIDNumber, ["label"] = label });
+            }
+            if (!pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
             {
                 outcome.No(pawn, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job");
-                return outcome.Result(V, 0);
+                return outcome.Result(V, EquipRow(outcome, V, label, pawn, thing));
             }
             outcome.Ok(pawn, JobLine(pawn));
-            long seq = Act(V, "equip", label,
-                new Dictionary<string, object> { ["pawn"] = pawn.thingIDNumber, ["thing"] = thing.thingIDNumber });
+            long seq = EquipRow(outcome, V, label, pawn, thing);
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
                 ["thing"] = thing.thingIDNumber,
@@ -1087,19 +1162,32 @@ namespace AutoRimmer
             if (gate != null)
             {
                 outcome.No(pawn, gate, reason);
-                return outcome.Result(V, 0, new Dictionary<string, object> { ["thing"] = apparel.thingIDNumber });
+                return outcome.Result(V, WearRow(outcome, V, pawn, apparel),
+                    new Dictionary<string, object> { ["thing"] = apparel.thingIDNumber });
             }
 
             try { apparel.SetForbidden(value: false); } catch { }
-            if (!pawn.jobs.TryTakeOrderedJob(JobMaker.MakeJob(JobDefOf.Wear, apparel), JobTag.Misc,
-                    ctx.Args.Bool("queue", false)))
+            bool queued = ctx.Args.Bool("queue", false);
+            var job = JobMaker.MakeJob(JobDefOf.Wear, apparel);
+            // 4087644 — PawnActs.AlreadyDoing. THIS IS THE VERB THAT BIT US:
+            // marine armour force-worn on four pawns whose apparel policy
+            // independently wanted the same armour, `accepted:1` on all four,
+            // three armoured and one not, and no way to tell which mechanism
+            // dressed whom. `forced` on the apparel row (PawnSerializer.Apparel)
+            // is the durable other half of that answer.
+            if (AlreadyDoing(pawn, job))
+            {
+                outcome.No(pawn, GateAlready, AlreadyWhy(queued), AlreadyLine(pawn, queued));
+                return outcome.Result(V, WearRow(outcome, V, pawn, apparel),
+                    new Dictionary<string, object> { ["thing"] = apparel.thingIDNumber });
+            }
+            if (!pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
             {
                 outcome.No(pawn, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job");
-                return outcome.Result(V, 0);
+                return outcome.Result(V, WearRow(outcome, V, pawn, apparel));
             }
             outcome.Ok(pawn, JobLine(pawn));
-            long seq = Act(V, "wear", Safe(() => apparel.LabelShort) ?? apparel.def?.defName,
-                new Dictionary<string, object> { ["pawn"] = pawn.thingIDNumber, ["thing"] = apparel.thingIDNumber });
+            long seq = WearRow(outcome, V, pawn, apparel);
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
                 ["thing"] = apparel.thingIDNumber,
@@ -1133,8 +1221,12 @@ namespace AutoRimmer
                 if (primary == null) { outcome.No(p, "no-primary", "this pawn carries no primary equipment"); continue; }
                 if (p.IsQuestLodger() && !EquipmentUtility.QuestLodgerCanUnequip(primary, p))
                 { outcome.No(p, "quest", Tr("QuestRelated", "quest-related")); continue; }
-                if (!p.jobs.TryTakeOrderedJob(JobMaker.MakeJob(JobDefOf.DropEquipment, primary), JobTag.Misc,
-                        ctx.Args.Bool("queue", false)))
+                bool queued = ctx.Args.Bool("queue", false);
+                var job = JobMaker.MakeJob(JobDefOf.DropEquipment, primary);
+                // 4087644 — PawnActs.AlreadyDoing.
+                if (AlreadyDoing(p, job))
+                { outcome.No(p, GateAlready, AlreadyWhy(queued), AlreadyLine(p, queued)); continue; }
+                if (!p.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
                 { outcome.No(p, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job"); continue; }
                 ids.Add(p.thingIDNumber);
                 var line = JobLine(p);
@@ -1143,10 +1235,8 @@ namespace AutoRimmer
                 outcome.Ok(p, line);
             }
 
-            long seq = outcome.Count > 0
-                ? Act(V, "drop-primary", outcome.Count + " pawn(s)",
-                      new Dictionary<string, object> { ["ids"] = ids })
-                : 0;
+            long seq = ActOn(outcome, V, "drop-primary", outcome.Count + " pawn(s)",
+                new Dictionary<string, object> { ["ids"] = ids });
             return outcome.Result(V, seq);
         }
 
@@ -1199,25 +1289,30 @@ namespace AutoRimmer
             if (gate != null)
             {
                 outcome.No(pawn, gate, reason);
-                return outcome.Result(V, 0, new Dictionary<string, object> { ["thing"] = thing.thingIDNumber });
+                return outcome.Result(V, ConsumeRow(outcome, V, pawn, thing, count),
+                    new Dictionary<string, object> { ["thing"] = thing.thingIDNumber });
             }
 
             try { thing.SetForbidden(value: false); } catch { }
+            bool queued = ctx.Args.Bool("queue", false);
             var job = JobMaker.MakeJob(JobDefOf.Ingest, thing);
             job.count = count;
-            if (!pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc, ctx.Args.Bool("queue", false)))
+            // 4087644 — PawnActs.AlreadyDoing. `count` is NOT compared by
+            // Job.JobIsSameAs, so a pawn already eating this thing swallows an
+            // order for a different amount too.
+            if (AlreadyDoing(pawn, job))
+            {
+                outcome.No(pawn, GateAlready, AlreadyWhy(queued), AlreadyLine(pawn, queued));
+                return outcome.Result(V, ConsumeRow(outcome, V, pawn, thing, count),
+                    new Dictionary<string, object> { ["thing"] = thing.thingIDNumber });
+            }
+            if (!pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
             {
                 outcome.No(pawn, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job");
-                return outcome.Result(V, 0);
+                return outcome.Result(V, ConsumeRow(outcome, V, pawn, thing, count));
             }
             outcome.Ok(pawn, JobLine(pawn));
-            long seq = Act(V, "ingest", Safe(() => thing.LabelShort) ?? thing.def?.defName,
-                new Dictionary<string, object>
-                {
-                    ["pawn"] = pawn.thingIDNumber,
-                    ["thing"] = thing.thingIDNumber,
-                    ["count"] = count,
-                });
+            long seq = ConsumeRow(outcome, V, pawn, thing, count);
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
                 ["thing"] = thing.thingIDNumber,

@@ -186,6 +186,28 @@ namespace AutoRimmer
                 ["provenance"] = "not applicable — nothing was mutated",
             };
 
+        // The `action` row for a verb built on Outcome, and the ONLY route
+        // those verbs should use. It decides for itself whether a row is owed —
+        // `Outcome.Reached`, i.e. the verb got as far as a verdict on at least
+        // one target — so the decision cannot drift between call sites, which
+        // is exactly how it drifted before: fourteen sites guarded `Act` with
+        // `outcome.Count > 0 ? … : 0` while six single-target verbs reached
+        // `Act` unconditionally because they early-returned on refusal instead.
+        // A fix phrased as "change the ternary" would have missed those six.
+        //
+        // The verdict rides in the payload so the journal alone answers "which
+        // of my orders did nothing" — see Outcome.Verdict.
+        private static long ActOn(Outcome outcome, string verb, string step, string target,
+            Dictionary<string, object> extra = null)
+        {
+            if (outcome == null || !outcome.Reached) return 0;
+            var payload = new Dictionary<string, object> { ["verdict"] = outcome.Verdict() };
+            if (extra != null)
+                foreach (var kv in extra)
+                    payload[kv.Key] = kv.Value;
+            return Act(verb, step, target, payload);
+        }
+
         // ------------------- the per-pawn result accumulator -----------------
         // DESIGN's "candidates + reasons, never bare booleans", in the plural
         // form: every verb reports what it did per pawn AND what it refused,
@@ -242,6 +264,45 @@ namespace AutoRimmer
 
             public int Count => Accepted.Count;
 
+            // Did the verb REACH its targets — landed or refused? This is the
+            // journal's gate, and it is deliberately not `Count`.
+            //
+            // git-bug 4087644 comment #1: `Outcome.Result` used to stamp off
+            // Accepted.Count, so a call where every pawn was refused wrote NO
+            // `action` row at all — which means THE WASTED ORDERS WERE EXACTLY
+            // THE ONES INVISIBLE TO THE LEDGER. `journal {types:["action"]}` is
+            // the aggregate the agent learns from, so "which of my instructions
+            // are redundant" was unanswerable at session end no matter how good
+            // the per-call reporting got. A reached-but-changed-nothing call now
+            // journals, carrying its verdict.
+            //
+            // Reaching none of them is still no row: a verb that threw on
+            // argument resolution, or was handed an empty pawn list, mutated
+            // nothing and owes the journal nothing.
+            public bool Reached => Accepted.Count > 0 || Rejected.Count > 0;
+
+            // The verdict the `action` row carries, so the journal ALONE
+            // answers "which of my orders did nothing" without a join back to
+            // the result envelope the agent no longer has.
+            public Dictionary<string, object> Verdict()
+            {
+                var byGate = new Dictionary<string, object>();
+                for (int i = 0; i < Rejected.Count; i++)
+                {
+                    var row = Rejected[i] as Dictionary<string, object>;
+                    if (row == null) continue;
+                    string g = row.TryGetValue("gate", out var raw) ? raw as string : null;
+                    if (string.IsNullOrEmpty(g)) continue;
+                    byGate[g] = (byGate.TryGetValue(g, out var n) ? (int)n : 0) + 1;
+                }
+                return new Dictionary<string, object>
+                {
+                    ["accepted"] = Accepted.Count,
+                    ["rejected"] = Rejected.Count,
+                    ["by_gate"] = byGate,
+                };
+            }
+
             public Dictionary<string, object> Result(string verb, long seq, Dictionary<string, object> extra = null)
             {
                 var d = new Dictionary<string, object>
@@ -254,7 +315,11 @@ namespace AutoRimmer
                         ["accepted"] = Accepted.Count,
                         ["rejected"] = Rejected.Count,
                     },
-                    ["action"] = Accepted.Count > 0 ? Stamp(seq) : NoStamp(),
+                    // Reached, not Accepted — see Outcome.Reached. A call that
+                    // refused every target still journaled, and saying
+                    // "nothing was mutated" over a written row is the same
+                    // false negative e8f2c32 fixed in the matrix path.
+                    ["action"] = Reached ? Stamp(seq) : NoStamp(),
                 };
                 if (extra != null) foreach (var kv in extra) d[kv.Key] = kv.Value;
                 return d;
@@ -542,16 +607,181 @@ namespace AutoRimmer
         // What the pawn is doing now — the same `job`/`job_def` vocabulary
         // PawnSerializer.State publishes, so an echo and an observation read
         // alike (one vocabulary, not two).
+        //
+        // `job_def` ALONE CANNOT ANSWER "DID MY ORDER CAUSE THIS" and never
+        // could: it is read off pawn.CurJobDef AFTER the order, so in a
+        // collision it faithfully re-observes the job we did NOT cause. That is
+        // 4087644, and JobFacts below is the discriminator it was missing.
         private static Dictionary<string, object> JobLine(Pawn pawn)
         {
             string job = null;
             try { job = pawn.jobs?.curDriver?.GetReport(); } catch { }
-            return new Dictionary<string, object>
+            var d = new Dictionary<string, object>
             {
                 ["job"] = Journal.Truncate(job, PawnSerializer.JobClip),
                 ["job_def"] = pawn.CurJobDef?.defName,
                 ["at"] = Positions.Out(pawn.Position),
             };
+            Job cur = null;
+            try { cur = pawn?.jobs?.curJob; } catch { }
+            foreach (var kv in JobFacts(cur)) d[kv.Key] = kv.Value;
+            return d;
+        }
+
+        // ------------------------- job attribution ---------------------------
+        // WHO ordered this job, WHEN, and under which work giver. Five plain
+        // public field reads on Verse.AI/Job.cs — loadID, playerForced,
+        // jobGiver, workGiverDef, startTick — none of them a property, none
+        // with a side effect. Published on every job line AND on `pawn`'s state
+        // so an echo and an observation stay one vocabulary.
+        //
+        // `player_forced` IS NOT THE DISCRIMINATOR, and reading it as one is
+        // the trap this block exists to close. RimWorld/JobGiver_Work.cs
+        // TryIssueJobPackage sets `playerForced = true` AUTONOMOUSLY on its
+        // emergency-prioritized branch (`emergency &&
+        // pawn.mindState.priorityWork.IsPrioritized`), with no click in that
+        // tick — it is sustaining an earlier order, and the resulting job's
+        // jobGiver is JobGiver_Work, not ThinkNode_QueuedJob. The unambiguous
+        // signature is the TRIPLE, published as `ordered`.
+        //
+        // TYPE check, never identity: the Humanlike think tree holds TWO
+        // ThinkNode_QueuedJob nodes (data/defs/ThinkTreeDefs/Humanlike.xml, one
+        // of them inBedOnly), so comparing against a single node instance
+        // misses the in-bed one.
+        //
+        // BEST EFFORT, AND NOTHING BRANCHES ON IT. Verse.AI/Job.cs ExposeData
+        // scribes no ThinkNode reference — only an int (`lastJobGiverKey`)
+        // resolved against the scribed jobGiverThinkTree, and on a miss it
+        // leaves jobGiver NULL with a Log.Warning. Those keys are worse than
+        // order-sensitive: Verse/ThinkTreeDef.cs ResolveReferences calls
+        // ThinkTreeKeyAssigner.AssignKeys BEFORE ResolveParentNodes, so at
+        // assignment time every node's parent is null and the hash collapses to
+        // the node's own TYPE NAME — same-type nodes are then separated only by
+        // `num ^= Rand.Int` in traversal order against a process-global set. So
+        // adding or removing ANY node of an already-used type ahead of them
+        // shifts the key. On a 38-mod bench that is a live possibility, which is
+        // why these fields are EVIDENCE for a reader to weigh and never a
+        // control-flow input.
+        internal static Dictionary<string, object> JobFacts(Job job)
+        {
+            if (job == null)
+                return new Dictionary<string, object>
+                {
+                    ["job_id"] = null,
+                    ["player_forced"] = null,
+                    ["job_giver"] = null,
+                    ["work_giver"] = null,
+                    ["job_start_tick"] = null,
+                    ["ordered"] = null,
+                };
+            string giver = null;
+            bool queuedNode = false;
+            try
+            {
+                var g = job.jobGiver;
+                giver = g?.GetType().Name;
+                queuedNode = g is ThinkNode_QueuedJob;
+            }
+            catch { }
+            string workGiver = null;
+            try { workGiver = job.workGiverDef?.defName; } catch { }
+            bool forced = false;
+            try { forced = job.playerForced; } catch { }
+            return new Dictionary<string, object>
+            {
+                ["job_id"] = SafeObj(() => (object)job.loadID),
+                ["player_forced"] = forced,
+                ["job_giver"] = giver,
+                ["work_giver"] = workGiver,
+                // startTick is assigned ONLY in Pawn_JobTracker.StartJob, so a
+                // job still sitting in the queue carries the uninitialised -1.
+                // Publish null rather than a sentinel that reads as a tick and
+                // becomes a wrong number in somebody's chart later.
+                ["job_start_tick"] = SafeObj(() => job.startTick >= 0 ? (object)job.startTick : null),
+                // The triple. A null jobGiver (see above) makes this false, not
+                // unknown — read a false as "no evidence", never as "proof the
+                // agent did not order it".
+                ["ordered"] = queuedNode && workGiver != null && forced,
+            };
+        }
+
+        // ------------------ the already-doing-it pre-check --------------------
+        // 4087644. Verse.AI/Pawn_JobTracker.cs TryTakeOrderedJob opens:
+        //
+        //     job.playerForced = true;
+        //     if (curJob != null && curJob.JobIsSameAs(pawn, job))
+        //     {
+        //         return true;
+        //     }
+        //
+        // A pawn already running an equivalent job makes the call return TRUE
+        // having done nothing. OUR Job — the one carrying playerForced — is
+        // discarded and curJob keeps playerForced == false. Every verb that
+        // reported that as `accepted` was telling the agent an order worked when
+        // it had changed nothing, and since `job_def` is re-read afterwards it
+        // corroborated the lie by naming the job we did not cause.
+        //
+        // UNCONDITIONAL, AND THE QUEUED CASE IS THE WORSE ONE. `requestQueueing`
+        // is not read until `isDownEvent = isDownEvent || requestQueueing`,
+        // eight lines past that return — so with queue:true a collision enqueues
+        // NOTHING: no queue entry, no current-job change, no trace at all, and
+        // the agent's model gains a queued action that does not exist.
+        // Publishing the job queue does not rescue that (there is nothing in it
+        // to publish); only this pre-check does. Note JobIsSameAs is compared
+        // against curJob ONLY, never against the queue, so this is specifically
+        // a current-job collision swallowing a queue request.
+        //
+        // DIRECTION IS LOAD-BEARING — see PawnSafe's Job.JobIsSameAs entry.
+        // The receiver must be the RUNNING job. Verse.AI/Job.cs JobIsSameAs
+        // calls GetCachedDriver(pawn), which lazily allocates a driver when
+        // cachedDriver is null and Log.Errors on a pawn mismatch. curJob is
+        // running, so it already holds its driver for this pawn and the call
+        // costs nothing; inverted — `job.JobIsSameAs(pawn, curJob)` — it would
+        // allocate a JobDriver on our fresh throwaway Job. Never write it the
+        // other way round.
+        //
+        // THE IN-REPO PRECEDENT IS `prioritize`, which has shipped exactly this
+        // test since 3.4: PrioritizeRejection in PawnOrderVerbs.cs answers
+        // "already doing exactly this" from the same comparison. This helper
+        // generalises what that verb already proved here.
+        //
+        // The candidate Job is not returned to JobMaker's pool on this path.
+        // Neither does vanilla — TryTakeOrderedJob drops it on the floor in the
+        // same case — and matching the game beats tidying after it.
+        private static bool AlreadyDoing(Pawn pawn, Job job)
+        {
+            if (pawn == null || job == null) return false;
+            try
+            {
+                var curJob = pawn.jobs?.curJob;
+                return curJob != null && curJob.JobIsSameAs(pawn, job);
+            }
+            catch { return false; }
+        }
+
+        // ONE gate value, not two. The gate names the widget clause that
+        // refused, and it is the same clause whether or not the caller asked to
+        // queue; the queue distinction is a property of the CALL, so it rides on
+        // the line as a field and any by-gate aggregation stays clean. Sibling
+        // of move-to's shipped `already-there`.
+        private const string GateAlready = "already-doing-it";
+
+        private static string AlreadyWhy(bool queued)
+            => queued
+                ? "already running an equivalent job. Pawn_JobTracker.TryTakeOrderedJob would have "
+                  + "returned true and enqueued NOTHING — the order was not queued and left no trace, "
+                  + "because its JobIsSameAs early-out fires before requestQueueing is ever read"
+                : "already running an equivalent job, so Pawn_JobTracker.TryTakeOrderedJob would have "
+                  + "returned true without taking the order (Job.JobIsSameAs against curJob)";
+
+        // The rejected line for the collision: the same diagnostic block an
+        // accepted line carries, plus the queue flag the gate deliberately does
+        // not encode.
+        private static Dictionary<string, object> AlreadyLine(Pawn pawn, bool queued)
+        {
+            var d = JobLine(pawn);
+            d["queue"] = queued;
+            return d;
         }
 
         // The durable half of a prioritized order (Verse/PriorityWork.cs). It is
