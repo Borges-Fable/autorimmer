@@ -54,9 +54,11 @@ namespace AutoRimmer
     //    => PlantToGrow(): private backing field via AccessTools; null is
     //       reported as null and `plant_default` says what the game WOULD
     //       choose. "Not configured" is a real, reportable state.
-    //    NOTE FOR THE ORCHESTRATOR: CropRenderer.Cell (Spatial.cs, spec 2.3,
-    //    shipped) calls zg.GetPlantDefToGrow() to build the zone legend, so
-    //    `map-view` trips this today. Not this spec's file to change.
+    //    All shipped callers use the guarded route — verified by grep,
+    //    2026-08-31 (git-bug 05dd70e): no file in Source/ calls
+    //    PlantDefToGrow/GetPlantDefToGrow raw; Spatial.cs (CropRenderer.Cell),
+    //    PlaceVerbs.cs, MapDumpVerbs.cs and ZoneVerbs.cs all read
+    //    WorldSafe.PlantToGrow.
     //
     //  * ResearchManager.GetProgress — RimWorld/ResearchManager.cs. On a miss
     //    it does `progress.Add(proj, 0f)` (and, for a knowledge project,
