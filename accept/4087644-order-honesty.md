@@ -1,7 +1,10 @@
 # Acceptance — 4087644, order honesty
 
-Runnable driver: `accept/4087644-order-honesty.py` (42 checks, 5 phases).
-No `.ps1` twin — this box has no pwsh and the bench lives here.
+Runnable driver: `accept/4087644-order-honesty.py`, six phases. No `.ps1` twin —
+the box that has pwsh has no bench and the box that has the bench has no python,
+so **phases 5 and 6 are driven BY HAND from the tables below**; that is how the
+first acceptance run went and how the remainder's must go. No check count is
+recorded here on purpose: it went stale within one session last time.
 
     ./accept/4087644-order-honesty.py --dry-run   # the plan, sends nothing
     ./accept/4087644-order-honesty.py             # against a live bench
@@ -64,7 +67,8 @@ from. Comment #1 supersedes — confirmed with the orchestrator before building.
 |---|---|---|
 | 2.1a–f | `pawn {pawn:A, sections:["state"]}` | keys present: `job_id`, `player_forced`, `job_giver`, `work_giver`, `job_start_tick`, `ordered` |
 | 2.2a | `wear {pawn:B, thing:AP}` then state | `job_giver == "ThinkNode_QueuedJob"` |
-| 2.2b | ″ | `ordered == true` (the triple) |
+| 2.2b | ″ | `work_giver == null` — a `wear` order has no WorkGiver |
+| 2.2c | ″ | `ordered == false`, **because** the triple requires a WorkGiver |
 | 2.3 | ″ | `player_forced == true` |
 | 2.4 | ″ | `job_start_tick >= 0` |
 | 2.5 | ″ | `job_id >= 0` |
@@ -75,6 +79,38 @@ suite knows that: `RimWorld/JobGiver_Work.cs` `TryIssueJobPackage` sets
 `playerForced = true` autonomously on its emergency-prioritized branch. The
 unambiguous signature is the triple — `jobGiver is ThinkNode_QueuedJob &&
 workGiverDef != null && playerForced` — published as `ordered`.
+
+### 2.2b WAS WRONG AND THE CODE WAS RIGHT — amended 2026-08-31 (session 9)
+
+This row asserted `ordered == true` after a plain `wear`. The orchestrator's
+acceptance run measured `ordered FALSE`, `work_giver null`, and stopped there
+rather than "fixing" the code. It was right to: `PawnActs.JobFacts` computes
+`ordered = queuedNode && workGiver != null && forced` — **exactly the triple
+this document defines in the paragraph above the table** — and a `wear` order
+has no WorkGiver, so `ordered` is false by construction. The script
+contradicted its own prose. The row now asserts what the definition implies,
+and 2.2b/2.2c split it so the *reason* is asserted beside the value: a false
+`ordered` is only honest when `work_giver` is genuinely null.
+
+Where a `true` comes from, for whoever wants the positive case: a `prioritize`
+order, which is the only kind that carries a `workGiverDef` (the provider
+stamps `job.workGiverDef = scanner.def`, and `TryTakeOrderedJobPrioritizedWork`
+stamps it again). Not driven here because phase 2's fixture is an apparel
+order.
+
+**The field name invites the misreading the script made, and renaming it is
+out of scope** (3.4's acceptance asserts on `ordered` by name). A `wear` order
+*was* ordered by the player and `ordered` says false; its honest meaning is
+"this is a prioritized-WORK order", not "the player caused this". Anything
+answering "did my order take?" must read `player_forced` **and**
+`job_giver == "ThinkNode_QueuedJob"`, or the verb's own `action.journal_seq`,
+never `ordered` alone. The recommendation on record instead of a rename: keep
+the field, and publish the pair it is derived from — which
+`PawnActs.JobFacts` already does, `player_forced` and `work_giver` sitting
+beside it on every job line — plus a one-line `note` naming what `ordered`
+means, so a reader who reaches for the wrong field is corrected in the same
+envelope. A rename belongs in whichever spec next revises `pawn`'s state
+section, with 3.4's script amended in the same commit.
 
 2.2 degrades to a NOTE rather than a FAIL when `job_giver` is null. That is
 honest, not lenient: `Job.jobGiver` is scribed as an int key resolved against
@@ -147,22 +183,22 @@ exists here" is a different claim from "this was not forced".
 | 5.2a/b/c | `work-priorities {manual:true}`, then `work-priorities {set:[{pawn:A, work:"Doctor", priority:1}]}` | `ok`, `counts.unit == "matrix cells"`, `action.journal_seq >= 1` |
 | 5.3 | `journal {types:["red_error"]}` | `count == 0` |
 
-### 5.1b DELIBERATELY BREAKS 3.4's CHECK 5.12c
+### 5.1b DELIBERATELY BREAKS 3.4's CHECK 5.12c — now amended, all three twins
 
-`accept/3.4-pawn-orders.py:905` asserts the opposite:
+`accept/3.4-pawn-orders` asserted the opposite:
 
 ```python
 eq("5.12c", "and nothing was journalled", e, "data.action.journal_seq", None)
 ```
 
-That check encodes the pre-4087644 rule — `Outcome.Result` stamped off
+That check encoded the pre-4087644 rule — `Outcome.Result` stamped off
 `Accepted.Count`, so a call that refused every target wrote no row at all. Under
-comment #1 it now writes one. **5.12c is the only assertion in the repo that
-contradicts the new contract**, verified by grepping every `journal_seq"`,
-`provenance` and `not applicable` assertion across `accept/`. It needs its one
-line amended to `ge(..., 1)` with a note pointing here. `accept/3.4-*` is
-outside this cluster's territory, so that edit is left to the orchestrator
-rather than made here.
+comment #1 it now writes one. **5.12c was the only assertion in the repo that
+contradicted the new contract**, verified by grepping every `journal_seq"`,
+`provenance` and `not applicable` assertion across `accept/`. It is now
+`>= 1` in all three twins — `.py:913`, `.md` phase 5's table row, and
+`.ps1:783`, which had been left behind when the `.py` was amended and would
+have failed a pwsh run of the same suite.
 
 ### 5.2 is the e8f2c32 regression guard
 
@@ -174,6 +210,113 @@ The journal-rule change touches the same code, so this phase re-asserts it, and
 the matrix path deliberately does **not** route through the new `ActOn` helper:
 `ActOn`'s verdict is built from `Accepted.Count` and would have re-introduced
 exactly the same false negative one level down, inside the journal row.
+
+---
+
+## Phase 6 — the remainder: every refusal journals, and `move-to` queues
+
+**Added session 9 for the 4087644 remainder and git-bug bc2250b. UNEXECUTED —
+this section is the exact call list for the orchestrator's in-game run; the
+worker who wrote it never launched anything.** Phases 1–4 already passed on the
+bench and are unaffected; run 5 and 6.
+
+Substitute real ids: **A**, **B** = two colonists · **AP** = a piece of apparel
+on the ground · **C0** = any cell where nothing is burning (A's own cell does) ·
+**P1**, **P2** = two reachable cells far apart and in *different directions*
+from A.
+
+A pawn is a `Thing` and `PawnActs.ThingArg` resolves one, so **B doubles as the
+non-apparel / non-equippable / non-mannable target** below — no hunting the
+ground for a weapon that may not be on this colony. Deliberately NOT `AP`:
+phases 1 and 4 leave it **worn**, a worn item is unspawned, and `ThingArg`
+would refuse it as "no visible thing" before the gate under test was ever
+reached — a check that fails for the wrong reason is worse than no check.
+
+Record `seq0 = journal {limit:1}`'s highest seq before starting, so the
+`journal` reads below can use `since_seq`.
+
+### 6A — the four emergency-verb rulings (4087644 remainder)
+
+| # | call | expect |
+|---|---|---|
+| 6.1a | `tend {pawn:A, target:B}` after `undraft {pawns:[A]}` | `rejected[0].gate == "drafted-only"` |
+| 6.1b | ″ | **`action.journal_seq >= 1`** — this is 5.1b, the check that failed |
+| 6.2a | `extinguish {pawns:[A], at:C0}` (nothing burning) | `counts.accepted == 0`, `rejected[0].gate == "not-burning"` |
+| 6.2b | ″ | `action.journal_seq >= 1`, and `rejected[0].at` names C0 |
+| 6.3a | `beat-fire {pawns:[A], target:B}` (B not on fire) | `rejected[0].gate == "not-burning"`, `rejected[0].thing == B` |
+| 6.3b | ″ | `action.journal_seq >= 1` |
+| 6.4a | `man-turret {pawns:[A], thing:B}` (a pawn has no CompMannable) | `rejected[0].gate == "not-mannable"` |
+| 6.4b | ″ | `action.journal_seq >= 1` |
+| 6.5 | `journal {since_seq:seq0, types:["action"]}` | rows for `extinguish`, `beat-fire`, `man` and `tend`, each carrying `verdict.by_gate` with its gate at count 1 |
+
+6.5 is the one that matters. Per-call reporting was already correct for three
+of these; what was missing is the **aggregate**, and the aggregate is what
+comment #1 says the agent learns from.
+
+### 6B — the same shape swept out of the order verbs
+
+| # | call | expect |
+|---|---|---|
+| 6.6a | `wear {pawn:A, thing:B}` (a pawn is not apparel) | `rejected[0].gate == "not-apparel"` |
+| 6.6b | ″ | `action.journal_seq >= 1` |
+| 6.7a | `equip {pawn:A, thing:B}` (a pawn has no CompEquippable) | `rejected[0].gate == "not-equippable"` |
+| 6.7b | ″ | `action.journal_seq >= 1` |
+| 6.8a | `attack {pawns:[A], target:B}` (a colonist: not hostile, not an animal, not an attackable building) | `rejected[0].gate == "cannot-target"` |
+| 6.8b | ″ | `action.journal_seq >= 1` |
+| 6.9a | `prioritize {pawn:A, work:"Warden_DeliverFood", thing:B}` — any work giver `orders {pawn:A, thing:B}` does **not** list | `ok == false`, `rejected[0].gate == "not-offered"` |
+| 6.9b | ″ | `action.journal_seq >= 1` — a refused prioritize used to publish `"not applicable — nothing was mutated"` |
+
+**Not staged, and say so rather than inventing a fixture:** `move-to`'s
+`no-standable-cell` refusal needs a destination with no standable cell within
+2.9, which cannot be produced reliably on an arbitrary colony. It takes the
+same `NoAt` route as 6.2 and is covered by inspection only.
+
+### 6C — `move-to {queue:true}` (git-bug bc2250b)
+
+This is the issue's own reproduction, re-run.
+
+| # | call | expect |
+|---|---|---|
+| 6.10 | `draft {pawns:[A]}`, then `move-to {pawns:[A], to:P1}` | `counts.accepted == 1`, `accepted[0].job_def == "Goto"`, `accepted[0].queue == false` |
+| 6.11a | `move-to {pawns:[A], to:P2, queue:true}` | `counts.accepted == 1`, `accepted[0].queue == true` |
+| 6.11b | then `pawn {pawn:A, sections:["state"]}` | `job_queue.total` **grew from 0 to 1** |
+| 6.11c | ″ | `job_queue.list[0].job_def == "Goto"`, with its own `job_id` and `job_start_tick: null` |
+| 6.11d | ″ | `state.job_def == "Goto"` still, and its `job_id` is the one from 6.10 — **the running job was not replaced** |
+| 6.12 | `advance {ticks:60}` then `pawn {pawn:A, sections:["state"]}` | the position has moved toward **P1**, not P2 — the first destination is walked first, and `job_queue.total` is still 1 |
+| 6.13a | `move-to {pawns:[A], to:P1}` while still walking to P1 | `counts.accepted == 0`, `rejected[0].gate == "already-doing-it"` |
+| 6.13b | ″ | the reason names `PawnGotoAction`'s own clause, and `action.journal_seq >= 1` |
+| 6.14 | `move-to {pawns:[A], to:<A's current cell>}` | `rejected[0].gate == "already-there"` — the shipped gate, untouched |
+| 6.15a | `attack {pawns:[A], target:B, queue:true}` | `counts.accepted == 0`, `rejected[0].gate == "queue-unsupported"` |
+| 6.15b | ″ | the reason names `FloatMenuUtility.GetRangedAttackAction`, and `action.journal_seq >= 1` |
+| 6.16 | `journal {since_seq:seq0, types:["red_error"]}` | `count == 0` |
+
+**6.11b + 6.11d together are the whole bug.** The measured failure was
+`accepted:1`, `job_queue.total 0`, and the pawn walking to the *queued*
+destination — the running job replaced and success reported. Either half alone
+would miss it: a grown queue with the running job also replaced is still wrong,
+and an unchanged running job with an empty queue means the order vanished.
+
+**Pick P1 and P2 at least ~10 cells out, and keep 6.12's advance short.** A
+colonist covers a cell every ~13–20 ticks, so the issue's original 150 would
+let it ARRIVE at a nearby P1, start the queued job, and make 6.13 test the
+wrong thing. If `job_queue.total` has dropped to 0 before 6.13, the collision
+was not staged — shorten the advance and re-run rather than recording a fail.
+
+**6.13 is the second defect the fix uncovered**, and it was never in either
+issue: `PawnGotoAction` returns `flag = true` for a pawn already walking to
+that exact cell, so `move-to` reported `accepted:1` for an order that did
+nothing. That is 4087644's family reached by a different road — the verb never
+touched `TryTakeOrderedJob`, so `AlreadyDoing` never saw it.
+
+**On 6.11a's `accepted: 1` for a queued order:** a queued order that is
+genuinely enqueued is still an accepted order — `Outcome.Ok` means "the game
+took this", not "the pawn is doing it now". `job_queue` is the evidence, which
+is why 6.11b is a separate check and not a footnote. And note the honest
+limit already stated in phase 3: an **idle** pawn takes a queued order
+immediately, because `TryTakeOrderedJob`'s first branch fires when
+`mindState.IsIdle || CurJob == null || CurJob.def.isIdle`. That is vanilla's
+own shift-click behaviour, not a dropped flag — which is why 6.10 puts a
+running Goto under it first.
 
 ---
 
