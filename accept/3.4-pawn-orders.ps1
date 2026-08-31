@@ -206,10 +206,62 @@ function Phase0 {
     $roster = @(Dig $e 'data.list')
     Precondition '0.3b' 'at least two visible colonists' ($roster.Count -ge 2) `
     "the roster has $($roster.Count); 3.4's acceptance needs an actor and a patient. Stage with dev:starter-kit or load a bigger save."
-    if ($DryRun) { $S.A = 1001; $S.Aname = '<A>'; $S.B = 1002; $S.Bname = '<B>'; $S.seq0 = 0 }
-    else { $S.A = $roster[0].id; $S.Aname = $roster[0].name; $S.B = $roster[1].id; $S.Bname = $roster[1].name }
-    Write-Host "          actor  A = $($S.A) ($($S.Aname))"
-    Write-Host "          target B = $($S.B) ($($S.Bname))"
+    # The roster order is now stable - `pawns` emits by thingIDNumber ascending
+    # and says so in `data.order` (git-bug 1eb2262) - so an index is at least
+    # REPRODUCIBLE. It is still the wrong way to pick A. A is not "some
+    # colonist", it is "a colonist who can haul and can doctor": bullet 2 orders
+    # a haul and bullet 4 needs an operator, and a pawn with either work type
+    # disabled fails six checks (2.3b, 2.4a/c/d/e, 2.5b) whose only clue is a
+    # NOTE about a disabled work type. Stability makes an index reproducible; it
+    # does not make it meaningful. So: SELECT BY PREDICATE, and let the stable
+    # order decide only which of the qualifying colonists we take.
+    Eq '0.3c' 'the roster order is the documented stable one' $e 'data.order' 'id-asc'
+    Eq '0.3d' 'and the cap still selects by attention' $e 'data.selected_by' 'attention-desc'
+
+    if ($DryRun) {
+        $S.A = 1001; $S.Aname = '<A>'; $S.B = 1002; $S.Bname = '<B>'; $S.seq0 = 0
+        Write-Host "          actor  A = $($S.A) ($($S.Aname))"
+        Write-Host "          target B = $($S.B) ($($S.Bname))"
+        Write-Host '          (live: one `pawn {sections:["work"]}` per colonist picks the first with Hauling AND Doctor enabled)'
+    }
+    else {
+        $ids = @($roster | ForEach-Object { [int]$_.id })
+        $sorted = @($ids | Sort-Object)
+        if (($ids -join ',') -ne ($sorted -join ',')) {
+            Note '0.3e' "roster ids are NOT ascending ($($ids -join ',')) - the loaded assembly predates git-bug 1eb2262; A/B below are not reproducible"
+        }
+
+        # One `pawn {sections:["work"]}` per colonist. Cheap (~600 bytes) and it
+        # is the only place the Work tab's disabled set is published.
+        $want = @('Hauling', 'Doctor')
+        $able = @()
+        $whyNot = @()
+        foreach ($r in $roster) {
+            $w = Send-Cmd pawn @{ id = $r.id; sections = @('work') }
+            $row = Dig $w 'data.work'
+            if (-not $row -or -not $row.initialized) { $whyNot += "$($r.name): no work settings"; continue }
+            $off = @($want | Where-Object { @($row.disabled) -contains $_ })
+            if ($off.Count -gt 0) { $whyNot += "$($r.name): $($off -join '+') disabled"; continue }
+            $able += $r
+        }
+
+        Precondition '0.3f' 'a colonist with Hauling AND Doctor enabled (the actor A)' ($able.Count -ge 1) `
+        ("no visible colonist can do both. Rejected: {0}. This is the fixture gap that cost four runs on 2026-08-31 - see the fixture table in accept/3.4-pawn-orders.md." -f $(if ($whyNot.Count) { $whyNot -join '; ' } else { 'none' }))
+
+        $S.A = $able[0].id; $S.Aname = $able[0].name
+        # B is the patient and only has to be somebody else - 4.9 needs the
+        # DOCTOR (A) to be a different pawn from the patient, which this
+        # guarantees by construction. Taken in the stable id order so the pick
+        # is reproducible.
+        $others = @($roster | Where-Object { $_.id -ne $S.A })
+        Precondition '0.3g' 'a second colonist to be the patient B' ($others.Count -ge 1) `
+            'every visible colonist is the actor; 3.4 needs a distinct patient.'
+        $S.B = $others[0].id; $S.Bname = $others[0].name
+
+        Write-Host "          actor  A = $($S.A) ($($S.Aname)) - selected by predicate, $($able.Count) of $($roster.Count) colonists qualified"
+        Write-Host "          target B = $($S.B) ($($S.Bname))"
+        if ($whyNot.Count) { Note '0.3h' "not eligible as actor: $($whyNot -join '; ')" }
+    }
 
     # 0.4  journal watermark, so every later assertion can name its own window
     $e = Send-Cmd journal @{ limit = 1 }
