@@ -109,6 +109,28 @@ namespace AutoRimmer
                     g.SetNoInteraction();   // = SetExclusiveInteraction(MaintainOnly) + clear the checkbox set
                     return null;
                 });
+                // RECRUITABLE IS APPLIED BEFORE THE MODE GATES, and the order is
+                // load-bearing rather than cosmetic. `ModeHidden` reproduces
+                // ITab_Pawn_Visitor.DoPrisonerTab's CanUsePrisonerInteractionMode,
+                // whose first clause reads `pawn.guest.Recruitable` — so with
+                // `recruitable` applied last (as it was until 2026-08-31) a call
+                // passing BOTH levers had its mode refused against the stale
+                // value, silently leaving the interaction at MaintainOnly while
+                // reporting ok:true. 3.4's own acceptance makes exactly that
+                // call (`{mode:"AttemptRecruit", recruitable:true}`) and it
+                // failed at 5.16b on the bench. The tab has the same ordering:
+                // a player ticks Recruitable and the radio list redraws before
+                // they can pick a mode, so evaluating the gate against the
+                // post-lever state is also the faithful reading.
+                if (wantRecruitable) One(p, "recruitable", applied, refused, () =>
+                {
+                    // Pawn_GuestTracker.Recruitable's GETTER short-circuits true
+                    // for several cases (ever been a colonist, a wild man, a
+                    // trade chattel, or unwavering-prisoners off), so the stored
+                    // field and the effective answer can differ. Both echoed.
+                    g.Recruitable = recruitable;
+                    return null;
+                });
                 if (mode != null) One(p, "mode", applied, refused, () =>
                 {
                     if (!isPrisoner) return "the prisoner interaction controls are drawn only for a prisoner of the colony";
@@ -159,15 +181,6 @@ namespace AutoRimmer
                                ignoreOtherReservations: false, GuestStatus.Prisoner) == null)
                         return Tr("NoPrisonerBed", "no prisoner bed");
                     g.slaveInteractionMode = slaveMode;
-                    return null;
-                });
-                if (wantRecruitable) One(p, "recruitable", applied, refused, () =>
-                {
-                    // Pawn_GuestTracker.Recruitable's GETTER short-circuits true
-                    // for several cases (ever been a colonist, a wild man, a
-                    // trade chattel, or unwavering-prisoners off), so the stored
-                    // field and the effective answer can differ. Both echoed.
-                    g.Recruitable = recruitable;
                     return null;
                 });
                 if (convertTo != null) One(p, "convert_to", applied, refused, () =>
