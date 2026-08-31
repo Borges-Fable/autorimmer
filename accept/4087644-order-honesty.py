@@ -215,8 +215,13 @@ def phase0():
     e = send("journal", {"limit": 1})
     S["seq0"] = dig(e, "data.next_seq") or dig(e, "data.seq") or 0
 
-    e = send("pawns", {"filter": "colonists"})
-    ids = [p.get("id") for p in as_list(dig(e, "data.pawns")) if isinstance(p, dict)]
+    # `colonist` singular — `colonists` is rejected bad-args ("unknown filter"),
+    # and the roster is `data.list`, not `data.pawns`. Either mistake alone
+    # yields zero ids, which phase 0 then reports as a FIXTURE gap ("load a
+    # colony with two or more colonists") on a colony that has four. The
+    # working idiom is accept/3.4-pawn-orders.py:253-255.
+    e = send("pawns", {"filter": "colonist"})
+    ids = [p.get("id") for p in as_list(dig(e, "data.list")) if isinstance(p, dict)]
     if ARGS.dry_run:
         ids = ["<A>", "<B>"]          # --dry-run sends nothing, so stand in
     precondition("0.2", "at least two colonists", len(ids) >= 2,
