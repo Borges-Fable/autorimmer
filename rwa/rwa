@@ -1587,8 +1587,13 @@ def cmd_render(opts, root, tokens):
         return emit(envelope("rwa:render", False, code=E_IO,
                              detail=f"cannot write {out}: {e}"), opts)
 
-    rooms = [e for e in (dump.get("palettes", {}).get("rooms") or [])
-             if e and not e.get("outdoors")]
+    # Enclosed rooms only. Counting every non-outdoor room entry counted the
+    # DOORWAYS too — a door cell is its own single-cell Room — so this reported
+    # 6 for a map with 5 rooms and the number was quoted onward as if it were
+    # the answer to the acceptance's first question. bv.proper_rooms is the one
+    # definition, shared with the legend, so the render and the report cannot
+    # disagree about what a room is.
+    rooms = bv.proper_rooms(dump.get("palettes") or {})
     data = {
         "out": str(Path(out).resolve()),
         "bytes": nbytes,

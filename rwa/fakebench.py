@@ -63,41 +63,66 @@ def atomic(path, text):
     tmp.replace(path)
 
 
-# --- canned map-dump (spec 2.5) ---------------------------------------------
-# A two-room base with a door each, a stove in one and a bed in the other, plus
-# a stockpile, two colonists and a band of fog along the south edge. It is
-# shaped to exercise exactly what 2.5's acceptance asks a reader to answer —
-# how many rooms, where are the doors, which room holds the stove — so
-# `selftest.sh` can check the render end to end with no game anywhere.
-BASE_OX, BASE_OZ, BASE_W, BASE_H = 100, 100, 24, 24
+BASE_OX, BASE_OZ, BASE_W, BASE_H = 100, 100, 48, 36
 
-CANNED_CATALOG = {
-    "Wall": {"kind": "thing", "thingCategory": "Building", "designationCategory": "Structure",
-             "size": [1, 1], "rotatable": False, "stuffable": True, "isStuff": False,
-             "color": None, "stuffColor": None, "mod": "ludeon.rimworld", "label": "wall"},
-    "Door": {"kind": "thing", "thingCategory": "Building", "designationCategory": "Structure",
-             "size": [1, 1], "rotatable": False, "stuffable": True, "isStuff": False,
-             "color": None, "stuffColor": None, "mod": "ludeon.rimworld", "label": "door"},
-    "ElectricStove": {"kind": "thing", "thingCategory": "Building",
-                      "designationCategory": "Production", "size": [2, 1], "rotatable": True,
-                      "stuffable": False, "isStuff": False, "color": None, "stuffColor": None,
-                      "mod": "ludeon.rimworld", "label": "electric stove"},
-    "Bed": {"kind": "thing", "thingCategory": "Building", "designationCategory": "Furniture",
-            "size": [1, 2], "rotatable": True, "stuffable": True, "isStuff": False,
-            "color": None, "stuffColor": None, "mod": "ludeon.rimworld", "label": "bed"},
-    "WoodLog": {"kind": "thing", "thingCategory": "Item", "designationCategory": "",
-                "size": [1, 1], "rotatable": False, "stuffable": False, "isStuff": True,
-                "color": None, "stuffColor": [133, 97, 67], "mod": "ludeon.rimworld",
-                "label": "wood"},
-    "Soil": {"kind": "terrain", "thingCategory": "", "designationCategory": "Floors",
-             "size": [1, 1], "rotatable": False, "stuffable": False, "isStuff": False,
-             "color": [95, 90, 80], "stuffColor": None, "mod": "ludeon.rimworld",
-             "label": "soil"},
-    "WoodPlankFloor": {"kind": "terrain", "thingCategory": "", "designationCategory": "Floors",
-                       "size": [1, 1], "rotatable": False, "stuffable": False, "isStuff": False,
-                       "color": [108, 78, 55], "stuffColor": None, "mod": "ludeon.rimworld",
-                       "label": "wooden floor"},
-}
+# --- canned map-dump (spec 2.5) ---------------------------------------------
+# A mountain base: a natural rock mass in the east with a room carved into it, a
+# built four-room structure in the west, six doors, a stockpile, a growing zone,
+# seven pawns of five kinds, and a band of fog along the south edge.
+#
+# It is deliberately HARD, and specifically hard in the ways the first live
+# render failed while the original two-room fixture said everything was fine:
+#   * natural rock AND constructed wall, so "is that the colony or the
+#     mountain" is a real question;
+#   * six doors, which means six single-cell doorway Rooms in the palette on
+#     top of the five real ones — the exact thing that made the ROOMS block
+#     answer "6" to a map with 5 rooms;
+#   * WALL appearing twice (wood and stone) and URN three times (three stuffs),
+#     so legend de-duplication is exercised;
+#   * `Wardrobe` alongside `Wall`, which both yield the code WA under baseviz's
+#     glyph rule — a genuine collision the renderer must resolve;
+#   * ~20 thing types, enough that a truncating legend leaves codes on the map
+#     unkeyed.
+# The rule for changing it is the orchestrator's: make it harder, never easier.
+CANNED_CATALOG = {}
+
+
+def _cat(name, label, kind="thing", cat="Building", desig="Structure",
+         size=(1, 1), color=None, stuff_color=None, is_stuff=False,
+         stuffable=False):
+    CANNED_CATALOG[name] = {
+        "kind": kind, "thingCategory": cat if kind == "thing" else "",
+        "designationCategory": desig, "size": list(size), "rotatable": False,
+        "stuffable": stuffable, "isStuff": is_stuff, "color": color,
+        "stuffColor": stuff_color, "mod": "ludeon.rimworld", "label": label,
+    }
+
+
+_cat("Wall", "wall", stuffable=True)
+_cat("Wardrobe", "wardrobe", desig="Furniture", stuffable=True)
+_cat("Door", "door", stuffable=True)
+_cat("MineableSandstone", "sandstone", color=[105, 96, 84])
+_cat("ElectricStove", "electric stove", desig="Production", size=(2, 1))
+_cat("Bed", "bed", desig="Furniture", size=(1, 2), stuffable=True)
+_cat("Table2x2c", "table", desig="Furniture", size=(2, 2), stuffable=True)
+_cat("DiningChair", "dining chair", desig="Furniture", stuffable=True)
+_cat("SimpleResearchBench", "simple research bench", desig="Production", size=(2, 1))
+_cat("Urn", "urn", desig="Furniture", stuffable=True)
+_cat("Column", "column", stuffable=True)
+_cat("StandingLamp", "standing lamp", desig="Furniture")
+_cat("Battery", "battery", desig="Power", size=(2, 1))
+_cat("SolarGenerator", "solar generator", desig="Power", size=(4, 4))
+_cat("Steel", "steel", cat="Item", desig="", color=[130, 140, 150], is_stuff=True,
+     stuff_color=[130, 140, 150])
+_cat("WoodLog", "wood", cat="Item", desig="", is_stuff=True, stuff_color=[133, 97, 67])
+_cat("BlocksSandstone", "sandstone blocks", cat="Item", desig="", is_stuff=True,
+     stuff_color=[126, 104, 94])
+_cat("Plant_Cactus", "saguaro cactus", cat="Plant", desig="", color=[70, 130, 70])
+_cat("MealSimple", "simple meal", cat="Item", desig="", color=[190, 170, 120])
+_cat("Soil", "soil", kind="terrain", desig="Floors", color=[95, 90, 80])
+_cat("WoodPlankFloor", "wooden floor", kind="terrain", desig="Floors", color=[108, 78, 55])
+_cat("RoughStone", "rough stone", kind="terrain", desig="Floors", color=[88, 82, 76])
+_cat("Sand", "sand", kind="terrain", desig="Floors", color=[142, 128, 100])
 
 
 def rle(vals):
@@ -115,6 +140,12 @@ def rle(vals):
     return ",".join(out)
 
 
+# things palette indices
+T_WALL_W, T_WALL_S, T_DOOR, T_ROCK, T_STOVE, T_BED, T_TABLE, T_CHAIR = 1, 2, 3, 4, 5, 6, 7, 8
+T_RESEARCH, T_URN_A, T_URN_B, T_URN_C, T_COL_A, T_COL_B = 9, 10, 11, 12, 13, 14
+T_LAMP, T_BATTERY, T_STEEL, T_WOOD, T_CACTUS, T_MEAL, T_WARDROBE = 15, 16, 17, 18, 19, 20, 21
+
+
 def synthetic_dump(rect, layers=None):
     ox, oz, w, h = (int(v) for v in rect[:4])
     w, h = max(1, w), max(1, h)
@@ -126,36 +157,97 @@ def synthetic_dump(rect, layers=None):
     pawns = [[0] * w for _ in range(h)]
     fog = [[0] * w for _ in range(h)]
 
-    def box(r0, c0, r1, c1, idx):
-        for r in range(max(0, r0), min(h, r1 + 1)):
-            for c in range(max(0, c0), min(w, c1 + 1)):
-                if r in (r0, r1) or c in (c0, c1):
-                    things[r][c] = 1
-                else:
-                    rooms[r][c] = idx
-                    terr[r][c] = 2
-                    roof[r][c] = 1
-
-    def put(r, c, v, grid):
+    def put(r, c, v, g):
         if 0 <= r < h and 0 <= c < w:
-            grid[r][c] = v
+            g[r][c] = v
 
-    box(3, 2, 12, 11, 1)
-    box(3, 12, 12, 21, 2)
-    put(12, 6, 2, things)
-    put(12, 17, 2, things)
-    put(4, 4, 3, things)
-    put(4, 5, 3, things)
-    put(10, 18, 4, things)
-    put(9, 18, 4, things)
-    for r, c in ((8, 15), (8, 16), (9, 15), (9, 16)):
-        put(r, c, 1, zones)
-    put(6, 7, 1, pawns)
-    put(7, 16, 2, pawns)
+    def get(r, c, g):
+        return g[r][c] if 0 <= r < h and 0 <= c < w else 0
+
+    # 1. the mountain: natural rock over the east third, rough stone under it
     for r in range(h):
         for c in range(w):
-            if r > h - 4:
-                fog[r][c] = 1
+            if c >= int(w * 0.62):
+                put(r, c, T_ROCK, things)
+                put(r, c, 3, terr)
+                put(r, c, 1, roof)
+
+    # 2. a room carved into the rock (rock walls, no built wall)
+    def carve(r0, c0, r1, c1, room_idx):
+        for r in range(r0, r1 + 1):
+            for c in range(c0, c1 + 1):
+                put(r, c, 0, things)
+                put(r, c, 3, terr)
+                put(r, c, room_idx, rooms)
+                put(r, c, 1, roof)
+
+    carve(8, int(w * 0.68), 15, w - 4, 5)
+
+    # 3. the built structure: four rooms sharing walls
+    def build(r0, c0, r1, c1, room_idx, wall, floor):
+        for r in range(r0, r1 + 1):
+            for c in range(c0, c1 + 1):
+                if r in (r0, r1) or c in (c0, c1):
+                    put(r, c, wall, things)
+                    put(r, c, 0, rooms)
+                else:
+                    put(r, c, 0, things)
+                    put(r, c, floor, terr)
+                    put(r, c, room_idx, rooms)
+                    put(r, c, 1, roof)
+
+    build(4, 2, 14, 14, 1, T_WALL_W, 2)     # kitchen
+    build(4, 14, 14, 26, 2, T_WALL_W, 2)    # bedroom (shares col 14)
+    build(14, 2, 25, 14, 3, T_WALL_S, 4)    # workshop (shares row 14)
+    build(14, 14, 25, 26, 4, T_WALL_S, 4)   # storage
+
+    # 4. doors — each becomes its own single-cell room in the palette, which is
+    #    the trap the ROOMS block fell into.
+    doors = [(14, 7, 6), (14, 20, 7), (9, 14, 8), (19, 14, 9), (4, 8, 10), (25, 20, 11)]
+    for r, c, room_idx in doors:
+        put(r, c, T_DOOR, things)
+        put(r, c, room_idx, rooms)
+        put(r, c, 1, roof)
+
+    # 5. furniture
+    put(6, 4, T_STOVE, things); put(6, 5, T_STOVE, things)
+    put(6, 8, T_TABLE, things); put(6, 9, T_TABLE, things)
+    put(7, 8, T_TABLE, things); put(7, 9, T_TABLE, things)
+    put(8, 8, T_CHAIR, things); put(8, 10, T_CHAIR, things)
+    put(11, 4, T_MEAL, things)
+    put(6, 17, T_BED, things); put(7, 17, T_BED, things)
+    put(6, 21, T_BED, things); put(7, 21, T_BED, things)
+    put(10, 24, T_WARDROBE, things)
+    put(9, 19, T_LAMP, things)
+    put(17, 5, T_RESEARCH, things); put(17, 6, T_RESEARCH, things)
+    put(21, 4, T_BATTERY, things); put(21, 5, T_BATTERY, things)
+    put(23, 9, T_COL_A, things)
+    put(23, 12, T_COL_B, things)
+    put(11, int(w * 0.72), T_URN_A, things)
+    put(12, int(w * 0.74), T_URN_B, things)
+    put(13, int(w * 0.71), T_URN_C, things)
+    for r in range(17, 22):
+        for c in range(17, 23):
+            put(r, c, T_STEEL if (r + c) % 3 else T_WOOD, things)
+            put(r, c, 1, zones)
+    # a few cacti and loose wood outdoors
+    for r, c in ((28, 4), (29, 9), (30, 15), (27, 20), (31, 6)):
+        put(r, c, T_CACTUS, things)
+    for r, c in ((27, 3), (28, 12)):
+        put(r, c, T_WOOD, things)
+    for r in range(28, 31):
+        for c in range(24, 28):
+            put(r, c, 2, zones)
+
+    # 6. pawns
+    for r, c, p in ((6, 6, 1), (7, 12, 2), (17, 8, 3), (11, int(w * 0.72) + 1, 4),
+                    (29, 10, 5), (20, 25, 6), (30, 2, 7)):
+        put(r, c, p, pawns)
+
+    # 7. fog along the south edge
+    for r in range(h - 4, h):
+        for c in range(w):
+            fog[r][c] = 1
     for r in range(h):
         for c in range(w):
             if fog[r][c]:
@@ -169,27 +261,86 @@ def synthetic_dump(rect, layers=None):
     out_planes = {k: rle(flat(v)) for k, v in planes.items() if k in want}
     out_planes["fog"] = rle(flat(fog))
 
+    def th(defn, stuff, label, cat="Building", door=False, size=(1, 1),
+           impassable=False, rock=False):
+        return {"def": defn, "stuff": stuff, "label": label, "category": cat,
+                "door": door, "size": list(size), "impassable": impassable,
+                "natural_rock": rock}
+
+    def room(rid, cells, role, doorway=False, proper=True):
+        return {"id": rid, "outdoors": False, "cells": cells, "role": role,
+                "doorway": doorway, "proper": proper}
+
     pal = {
-        "terrain": [None, {"def": "Soil", "label": "soil"},
-                    {"def": "WoodPlankFloor", "label": "wooden floor"}],
+        "terrain": [None,
+                    {"def": "Soil", "label": "soil"},
+                    {"def": "WoodPlankFloor", "label": "wooden floor"},
+                    {"def": "RoughStone", "label": "rough stone"},
+                    {"def": "Sand", "label": "sand"}],
         "things": [None,
-                   {"def": "Wall", "stuff": "WoodLog", "label": "wall",
-                    "category": "Building", "door": False, "size": [1, 1]},
-                   {"def": "Door", "stuff": "WoodLog", "label": "door",
-                    "category": "Building", "door": True, "size": [1, 1]},
-                   {"def": "ElectricStove", "stuff": None, "label": "electric stove",
-                    "category": "Building", "door": False, "size": [2, 1]},
-                   {"def": "Bed", "stuff": "WoodLog", "label": "bed",
-                    "category": "Building", "door": False, "size": [1, 2]}],
-        "zones": [None, {"id": 3, "label": "Stockpile 1", "kind": "stockpile"}],
+                   th("Wall", "WoodLog", "wall", impassable=True),
+                   th("Wall", "BlocksSandstone", "wall", impassable=True),
+                   th("Door", "WoodLog", "door", door=True),
+                   th("MineableSandstone", None, "sandstone", impassable=True, rock=True),
+                   th("ElectricStove", None, "electric stove", size=(2, 1)),
+                   th("Bed", "WoodLog", "bed", size=(1, 2)),
+                   th("Table2x2c", "WoodLog", "table", size=(2, 2)),
+                   th("DiningChair", "WoodLog", "dining chair"),
+                   th("SimpleResearchBench", None, "simple research bench", size=(2, 1)),
+                   th("Urn", "WoodLog", "urn"),
+                   th("Urn", "BlocksSandstone", "urn"),
+                   th("Urn", "Steel", "urn"),
+                   th("Column", "WoodLog", "column"),
+                   th("Column", "BlocksSandstone", "column"),
+                   th("StandingLamp", None, "standing lamp"),
+                   th("Battery", None, "battery", size=(2, 1)),
+                   th("Steel", None, "steel", cat="Item"),
+                   th("WoodLog", None, "wood", cat="Item"),
+                   th("Plant_Cactus", None, "saguaro cactus", cat="Plant"),
+                   th("MealSimple", None, "simple meal", cat="Item"),
+                   th("Wardrobe", "WoodLog", "wardrobe")],
+        "zones": [None,
+                  {"id": 3, "label": "Stockpile 1", "kind": "stockpile"},
+                  {"id": 4, "label": "Rice patch", "kind": "growing", "plant": "rice plant"}],
         "rooms": [None,
-                  {"id": 11, "outdoors": False, "cells": 81, "role": "Kitchen"},
-                  {"id": 12, "outdoors": False, "cells": 81, "role": "Bedroom"}],
+                  room(11, 117, "Kitchen"), room(12, 117, "Bedroom"),
+                  room(13, 120, "Workshop"), room(14, 120, "Storage"),
+                  room(15, 96, None),
+                  room(21, 1, None, doorway=True), room(22, 1, None, doorway=True),
+                  room(23, 1, None, doorway=True), room(24, 1, None, doorway=True),
+                  room(25, 1, None, doorway=True), room(26, 1, None, doorway=True)],
         "roof": [None, {"def": "RoofConstructed", "label": "constructed roof",
                         "thick": False, "natural": False}],
-        "pawns": [None, {"id": 215, "name": "Yun", "kind": "colonist"},
-                  {"id": 218, "name": "Foxy", "kind": "colonist"}],
+        "pawns": [None,
+                  {"id": 215, "name": "Yun", "kind": "colonist"},
+                  {"id": 218, "name": "Foxy", "kind": "colonist"},
+                  {"id": 221, "name": "Slick", "kind": "colonist"},
+                  {"id": 240, "name": "Barrow", "kind": "prisoner"},
+                  {"id": 251, "name": "Muffalo", "kind": "tame animal"},
+                  {"id": 262, "name": "Raider", "kind": "hostile"},
+                  {"id": 273, "name": "Boomrat", "kind": "wild animal"}],
     }
+
+    # labels: one anchor per non-structural building instance, exactly as
+    # MapDumpVerbs does — walls and rock deliberately get none.
+    labels = []
+    seen = set()
+    for r in range(h):
+        for c in range(w):
+            p = things[r][c]
+            if not p or p in (T_WALL_W, T_WALL_S, T_ROCK):
+                continue
+            e = pal["things"][p]
+            if e["category"] != "Building":
+                continue
+            key = (p, r // 2, c // 2) if p in (T_STOVE, T_TABLE, T_BED,
+                                               T_RESEARCH, T_BATTERY) else (p, r, c)
+            if key in seen:
+                continue
+            seen.add(key)
+            labels.append({"p": p, "at": [ox + c, oz + h - 1 - r],
+                           "size": e["size"], "rot": "North"})
+
     return {
         "channel": {"name": "map-dump", "alphabet": "baseviz-catalog/1",
                     "distinct_from": "map-view/ascii-1",
@@ -201,10 +352,7 @@ def synthetic_dump(rect, layers=None):
         "palettes": {k: v for k, v in pal.items() if k in want},
         "planes": out_planes,
         "runs": {k: len(v.split(",")) if v else 0 for k, v in out_planes.items()},
-        "labels": [
-            {"p": 3, "at": [ox + 4, oz + h - 1 - 4], "size": [2, 1], "rot": "North"},
-            {"p": 4, "at": [ox + 18, oz + h - 1 - 10], "size": [1, 2], "rot": "North"},
-        ],
+        "labels": labels,
     }
 
 
