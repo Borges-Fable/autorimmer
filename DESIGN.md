@@ -12,8 +12,9 @@ through the `rwa` CLI. The driving loop:
 That loop is also the test substrate: `rwtest` scenarios are the same loop with
 assertions instead of judgment.
 
-Status: spec stage. The build plan is the git-bug spec issues (start at the
-`type:muster` issue); this document is the shared context they all reference.
+Status: building. The build plan is the git-bug spec issues (start at the
+`type:muster` issue); this document is the shared context they all reference,
+and it outranks any spec body that disagrees with it.
 
 ## Non-goals (v1)
 
