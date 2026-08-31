@@ -59,6 +59,12 @@ namespace AutoRimmer
         public static void HookJournal()
         {
             Journal.OnEvent += Notice;
+            // NOT Journal.OnEvent: that tap only ever sees EMITTED events, and
+            // the journal's per-text cap stops emitting after the 4th identical
+            // red error — so halt_on_error silently died from the 5th
+            // occurrence onward, which is precisely the repeating error a long
+            // unattended run produces (1.5 blocker 3).
+            Journal.OnRedError += NoticeRedError;
         }
 
         // Main thread, from the advance verb handler. Returns null on success,
@@ -145,11 +151,10 @@ namespace AutoRimmer
         private static void Notice(string type, Dictionary<string, object> payload, int tick, long seq)
         {
             if (!Active || haltFlag) return;
-            if (type == "red_error" && haltOnError)
-            {
-                Halt("red_error", payload, seq);
-                return;
-            }
+            // red_error is deliberately NOT matched here — NoticeRedError below
+            // owns the halt, upstream of the journal's dedupe cap. An explicit
+            // until:{event:{type:"red_error"}} still works through Until.Event,
+            // and it is honestly capped: it is a journal-event matcher.
             switch (until)
             {
                 case Until.Letter:
@@ -172,6 +177,24 @@ namespace AutoRimmer
                         Halt("event", payload, seq);
                     break;
             }
+        }
+
+        // Any thread, from Journal.EmitError — for EVERY occurrence, whether or
+        // not the journal wrote a line for it. `journal_suppressed` tells the
+        // caller not to go hunting for a journal event that the cap kept out
+        // of the file; `occurrence` is which repeat this was.
+        private static void NoticeRedError(string text, int occurrence, long emittedSeq, int tick)
+        {
+            if (!Active || haltFlag || !haltOnError) return;
+            var payload = new Dictionary<string, object>
+            {
+                ["type"] = "red_error",
+                ["msg"] = Journal.Truncate(text, 2000),
+                ["occurrence"] = (double)occurrence,
+                ["tick"] = (double)tick,
+            };
+            if (emittedSeq == 0) payload["journal_suppressed"] = true;
+            Halt("red_error", payload, emittedSeq);
         }
 
         private static void Halt(string reason, Dictionary<string, object> evt, long seq)
