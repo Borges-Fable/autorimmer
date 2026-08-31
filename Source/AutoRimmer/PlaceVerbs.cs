@@ -429,7 +429,7 @@ namespace AutoRimmer
                 // asked either. We decline to ask, because asking WRITES the
                 // answer into the save. `source` names the route, PawnSafe-style.
                 ["plant_configured"] = plant != null,
-                ["plant_source"] = WorldSafe.PolicyRefsOk ? "backing-field" : "unavailable",
+                ["plant_source"] = WorldSafe.PlantRefOk ? "backing-field" : "unavailable",
                 ["allow_sow"] = zone.allowSow,
                 ["allow_cut"] = zone.allowCut,
                 ["planted"] = planted,

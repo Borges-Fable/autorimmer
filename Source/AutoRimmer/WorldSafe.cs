@@ -182,7 +182,7 @@ namespace AutoRimmer
         // True when the guarded routes are actually available. Published beside
         // the data as `source`, so "not configured" and "we could not look"
         // never read alike (PawnSafe.Policies's discipline).
-        public static bool PolicyRefsOk { get { EnsureRefs(); return plantRef != null; } }
+        public static bool PlantRefOk { get { EnsureRefs(); return plantRef != null; } }
 
         public static bool ResearchRefsOk { get { EnsureRefs(); return progressRef != null; } }
 
