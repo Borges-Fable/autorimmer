@@ -340,3 +340,17 @@ queue by default (an agent flailing mid-experiment must not page triage).
   thing) · `none` (permanent), plus the game's own reason string verbatim.
   This is the concrete form of the standing "candidates + reasons, never bare
   booleans" invariant.
+- 2026-08-31 — **When two specs claim the same verb, the split follows where
+  the GAME puts the control.** 3.2 and 3.4 both listed "allowed area assign".
+  The generalizable rule, and the same reasoning that produced the
+  gate-lives-in-the-widget invariant: a verb belongs to the spec that owns the
+  widget the player uses for it. So creating, renaming and painting an
+  `Area_Allowed` is 3.2's (it is `AreaManager` plus cell writes — the
+  `Dialog_ManageAreas` and area-designator surface, the same drag-a-rect
+  vocabulary as its designations), and assigning a pawn to one is 3.4's (it is
+  `Pawn_PlayerSettings.AreaRestrictionInPawnCurrentMap`, a column of the Assign
+  tab beside `medCare`, `hostilityResponse` and `selfTend`, which 3.4 already
+  owns — and it carries its own widget gate, `SupportsAllowedAreas` plus the
+  player-faction test in `PawnColumnWorker_AllowedArea`). Deciding it by which
+  spec "feels" spatial or "feels" pawn-ish would have split the same control
+  two ways, which is the 2.3 fog-of-war failure in a different costume.
