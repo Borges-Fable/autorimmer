@@ -1,1 +1,1 @@
-{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":5,"timestamp":1788200352,"nonce":"Lb7Ap8aDare/79pIa6F8qzu2CpM=","added":["run-ledger","mod:autorimmer","priority:p1","state:doing"],"removed":null}]}
+{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":3,"timestamp":1788200352,"nonce":"THQhwHRFf8Bnnx6n0d1ZjzM1HvQ=","message":"G1 online.","files":null}]}
