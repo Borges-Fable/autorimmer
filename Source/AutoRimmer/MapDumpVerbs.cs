@@ -71,10 +71,20 @@ namespace AutoRimmer
         //
         // 65536 cells is 256x256: any vanilla map (250x250 at the largest
         // preset) fits whole, and nothing larger can be asked for by accident.
-        // Run-length encoding keeps that in the tens of KB rather than the
-        // ~4MB a per-cell JSON record would cost, because every plane is
-        // dominated by long runs — terrain comes in patches, and the thing,
-        // zone and room planes are mostly empty.
+        //
+        // What that costs, MEASURED at 250x250 rather than asserted, because a
+        // budget nobody has measured is not a budget:
+        //   * a realistic map — terrain in patches, the thing/zone/room planes
+        //     mostly empty — run-length-encodes to single-digit KB;
+        //   * the pathological worst case, every cell differing from its
+        //     neighbour in every plane, is ~940KB of planes / ~950KB of
+        //     envelope. That is not a shape a RimWorld map can actually take,
+        //     but it is the real ceiling and it is an order of magnitude under
+        //     the ~4MB a per-cell JSON record would cost at ANY entropy.
+        // So the honest claim is: single-digit KB in practice, bounded at ~1MB
+        // by construction. Still far and away the largest response this
+        // protocol emits — every other verb is 1-2KB to low tens of KB — which
+        // is exactly why the cap is stated here instead of inherited.
         public const int MaxCells = 65536;
         public const int MaxSide = 300;
 
