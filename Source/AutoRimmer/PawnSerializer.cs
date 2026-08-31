@@ -388,21 +388,29 @@ namespace AutoRimmer
             // middle is what gets dropped, and the middle is the near-zero
             // stuff — which is the right thing to lose.
             var emit = new List<object>();
-            int taken = 0;
-            int head = Math.Min(ThoughtSideCap, scored.Count);
-            for (int i = 0; i < head; i++)
+            int headCount = 0;
+            int headMax = Math.Min(ThoughtSideCap, scored.Count);
+            for (int i = 0; i < headMax; i++)
             {
                 if (scored[i].Key <= 0f) break;
                 emit.Add(ThoughtLine(mood, scored[i], scratch));
-                taken++;
+                headCount++;
             }
+            // Walk back from the most negative. The floor is headCount — the
+            // indices the head already took — NOT a running total, which would
+            // tighten as the tail grows and leave room unused (a -2 dropped
+            // while -8 was emitted and four slots were free).
             var tail = new List<object>();
-            for (int i = scored.Count - 1; i >= taken && tail.Count < ThoughtSideCap; i--)
+            for (int i = scored.Count - 1; i >= headCount && tail.Count < ThoughtSideCap; i--)
             {
                 if (scored[i].Key >= 0f) break;
                 tail.Add(ThoughtLine(mood, scored[i], scratch));
-                taken++;
             }
+            // Reversed so `thoughts` is a strict monotone-descending
+            // subsequence of the sort, which is what `order` claims and what
+            // rwtest can assert. Collected worst-first only because the walk
+            // runs backwards.
+            tail.Reverse();
             emit.AddRange(tail);
 
             return new Dictionary<string, object>
