@@ -203,10 +203,27 @@ namespace AutoRimmer
             var acceptedThings = new List<Thing>();
             var rejects = new List<DesignateEngine.Reject>();
 
+            // `entry.Def` rides along so a rejection can be told apart from a
+            // REDUNDANCY: the game's gates return an empty AcceptanceReport or a
+            // bare false for a target that is already designated, which is
+            // indistinguishable from "you cannot do that here" and calls for the
+            // opposite correction. See DesignateEngine.WhyAlready — including
+            // why it dispatches on `DesignationDef.targetType` rather than
+            // choosing DesignationAt/DesignationOn per verb. null here (claim,
+            // smooth, cancel) simply turns the distinction off.
+            //
+            // Residual, recorded not fixed: `designate mine` over a cell already
+            // carrying a MINE-VEIN designation still reports not-designatable,
+            // because `Designator_Mine.CanDesignateThing` rejects on
+            // `DesignationAt(t.Position, DesignationDefOf.MineVein)` — a def
+            // that is not this entry's. Telling that one apart means
+            // re-implementing the widget's second clause, which the gate rule
+            // forbids doing blind; `mine-vein` on a mine-designated cell has no
+            // such clause and is accepted by the game.
             if (targets.IsThings)
-                DesignateEngine.RunThings(map, des, targets.Things, dryRun, acceptedThings, rejects);
+                DesignateEngine.RunThings(map, des, targets.Things, dryRun, acceptedThings, rejects, entry.Def);
             else
-                DesignateEngine.RunCells(map, des, targets.Cells, dryRun, acceptedCells, rejects);
+                DesignateEngine.RunCells(map, des, targets.Cells, dryRun, acceptedCells, rejects, entry.Def);
 
             int acceptedCount = targets.IsThings ? acceptedThings.Count : acceptedCells.Count;
             if (!dryRun) DesignateEngine.FinalizeSucceeded(des, acceptedCount > 0);
