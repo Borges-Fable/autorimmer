@@ -803,3 +803,121 @@ bills do not exist. Amended on the issue with the three options.
 - **BORGES can close one thing cheaply:** 1.4's `rwa` root resolution lists the
   Windows `-savedatafolder` layout as a candidate but it was never exercised.
   One command there closes it.
+
+## Session 5 — 2026-08-30 (BORGES)
+
+Fable orchestrator on Evan's Windows laptop. Both next-picks dispatched to
+opus workers in ISOLATED WORKTREES (the session-4 lesson, applied — zero
+branch collisions), plus 1.7 taken by the 1.5 worker per that issue's parked
+note. All in-game acceptance run personally on the Windows bench; three specs
+closed. 11 of 22 done.
+
+### Issues
+
+| issue | model | wall time | outcome |
+|---|---|---|---|
+| 2.2 Pawn serializers (69ae91f) | opus | ~23 min worker + ~35 min verify | merged ff cf8e68f..5ea7034; closed |
+| 1.5 Substrate remediation (4b65a28) | opus | ~34 min worker + ~25 min verify | merged 3-way b2f037a; closed |
+| 1.7 Dialog halt (8555381) | opus (same worker as 1.5) | (in 1.5's time) | same branch, own commits; closed |
+
+**Infrastructure first: BORGES now has a decompiled tree.** No rimworld-tools
+here, but `ilspycmd` 9.1 was already installed — decompiled the bench's own
+`Assembly-CSharp.dll` to `misc/rimworld/reference/decompiled/RimWorldBase/`
+(one-time, ~1 min) before dispatch. Both workers verified accessors against
+it; line numbers differ from the Linux tree, so citations are file+member.
+Accessor verification no longer needs dorian's box.
+
+**2.2 — what landed.** `PawnSafe.cs` (the read-safety layer: policy trackers
+read via AccessTools backing-field refs, EverWork gate, the classification
+ladder, fog route), `PawnSerializer.cs` (13 sections, every list capped and
+ordered-before-cut), `PawnVerbs.cs` (`pawns` roster + `pawn <id>` drill-down),
+`PawnFixtureVerbs.cs` (dev-gated `pawn-fixture`: wound/sadden/tatter/prisoner/
+visitor — its own verb because JournalVerbs.cs belonged to the parallel
+worker). The worker corrected the preserved research in two places (outfit
+field name; CurLifeStageIndex can rename a pawn) — the catalogue said "verify,
+don't trust" and the worker did.
+
+**2.2 verification.** Two independent readers per number: fixture-time model
+reads + the save file's Scribe XML. Mood 56/37 exact; all six expected thought
+groups at identical offsets plus ApparelDamaged −5 arriving BECAUSE tatter ran
+after sadden computed expectations (the wear→mood chain live); hediffs 9/9
+against both readers (a 10th in my first extraction belonged to the next
+animal in the file — checked, not waved through); apparel 20/130→15%
+tattered; skills 12/12 vs the save, with Intellectual UI-0/raw-3/permanent
+live. The prisoner fixture captured via the game's own SetGuestStatus and the
+policies came back NULL via backing-field — the lazy-init-write guard proving
+itself on the exact pawn class it exists for. The prisoner then escaped (no
+cell): the ThreatSmall letter 3 ticks later is the escape announcement.
+**Visitor: weaker form, stated on the issue** — the Factions director owns
+arrivals on this bench (Player.log: "the director owns the supply") and
+swallowed the forced VisitorGroup across 2+ advanced days. M3 suites must
+drive arrivals through the director, not the incident. Zero red errors
+throughout; drill-down measured 8.7KB full / 1.9KB for two sections (noted on
+4.2: ask for sections).
+
+**1.5 — what landed.** Game-boundary reset (both edges: lifecycle virtuals +
+poller heartbeat, one interlocked result claim), `Journal.OnRedError` upstream
+of the dedupe cap, throw-proof MiniJson + guarded result build with fallback
+envelope, peek-before-write flush with bounded retry, one-lock atomic emit
+with a re-entrancy guard (a hole the review had not named: a Verse ToString()
+that Log.Errors mid-serialize would have re-entered Emit), the poller cycle
+reordered so journal-flushed-before-result holds by construction, injective
+result filenames (FNV-1a suffix), range-checked int args, documented+reported
+max_tps floor, bounded dedupe tables, and six new dev-gated fixture steps
+that make the whole acceptance drivable through the file protocol.
+
+**1.5 verification highlights.** Unload mid-advance: exactly one
+`no-active-game` result (~25s — the reviewed-and-accepted 20s abandon
+window), journal `session {kind:unloaded, aborted:5}`, 8/8 pings fired across
+the window answered. halt_on_error: 9 errors → exactly 4 journal lines; the
+10th, fired mid-advance by `error-at`, halted the advance with
+`occurrence:10, journal_suppressed:true` and the file STILL at 4 lines.
+`weird-result` (null string, throwing ToString, cyclic tree, NaN): one valid
+result file, next command answered. 65 journal entries, zero seq gaps.
+**Weaker form, stated:** the same-process load-from-menu variant has no
+programmatic path before 3.1 — the LoadedGame edge shares the demonstrated
+code path but was not driven.
+
+**1.7 verification highlights.** The letter opened ITSELF at its predicted
+tick (590) and the advance halted `reason:"dialog"` that same tick, naming
+`Dialog_NodeTreeWithFactionInfo` and the letter; tick frozen under the modal
+across a 10s watch; after `dialogs-clear`, a second letter halted a second
+advance identically — **the queue was not poisoned**, demonstrated explicitly.
+Overhead: 967/988/989 tps vs 1000/1006 pre-guard same-session — shared-CPU
+noise (Evan's own RimWorld ran throughout; the launcher coexisted correctly).
+
+**Found and fixed by the orchestrator during acceptance** (own commits + Build):
+status.json served the dead snapshot's `activeOp` beside `gameLoaded:false`
+after an unload — nulled when the game is gone, verified with a second
+boot-unload cycle. Plus JOURNAL.md's dev-row now names `pawn-fixture` as the
+second writer.
+
+**Consequence recorded on the muster: 3.5 is on M1's critical path.** A
+dialog halt is visible-and-stuck; nothing clears the stack until 3.5 ships.
+Amendments on 3.5, 4.3 (its dependency line adds 1.7+3.5), 3.4 (manhunters
+classify as wildlife), 4.2 (sections economy; dialog as a turn input).
+
+### State at session end
+
+- **Done:** 0.1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.7, 2.1, 2.2, 2.3, 2.6 — 11 of 22.
+  Wave 1 fully closed including remediation; the pawn half of wave-2 eyes
+  shipped.
+- **In flight:** none. Both worktrees removed, both auto-created branch
+  pointers deleted; `spec/2.2-pawn-serializers` and
+  `spec/1.5-substrate-remediation` merged and kept.
+- **Blocked:** none.
+- **Bench:** `_RimWorld-Agent` healthy, stopped cleanly. 0 errors / known
+  warnings across 4 boots this session. DLL on main is a BORGES build
+  (f15f69e + the activeOp-fix rebuild). New scratch saves: pawn-accept.rws
+  (the 2.2 fixture save) beside journal-accept.rws and Autosave-1..5.
+- **Housekeeping:** two stale `worktree-agent-*` pointers from session 2's
+  parked workers deleted (both at 3c4c5cd, no unique work).
+- **The session-4 "cheap close" for 1.4's Windows rwa root:** not cheap here —
+  BORGES has no python (Store stub only). Left with 1.4 closed as-is; the
+  Windows layout line stays unexercised until python lands or a Linux session
+  scripts it another way.
+- **Next picks: 2.4 (21856e3, opus) + 3.1 (f166fb9, opus)** — deps met,
+  disjoint files (new serializers vs new dev-verb layer), separate worktrees,
+  only the orchestrator touches the bench. 2.4 follows 2.2's naming as its
+  pattern. 3.1 supersedes the selftest fixture layer and unblocks the rest of
+  wave 3. Then 3.2/3.3, and 1.6 once 2.4 lands.
