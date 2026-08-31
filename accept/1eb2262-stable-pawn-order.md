@@ -29,13 +29,24 @@ journal (checked once at the end, D1).
 
 ### A0. Journal watermark (discovery)
 ```json
-{"id":"a0","op":"journal","args":{"limit":1}}
+{"id":"a0","op":"journal","args":{"since_seq":999999999,"limit":1}}
 ```
 ```
-rwa journal --limit 1
+rwa journal --since_seq 999999999 --limit 1
 ```
 Read `data.last_seq` -> **`<SEQ0>`**. D1 reads forward from it, so a red error
 that predates this run is not charged to it.
+
+> **`{"limit":1}` alone is the wrong envelope here and it silently ruins D1.**
+> `JournalVerbs.Read` computes `last_seq` while scanning and `break`s as soon as
+> `events.Count >= limit`, so with `limit:1` it stops at the SECOND line of the
+> file and reports that line's seq — a watermark of ~2, not the end of the file.
+> D1 would then re-report every red error in the whole session as if this run
+> caused it. Pushing `since_seq` past the end makes every line fail the filter,
+> so the loop never reaches the limit break and reads to EOF, which is what
+> makes `last_seq` the true maximum. `accept/1.8-game-clock-advance.sh` step 01b
+> is the same idiom and says the same thing; `accept/3.4-pawn-orders.{md,py,ps1}`
+> step 0.4 still has the `{"limit":1}` form and inherits the same flaw.
 
 ### A1. Default read
 ```json
@@ -250,5 +261,19 @@ DESIGN entry for why that field is a trap).
   alone. `dev:damage` or `dev:add-hediff` to force a `downed` (+1000) is the
   bigger hammer if B2 does not separate the orders.
 - **C3's strict form assumes the roster is under `cap`.** See the fallback.
+- **Nothing here proves a stable handle ABOVE the cap, and nothing can, because
+  there is not one.** Every step runs on a roster with `more == 0`. The cap
+  still cuts by attention (C4 proves that it does, deliberately), so with
+  `total > cap` the surviving SET moves as moods move and `list[0]` can still
+  name a different pawn between reads. That is the documented limit of the
+  contract, not a gap in this run — `more` is the flag, and a caller wanting a
+  durable handle raises `cap` past `total` or holds the `id`.
+- **C4's parenthetical "`<LOUD>` … having the largest id in the colony" is stale
+  by then**: C2 spawned `<NEW>`, whose id is larger. The assertion that matters
+  is unaffected — `<LOUD>` must be one of the two survivors despite sorting late
+  under `id-asc` — but do not fail the step on the word "largest". Expect the
+  two survivors to be `<LOUD>` (mood 5% -> ~95 attention) and `<NEW>` (a freshly
+  generated pawn starts at mood 50% -> ~50), with everyone else at high mood
+  scoring ~20.
 - The `dev:destroy` cleanup in C5 vanishes a colonist; on a fixture you intend
   to keep, skip it and let the pawn stay.

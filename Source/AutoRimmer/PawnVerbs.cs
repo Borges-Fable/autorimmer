@@ -73,6 +73,17 @@ namespace AutoRimmer
     //
     // Urgency is not lost by reordering: every line carries `attention_rank`,
     // the 0-based position it would have held under `order:"attention"`.
+    //
+    // THE LIMIT OF THE PROMISE, stated because a half-true contract is worse
+    // than none: `order:"id-asc"` makes the SEQUENCE stable, not the
+    // MEMBERSHIP. The cap still cuts by attention — it must, that is 2.6 —
+    // so on a roster larger than `cap` the surviving SET moves as moods move,
+    // and `list[0]` can still name a different pawn on consecutive reads.
+    // `more > 0` is the flag for exactly that: when it is non-zero, positions
+    // are reproducible only among whoever survived, and a caller that wants a
+    // durable handle should either raise `cap` past `total` or hold the `id`
+    // it read rather than the index it read it at. When `more == 0` the whole
+    // filtered roster is present and the sequence is a register.
     public static class PawnVerbs
     {
         private const int RosterCap = 20;

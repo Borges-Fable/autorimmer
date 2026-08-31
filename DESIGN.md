@@ -498,3 +498,14 @@ queue by default (an agent flailing mid-experiment must not page triage).
   selects by predicate over `pawn {sections:["work"]}` `disabled` and only
   falls back to position. Stability makes an index reproducible; it does not
   make it meaningful.
+
+  **And the promise has a stated limit, because a half-true contract is worse
+  than none: a stable EMIT order does not make MEMBERSHIP stable.** The cap
+  still cuts by attention — it has to, that is 2.6 — so above `cap` the
+  surviving set moves as the live score moves and `list[0]` can still name a
+  different pawn on consecutive reads. `more > 0` is precisely that flag: when
+  it is non-zero, position is reproducible only among the survivors, and a
+  caller wanting a durable handle raises `cap` past `total` or holds the `id`
+  rather than the index. When `more == 0` the sequence is a register. This is
+  the same "cap the output, count the truth" discipline the observers already
+  follow, applied to the one place where truncation and ordering interact.
