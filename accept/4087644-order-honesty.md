@@ -1,17 +1,89 @@
 # Acceptance — 4087644, order honesty
 
-Runnable driver: `accept/4087644-order-honesty.py` (42 checks, 5 phases).
-No `.ps1` twin — this box has no pwsh and the bench lives here.
+Runnable driver: `accept/4087644-order-honesty.py` (54 checks, 6 phases —
+phase 0 is the shape contract). No `.ps1` twin — this box has no pwsh and the
+bench lives here.
 
     ./accept/4087644-order-honesty.py --dry-run   # the plan, sends nothing
     ./accept/4087644-order-honesty.py             # against a live bench
 
-**Fixture:** the agent bench (`_RimWorld-Agent/run-agent.sh`), a colony with two
-or more colonists and at least one piece of apparel reachable on the ground.
-Paused is fine; the driver advances where it needs to.
+**Fixture:** the agent bench (`_RimWorld-Agent/run-agent.sh`) and a colony with
+two or more colonists. Two loose apparel items are wanted and one is required;
+with none, phase 0 stages two with `dev:spawn-thing {def:"Apparel_Parka",
+count:2}` and says so in its output. With only one, phase 3's queue-growth check
+is skipped by note and its collision check still runs. Paused is fine; the
+driver advances where it needs to.
 
 **Exit codes:** 0 all passed · 1 at least one FAIL · 2 a fixture precondition
 could not be met, which is not a spec failure.
+
+**`--dry-run` proves the plan, never the paths.** It sends nothing, so every
+envelope is empty, every shape check is skipped, and every wrong `dig()` path
+looks fine. The first draft of this suite passed `--dry-run` with eight wrong
+arg names and paths in it.
+
+---
+
+## Phase 0 — the shape contract, and why it is the reusable part
+
+`eq()` cannot tell an **absent** key from one that is **present and null**:
+`dig()` returns `None` for both, so `eq(..., None)` passes either way. A driver
+whose dig paths are wrong therefore does not fail — it goes **green while
+asserting nothing**, which is strictly worse than a loud abort, because nobody
+investigates a pass. Every driver in `accept/` is built on that helper, so every
+driver inherits the defect, and 3.4's and 5.1's inherited it by copying the
+file. *A suite that cannot distinguish absent from null is not a test.*
+
+So phase 0 asserts the **existence** of every envelope key the later phases dig
+on, naming the verb and the key: `pawns` → `data.list`; `things` →
+`data.things`; `journal` → `data.last_seq`, `data.events`, `data.count`; `pawn`
+→ `data.state`, `data.state.job_queue`, `data.apparel`, `data.apparel.worn`. A
+shape change then fails *here*, at a check that says which verb moved.
+
+**Per-driver on purpose, not a shared `accept/_shapes.py`.** Every file in
+`accept/` stands alone and runs from a bare checkout — that portability is what
+makes acceptance work across two benches with different tooling, and it is why
+the `.py`/`.ps1` twins duplicate deliberately. And a shared module would let a
+shape change made for one spec silently update every other driver, when what you
+want is 3.4's driver failing loudly when 3.4's own contract changes.
+
+### This suite is the worked example
+
+Its first draft shipped eight wrong arg names and dig paths. It reached none of
+them, because the preflight happened to die first:
+
+| # | wrong | right |
+|---|---|---|
+| 1 | `pawns {filter:"colonists"}` | the filter word is singular, `colonist` |
+| 2 | `data.pawns` | `data.list` |
+| 3 | `things {filter:…}` | **there is no `filter` arg** — an unknown key is ignored and the query falls through to `category:"haulable"` |
+| 4 | `data.things` with no `detail:true` | rollup rows are BY DEF and carry no `id`; `detail:true` adds the addressable list (issue `70ac258`) |
+| 5 | `things {category:"apparel"}` | `by_location` **defaults true** for apparel on the map, so rows sit under `data.by_location.{stockpiled,worn,loose}` and there is no top-level `data.things` — pass `by_location:false` |
+| 6 | `pawn {pawn:…}` | that verb takes `id` (`IntReq("id")`). The **job** verbs take `pawn`/`pawns`; do not unify them with a sed |
+| 7 | `journal {limit:1}` → `data.next_seq` | neither key exists, and `{limit:1}` reports the *second* line's seq — use `{since_seq:999999999, limit:1}` → `data.last_seq` |
+| 8 | `data.ok` on `work-priorities` | `Outcome.Result` publishes no `ok`; only hand-built envelopes (prioritize, research-set) carry `data.ok`. Assert the **envelope's** `ok` |
+
+`has_key()` was already in the file, for `job_start_tick`. The distinction was
+known, the tool was built, and it was applied in exactly one place. That is the
+lesson worth carrying: the next person will also know, and also forget.
+
+### And a second failure mode the contract does not catch
+
+Two of this suite's own checks were wrong not because a path was wrong but
+because **the state they asserted against was never staged**:
+
+* Phase 3 queued an `equip` **of apparel**. `EquipmentUtility.CanEquip` refuses
+  apparel outright, so that order could only ever be rejected `cannot-equip` and
+  the queue would never move — which reads as a broken queue rather than a wrong
+  call. It now queues a `wear` of a second item.
+* Phase 3's collision check ran *after* phase 2's advance, by which point the
+  pawn was back on its own think tree — so the "colliding" order would simply
+  have **enqueued**, and the check would have gone green having proved the
+  opposite of its claim. It now re-establishes a known `curJob` first.
+
+A shape contract proves the envelope. It cannot prove the fixture. Both of these
+were found by re-reading assertions against the verb sources, which is the only
+method that worked on any of it.
 
 ---
 
@@ -46,7 +118,7 @@ and therefore names the job we did not cause.
 | 1.2d | ″ | the reason names `Job.JobIsSameAs`, not a phrase of ours |
 | 1.3a | ″ | **`action.journal_seq >= 1`** — the wasted order still journals |
 | 1.3b | ″ | and is not disguised as `"not applicable — nothing was mutated"` |
-| 1.4 | `journal {types:["action"]}` | at least one row with `verdict.by_gate["already-doing-it"]` |
+| 1.4b | `journal {types:["action"]}` | at least one `data.events[]` row with **`payload.verdict.by_gate["already-doing-it"]`** — the emitted payload is nested under `payload` |
 | 1.5a/b/c | `wear {pawn:A, thing:AP, queue:true}` | same gate, `queue == true`, reason says nothing was enqueued |
 | 1.6 | `draft {pawns:[A]}` then `move-to {pawns:[A], to:<A's own cell>}` | `gate == "already-there"` — move-to's shipped gate is untouched |
 
@@ -62,8 +134,8 @@ from. Comment #1 supersedes — confirmed with the orchestrator before building.
 
 | # | call | expect |
 |---|---|---|
-| 2.1a–f | `pawn {pawn:A, sections:["state"]}` | keys present: `job_id`, `player_forced`, `job_giver`, `work_giver`, `job_start_tick`, `ordered` |
-| 2.2a | `wear {pawn:B, thing:AP}` then state | `job_giver == "ThinkNode_QueuedJob"` |
+| 2.1a–f | `pawn {id:A, sections:["state"]}` | keys present: `job_id`, `player_forced`, `job_giver`, `work_giver`, `job_start_tick`, `ordered` |
+| 2.2a | `wear {pawn:A, thing:AP}` then state | `job_giver == "ThinkNode_QueuedJob"` |
 | 2.2b | ″ | `ordered == true` (the triple) |
 | 2.3 | ″ | `player_forced == true` |
 | 2.4 | ″ | `job_start_tick >= 0` |
@@ -91,8 +163,8 @@ this field.
 
 | # | call | expect |
 |---|---|---|
-| 3.1 | `pawn {pawn:A, sections:["state"]}` | a `job_queue` block exists |
-| 3.2a | `equip {pawn:A, thing:AP, queue:true}` then state | `job_queue.total` grew by one |
+| 3.1 | `pawn {id:A, sections:["state"]}` | a `job_queue` block exists |
+| 3.2a | `wear {pawn:A, thing:AP2, queue:true}` then state | `job_queue.total` grew by one |
 | 3.2b | ″ | the queued row has `job_start_tick` **present and null** |
 | 3.2c | ″ | the queued row names its own `job_def`, not the running one |
 | 3.3 | `wear {pawn:A, thing:AP, queue:true}` colliding, then state | `job_queue.total` **unchanged** |
@@ -114,7 +186,7 @@ publishes as `null`, never as `-1` dressed up as a tick.
 
 | # | call | expect |
 |---|---|---|
-| 4.1 | `pawn {pawn:A, sections:["apparel"]}` | every worn row carries `forced` |
+| 4.1 | `pawn {id:A, sections:["apparel"]}` | every worn row carries `forced` |
 | 4.2 | ″ | the envelope carries `forced_count` |
 | 4.3 | `wear {pawn:A, thing:AP}` + `advance {ticks:4000}` | at least one row `forced:true` |
 | 4.4 | ″ | at least one row `forced:false` — policy-worn and force-worn are distinguishable |
@@ -144,7 +216,7 @@ exists here" is a different claim from "this was not forced".
 |---|---|---|
 | 5.1a | `undraft {pawns:[A]}` then `tend {pawn:A, target:B}` | `rejected[0].gate == "drafted-only"` |
 | 5.1b | ″ | **`action.journal_seq >= 1`** |
-| 5.2a/b/c | `work-priorities {manual:true}`, then `work-priorities {set:[{pawn:A, work:"Doctor", priority:1}]}` | `ok`, `counts.unit == "matrix cells"`, `action.journal_seq >= 1` |
+| 5.2a/b/c | `work-priorities {manual:true}`, then `work-priorities {set:[{pawn:A, work:"Doctor", priority:1}]}` | envelope `ok` (not `data.ok`), `counts.unit == "matrix cells"`, `action.journal_seq >= 1` |
 | 5.3 | `journal {types:["red_error"]}` | `count == 0` |
 
 ### 5.1b DELIBERATELY BREAKS 3.4's CHECK 5.12c
