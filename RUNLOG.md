@@ -921,3 +921,72 @@ classify as wildlife), 4.2 (sections economy; dialog as a turn input).
   only the orchestrator touches the bench. 2.4 follows 2.2's naming as its
   pattern. 3.1 supersedes the selftest fixture layer and unblocks the rest of
   wave 3. Then 3.2/3.3, and 1.6 once 2.4 lands.
+
+## Session 5, round 2 — 2026-08-30 (BORGES, same session)
+
+The session continued past the first handover point. Two more specs closed:
+**13 of 23 done.**
+
+### Issues
+
+| issue | model | wall time | outcome |
+|---|---|---|---|
+| 3.1 Dev-layer verbs (f166fb9) | opus | ~27 min worker + ~30 min verify | merged ff (incl. one orch fix cfe8c08); closed |
+| 2.4 World serializers (21856e3) | opus | ~34 min worker + ~45 min verify | merged 3-way 4a2ad9a; closed |
+
+**3.1.** 17 dev:* verbs, per-mutation journal provenance with a result-side
+seq join, deterministic-by-default deviations from the DebugActions all named,
+letters suppressed by default (the 1.7 wedge). The autostart fixture path
+demonstrated end to end: `dev:starter-kit {save_as:"autostart"}` → plain
+relaunch → playing the fixture in ~20s, no UI. Acceptance found the session's
+only red error — `SetRelationDirect` on a goodwill faction Log.Errors and
+no-ops — fixed on the branch (relation now drives goodwill; permanent enemies
+refused with the reason), re-verified live, clean.
+
+**2.4.** The best accessor audit of the project: four vanilla getters whose
+READ writes the save or advances the RNG, all re-verified by the orchestrator
+in the decompile, all routed around in WorldSafe. Live proofs: the
+double-read of an unconfigured growing zone (null both times), and the
+save-diff around a full research read (252 progress entries before AND after;
+naive inserts ~160). The whole acceptance fixture staged in one
+world-fixture call; interactions matched a choice letter's four option labels
+string for string; rooms demonstrated by having the dev layer BUILD a bedroom
+(find-rect sited, 19 walls + door + bed) that the game's own analysis
+classified. **Evan challenged the stockpile classification evidence
+mid-verification — correctly**: reading back a self-placed item only proved
+self-consistency. Re-proven with vanilla hauling as the independent actor:
+colonists moved loose pemmican into the Important Foods-only zone on their
+own and the observer tracked the transition mid-haul. The lesson generalizes:
+a fixture that arranges what the observer then reads proves agreement, not
+truth — let the game act between the arrange and the read.
+
+**Knock-on fixes (orchestrator commits on main):** shipped 2.3 `map-view` was
+writing the save via `GetPlantDefToGrow` on unconfigured growing zones —
+fixed with WorldSafe.PlantToGrow; the digest's threat section now counts
+visible fires map-wide (verified live against the fixture fire: digest saw
+fires:1 with zero fire alerts active); DESIGN decisions-log entry for the
+observer gate-in-the-widget rule; JOURNAL.md dev-row contract updated;
+README git-bug traps corrected (# lines are dropped AT STORAGE — measured;
+it had already mistitled issue 4.4, retitled via `bug title edit`).
+
+**Also this round:** 4.4 (d32eadd) filed at Evan's request — checklist
+budget, retirement evidence, checklist→rwtest final escalation (wave 4, deps
+4.1, p3 backlog); two seed game-knowledge lessons from Evan recorded on 4.1
+(wood is a standing designation loop; benches go indoors — mechanisms exist,
+the rules are playbook material).
+
+### State at session end (round 2)
+
+- **Done:** 0.1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.7, 2.1, 2.2, 2.3, 2.6, 3.1, 2.4
+  — 13 of 23. Waves 0-2 complete except 2.5 (needs dorian's box); the dev
+  layer and full observation surface shipped.
+- **In flight / blocked:** none. Worktrees removed, both spec branches merged
+  and kept, tree clean.
+- **Bench:** healthy across 6 boots this round, 0 red errors in every
+  session's journal, 0 exceptions. Scratch saves kit-accept.rws added;
+  autostart.rws created, demonstrated, and deleted; pre24/post24 proof saves
+  cleaned.
+- **Next picks: 3.2 (57ab92a, opus) + 3.4 (39c9db7, opus)** — deps met,
+  disjoint new files, the respond-half's core. Then 3.5 (fable, M1-critical),
+  3.3 (fable, M2), 3.6, 1.6. 2.5 and 1.4's rwa Windows check remain
+  machine-bound (dorian's box / python).
