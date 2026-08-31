@@ -442,3 +442,65 @@ queue by default (an agent flailing mid-experiment must not page triage).
   lamp and `interactions` reported `force_pause {count:0}` afterwards. Recorded
   because "we avoided a trap" is worth much less than "the trap was armed, here
   is the reading, and it did not fire."
+- 2026-08-31 — **A play setting belongs to the verb that owns ITS widget, not to
+  a `play-settings` grab-bag — so manual work priorities is an argument on
+  `work-priorities`.** 3.4's acceptance found that `work-priorities` correctly
+  refuses priority 1, 2 or 4 while manual priorities are off, and that nothing
+  in the ~90-verb surface could turn them on (git-bug `e8f2c32`).
+  `PlaySettings.useWorkPriorities` scribes `defaultValue: false`
+  (`RimWorld/PlaySettings.cs` ExposeData), so eight acceptance checks were
+  unreachable on every colony the agent stages itself, and reachable only on a
+  save where a human had already ticked the box.
+
+  The lever is now `work-priorities {manual:true|false}`, and the reasoning
+  generalizes to the rest of `PlaySettings`. **Where does the GAME put the
+  control?** `RimWorld/MainTabWindow_Work.cs DoManualPrioritiesCheckbox` draws
+  this checkbox at (5,5) of the *same* `MainTabWindow` whose body is the
+  priority matrix `PawnColumnWorker_WorkPriority` fills in. That is the
+  2026-08-31 rule above applied to a lever instead of to a verb, and it settles
+  the other 23 fields on that class the same way rather than one at a time: the
+  `defaultCareFor*` block belongs to whoever owns the medical-defaults dialog,
+  and the twenty overlay/visibility toggles belong to `PlaySettings
+  .DoMapControls`'s own row — a different window, and pure rendering with no
+  headless meaning. A single `play-settings` verb would have gathered
+  twenty-four fields whose only common property is the class they are declared
+  on, which is the fog-of-war failure (one question answered three ways) in yet
+  another costume. Two supporting reasons, both secondary to that one: it makes
+  the flip and the cells ONE round trip with a fixed ordering — the flag is
+  installed before the priorities in the same call are validated against it,
+  which is exactly the fixture-staging sequence the bug blocked — and it keeps
+  the read (`use_priorities`, already published beside every row) and the write
+  on one verb. Zetrith's Multiplayer corroborates that this is colony state
+  rather than a client display preference: it scribes the whole `PlaySettings`
+  per faction (`Multiplayer.Client/FactionWorldData.playSettings`) and brackets
+  `DoManualPrioritiesCheckbox` with a sync marker.
+
+  **The widget's EFFECT is the load-bearing half here, not its gate.** There is
+  no gate — the checkbox is unconditional inside the window, and the only
+  precondition is the tab itself (`MainButtonWorker.Disabled` =>
+  `Find.CurrentMap == null`, which the verb's existing `Map()` call already
+  reproduces). What the widget does that a naive field write does not is fan
+  `Pawn_WorkSettings.Notify_UseWorkPrioritiesChanged()` out to every
+  player-faction pawn with non-null `workSettings`. That sets `workGiversDirty`,
+  and `WorkGiversInOrderNormal`/`Emergency` — the lists `JobGiver_Work` actually
+  walks — rebuild only when it is set. Flip the field alone and every colonist
+  keeps dispatching off an order computed under the OLD reading until some
+  unrelated `SetPriority` happens to dirty the cache: a silent, delayed, wrong
+  answer. **So the gate-in-the-widget invariant has a mirror image worth stating
+  once: a widget's non-obvious SIDE EFFECT is as much a part of the click as its
+  precondition, and a verb that reproduces only the gate is half a verb.**
+
+  **And the flip is lossless, measured against the source rather than assumed.**
+  `useWorkPriorities` is a read-time mask and nothing else —
+  `Pawn_WorkSettings.GetPriority` is `int num = priorities[w]; if
+  (pawn.RaceProps.Humanlike && num > 0 && !Find.PlaySettings.useWorkPriorities)
+  return 3; return num;`. `SetPriority` writes the raw number either way,
+  `ExposeData` scribes the raw `DefMap`, and `Notify_UseWorkPrioritiesChanged`
+  touches one bool. A stored 1 survives a trip to off and back. What DOES
+  destroy data is a *write* while off: vanilla's checkbox column
+  (`WidgetsWork.DrawWorkBoxFor`'s else-branch, and `PawnColumnWorker_WorkPriority
+  .HeaderClicked`'s) can only write 0 or 3, so a click — or a `work-priorities`
+  call using the two priorities it still permits — flattens a stored 1/2/4. The
+  verb says so in its `manual.note` rather than leaving the agent to find out.
+  Note also that the mask is gated on `RaceProps.Humanlike`: a Biotech mech's
+  priorities read raw whatever the setting says.
