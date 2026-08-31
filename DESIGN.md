@@ -442,3 +442,59 @@ queue by default (an agent flailing mid-experiment must not page triage).
   lamp and `interactions` reported `force_pause {count:0}` afterwards. Recorded
   because "we avoided a trap" is worth much less than "the trap was armed, here
   is the reading, and it did not fire."
+- 2026-08-31 — **An observer's list has TWO orders — which entries survive the
+  cap, and which order they are emitted in — and publishing only the first one
+  makes the list unholdable.** `pawns` sorted by `PawnSerializer.Attention`
+  descending and said so (`order:"attention-desc"`). That is a correct
+  statement about a ranking and a trap for anything that keeps a position:
+  attention sums `100 - mood_pct`, so two colonists one mood point apart trade
+  places on any tick that moves either mood, and downed/mental/bleeding/tend
+  flip in 400–1000 point steps. `roster[0]` names a different pawn on
+  consecutive reads with nothing wrong. 3.4's acceptance rode that index, drew
+  an actor with Hauling disabled, and six checks failed with no direct clue.
+  The observer was the half that was wrong: `PawnActs.PawnList` has sorted
+  `pawns:"colonists"` by `thingIDNumber` since it shipped, so the ACTION side
+  already had a stable roster while the OBSERVER side did not — an agent could
+  act on a list it could not re-read.
+
+  **RimWorld promises nothing here, so this had to be a sort we add, not an
+  order we document.** `MapPawns.AllPawnsSpawned` is the raw `pawnsSpawned`
+  `List<Pawn>`: `RegisterPawn` appends, `DeRegisterPawn` removes, and
+  `UpdateRegistryForPawn` does both — so a faction or host-faction change moves
+  a pawn to the END while it stands still, and loading re-registers in
+  save-file order. `RegisterPawn` *does* keep
+  `pawnsInFactionSpawned[Faction.OfPlayer]` `InsertionSort`ed by
+  `playerSettings.joinTick`, the closest thing the game has to a stable roster
+  order — unusable here, because joinTick ties on every pawn that joined the
+  same tick (`Pawn_PlayerSettings` sets a flat `joinTick = 0` for the starting
+  colonists) and it is a different list from the one our verbs walk. And
+  `Pawn_PlayerSettings.displayOrder` — the order the colonist bar and the
+  Assign/Work tables actually draw in, via `PlayerPawnsDisplayOrderUtility` —
+  is worse than useless: it defaults to the sentinel `-9999999` and is assigned
+  **lazily by the UI**, `ColonistBar.CheckRecacheEntries` writing the scribed
+  field on any pawn still holding the sentinel. On a bench where the bar has
+  not recached it is the same number for every colonist, and sorting by it
+  would mean depending on a UI side effect on scribed state — the write-on-read
+  shape `PawnSafe` exists to refuse. Worth noting for its own sake: **the
+  colonist bar is a Class-A write-on-read accessor**, and it is UI, so we never
+  touch it.
+
+  **The rule, generalizable past `pawns`:** selection may key on a live score;
+  presentation keys on identity. `pawns` still ranks by attention to decide who
+  survives the cap (2.6's rule — a cap that cut in list order would hide the
+  downed colonist behind ten healthy ones — is untouched, and the re-sort runs
+  on the survivors only, never on the candidate set), emits by `thingIDNumber`
+  ascending by default, publishes BOTH facts (`selected_by` always
+  `"attention-desc"`, `order` either `"id-asc"` or `"attention-desc"` per a new
+  `order:` arg), and carries `attention_rank` on every line so the urgency the
+  id order no longer encodes travels with the data instead of being lost to it.
+  `thingIDNumber` is the key because it is stable for a pawn's lifetime and is
+  already the id every verb takes (`pawn:<id>`) — the same key the action side
+  had all along. `digest`'s colonist section deliberately does NOT change: it
+  publishes no `id` at all, so it is a glance and not an addressable roster,
+  and attention-desc is the whole point of it. The corollary for acceptance
+  scripts is separate and both halves are needed: a stable index is still the
+  wrong way to pick an actor with a REQUIRED CAPABILITY, so 3.4's phase 0 now
+  selects by predicate over `pawn {sections:["work"]}` `disabled` and only
+  falls back to position. Stability makes an index reproducible; it does not
+  make it meaningful.
