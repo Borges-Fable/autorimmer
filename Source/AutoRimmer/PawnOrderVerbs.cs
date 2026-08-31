@@ -431,7 +431,7 @@ namespace AutoRimmer
         }
 
         // --------------------------------------------------------------------
-        // orders {pawn, thing?|cell?, cap?}   READ-ONLY
+        // orders {pawn, thing?|cell?, cap?}   NOT READ-ONLY — see the cost note
         //
         // The parity list: every WorkGiver order the right-click menu would show
         // for this pawn on this target, with the game's own label and, where the
@@ -445,9 +445,60 @@ namespace AutoRimmer
         // enumerates what the game actually offers, so `prioritize {work:…}` is
         // never a shot in the dark.
         //
-        // Read-only, but NOT free: it runs each scanner's HasJobOn* with
-        // forced:true, exactly as the float menu does when it opens. That is
-        // real work — bounded by the WorkGiverDef count, not by map size.
+        // WHAT ASKING COSTS. This header said "read-only" until git-bug
+        // 32b9e01, and it was wrong. There is no way to ask the game what a
+        // pawn could do here without RUNNING each scanner's HasJobOn* / JobOn*
+        // with forced:true — the same call the float menu makes when it opens —
+        // and vanilla's own side effects come with it. Two survive even with
+        // the makingFor fix below, and both are disclosed rather than
+        // suppressed, because both are what the player's right-click does too:
+        //
+        //  * A BILL CAN BE DELETED. RimWorld/WorkGiver_DoBill.cs JobOnThing
+        //    calls billGiver.BillStack.RemoveIncompletableBills(), and
+        //    RimWorld/BillStack.cs RemoveIncompletableBills does
+        //    bills.Remove(bill) + billGiver.Notify_BillDeleted(bill) for every
+        //    bill whose CompletableEver is false — a surgery whose body part is
+        //    already gone, say. Genuine click-parity: opening the float menu on
+        //    that bench deletes it too.
+        //  * A JOB ID IS CONSUMED PER CANDIDATE. Every non-null JobOn* comes
+        //    from Verse/JobMaker.cs MakeJob, which takes SimplePool<Job>.Get()
+        //    and Find.UniqueIDsManager.GetNextJobID(); nextJobID is
+        //    `Scribe_Values.Look(ref nextJobID, "nextJobID", 0)`
+        //    (RimWorld/UniqueIDsManager.cs). A probe therefore inflates a
+        //    counter that is written to the save, permanently. Harmless, and
+        //    the precise reason "read-only" was never strictly true.
+        //  * EVERY BILL ON THE MAP IS RE-EVALUATED, AND THAT WRITES `paused`.
+        //    NOT in git-bug 32b9e01 — found while writing its acceptance, and
+        //    it is the widest of the three. RimWorld/WorkGiver_DoBill.cs
+        //    ShouldSkip walks `listerThings.ThingsInGroup(PotentialBillGiver)`
+        //    asking each for `BillStack.AnyShouldDoNow`, which is
+        //    `bills[i].ShouldDoNow()` over the stack (RimWorld/BillStack.cs) —
+        //    and RimWorld/Bill_Production.cs ShouldDoNow WRITES `paused`:
+        //    unconditionally false when the repeat mode is not TargetCount,
+        //    true when pauseWhenSatisfied and the count is met, false again
+        //    under unpauseWhenYouHave. `paused` is
+        //    `Scribe_Values.Look(ref paused, "paused", false)`, same file. It
+        //    short-circuits on the first giver with a doable bill, so the worst
+        //    case is a colony with nothing doable — where one `orders` call
+        //    touches every bill on the map. Note the asymmetry this creates and
+        //    do not let it read as an inconsistency: `bills` (spec 2.4) refuses
+        //    to call ShouldDoNow AT ALL for exactly this reason and derives the
+        //    same answer from the stored fields (WorldSafe Class A). It can
+        //    refuse because it chooses its own route. This verb cannot: the
+        //    call is inside vanilla's JobOnThing, there is no hook, and
+        //    declining it means declining to ask the question. Click-parity,
+        //    like the two above — the float menu writes exactly the same flags.
+        //
+        // What the makingFor fix DID close — a colony-wide bill cooldown, an
+        // RNG burn, a danger-threshold divergence and the missing reasons — is
+        // documented at ScanWorkGivers below.
+        //
+        // Not free either: bounded by the WorkGiverDef count rather than by map
+        // size, and since WorkGiverDef.directOrderable defaults true this runs
+        // arbitrary THIRD-PARTY JobOnThing implementations on a 38-mod bench.
+        // Vanilla's own worst case is destructive, so there is no basis for
+        // assuming mods are better behaved and no practical way to audit them
+        // all. That is an argument for this disclosure, not for hiding it.
         // --------------------------------------------------------------------
         [Verb("orders")]
         public static object Orders(VerbContext ctx)
@@ -508,7 +559,14 @@ namespace AutoRimmer
                 ["unavailable_reason"] = fatal,
                 ["note"] = "WorkGiverDef.directOrderable defaults true, so this list is as wide as the "
                     + "bench's WorkGiver set; pass a `work` value from it to `prioritize`. "
-                    + "Read-only: no job is taken.",
+                    + "NO JOB IS TAKEN, but asking is not read-only: this runs the game's own "
+                    + "work-giver scan, so a bill that can never be completed is deleted exactly as "
+                    + "opening the float menu on that bench would delete it, one job id is "
+                    + "consumed per candidate job (the id counter is saved), and every bill on the "
+                    + "map may be re-evaluated, which rewrites each bill's stored `paused` flag. "
+                    + "All three are exactly what the player's right-click does. What is NOT done "
+                    + "any more: setting the bills' ingredient-search cooldown, which used to "
+                    + "suppress a bill colony-wide for 500-600 ticks per call.",
             };
         }
 
@@ -526,6 +584,10 @@ namespace AutoRimmer
         // WIDGET GATE — RimWorld/FloatMenuOptionProvider_WorkGivers.cs
         // GetWorkGiverOption, reproduced clause for clause in ScanWorkGivers
         // below. Every rejection carries the game's own translated string.
+        //
+        // Shares `orders`' scan, so it shares its costs — see the cost note on
+        // `orders` above. They matter less here (this verb mutates by design)
+        // but they are the same calls.
         //
         // ECHO THE DURABLE STATE, NOT A HOPE. This routes through
         // Pawn_JobTracker.TryTakeOrderedJobPrioritizedWork, which — when
@@ -1186,6 +1248,50 @@ namespace AutoRimmer
             }
             catch { return "this pawn's think tree could not be read"; }
 
+            // ------------- makingFor: vanilla's ambient argument ------------
+            // RimWorld/FloatMenuMakerMap.cs GetOptions sets `makingFor =
+            // context.FirstSelectedPawn` around its ENTIRE option-building pass
+            // and clears it afterwards. That static is not decoration: it is how
+            // the game tells the work-giver layer "a player is asking on behalf
+            // of this pawn, right now", and four members downstream branch on
+            // it. A scan that omits it is therefore NOT the float menu's scan —
+            // it is a different, more destructive one (git-bug 32b9e01):
+            //
+            //  1. A COLONY-WIDE BILL COOLDOWN. RimWorld/WorkGiver_DoBill.cs
+            //     StartOrResumeBillJob: when TryFindBestBillIngredients fails
+            //     and `makingFor != pawn`, it writes
+            //     `bill.nextTickToSearchForIngredients = TicksGame +
+            //     ReCheckFailedBillTicksRange.RandomInRange` — IntRange(500,600)
+            //     in the same file. The same method's skip clause reads that
+            //     field back with NO pawn qualifier, so the suppression applies
+            //     to every colonist. Asking what a cook could do at a stove
+            //     would have stopped the whole colony cooking for ~10 in-game
+            //     seconds. A player's click never does this.
+            //  2. AN RNG BURN. That same line is Verse/IntRange.cs RandomInRange
+            //     -> Rand.RangeInclusive, i.e. the shared stream. WorldSafe's
+            //     Class R, which this project treats as disqualifying for an
+            //     observer.
+            //  3. A DANGER-THRESHOLD DIVERGENCE. Verse/DangerUtility.cs
+            //     NormalMaxDanger returns Danger.Deadly when `makingFor == p`.
+            //     Without it, every reachability test the scanners make runs at
+            //     a different threshold than the menu this verb claims parity
+            //     with — so it could honestly disagree with the game's own
+            //     answer, which is the exact failure the widget-parity doctrine
+            //     exists to prevent.
+            //  4. THE REASONS. `makingFor == pawn` is what unlocks the
+            //     JobFailReason strings: the missing-materials list in
+            //     StartOrResumeBillJob, and in RimWorld/
+            //     WorkGiver_ConstructDeliverResources.cs JobOnThing BOTH the
+            //     "missing 30 steel" string AND the loop that collects every
+            //     missing def instead of `break`ing at the first one. Without
+            //     it the agent gets a silent skip where the player gets a
+            //     reason, and pays a round trip to find out why.
+            //
+            // Set for the WHOLE walk, exactly as vanilla scopes it, and dropped
+            // before the caller acts: `prioritize` takes its job after this
+            // method returns, which is also when the float menu's option action
+            // runs.
+
             // NO EARLY EXIT. The walk always covers every WorkGiverDef, for two
             // reasons: `prioritize` must see the one it was NAMED, wherever it
             // sits in the order; and truncating the walk would truncate
@@ -1194,65 +1300,84 @@ namespace AutoRimmer
             // The cost is bounded by the bench's WorkGiverDef count, not by map
             // size, and each check is exactly what the float menu runs when it
             // opens.
-            foreach (var workType in DefDatabase<WorkTypeDef>.AllDefsListForReading)
+
+            var prevMakingFor = FloatMenuMakerMap.makingFor;
+            FloatMenuMakerMap.makingFor = pawn;
+            try
             {
-                if (workType?.workGiversByPriority == null) continue;
-                foreach (var giver in workType.workGiversByPriority)
+                foreach (var workType in DefDatabase<WorkTypeDef>.AllDefsListForReading)
                 {
-                    if (giver == null) continue;
-                    try
+                    if (workType?.workGiversByPriority == null) continue;
+                    foreach (var giver in workType.workGiversByPriority)
                     {
-                        if (pawn.Drafted && !giver.canBeDoneWhileDrafted) continue;
-                        if (!(giver.Worker is WorkGiver_Scanner scanner) || !scanner.def.directOrderable) continue;
-
-                        JobFailReason.Clear();
-                        if (hasThing)
+                        if (giver == null) continue;
+                        try
                         {
-                            if (ScannerShouldSkip(pawn, scanner, target.Thing)) continue;
-                        }
-                        else
-                        {
-                            var cells = scanner.PotentialWorkCellsGlobal(pawn);
-                            bool inSet = false;
-                            if (cells != null) foreach (var c in cells) { if (c == target.Cell) { inSet = true; break; } }
-                            if (!inSet || scanner.ShouldSkip(pawn, forced: true)) continue;
-                        }
+                            if (pawn.Drafted && !giver.canBeDoneWhileDrafted) continue;
+                            if (!(giver.Worker is WorkGiver_Scanner scanner) || !scanner.def.directOrderable) continue;
 
-                        Job job = hasThing
-                            ? (scanner.HasJobOnThing(pawn, target.Thing, forced: true)
-                                ? scanner.JobOnThing(pawn, target.Thing, forced: true) : null)
-                            : (scanner.HasJobOnCell(pawn, target.Cell, forced: true)
-                                ? scanner.JobOnCell(pawn, target.Cell, forced: true) : null);
+                            JobFailReason.Clear();
+                            if (hasThing)
+                            {
+                                if (ScannerShouldSkip(pawn, scanner, target.Thing)) continue;
+                            }
+                            else
+                            {
+                                var cells = scanner.PotentialWorkCellsGlobal(pawn);
+                                bool inSet = false;
+                                if (cells != null) foreach (var c in cells) { if (c == target.Cell) { inSet = true; break; } }
+                                if (!inSet || scanner.ShouldSkip(pawn, forced: true)) continue;
+                            }
 
-                        string label = hasThing
-                            ? "prioritize " + giver.verb + " " + Safe(() => target.Thing.LabelShort)
-                            : "prioritize " + giver.verb + " here";
-                        string why = null;
+                            Job job = hasThing
+                                ? (scanner.HasJobOnThing(pawn, target.Thing, forced: true)
+                                    ? scanner.JobOnThing(pawn, target.Thing, forced: true) : null)
+                                : (scanner.HasJobOnCell(pawn, target.Cell, forced: true)
+                                    ? scanner.JobOnCell(pawn, target.Cell, forced: true) : null);
 
-                        if (job == null)
-                        {
-                            // No job AND no reason = the game shows nothing at
-                            // all; that is a skip, not a rejection.
-                            if (!JobFailReason.HaveReason) continue;
-                            why = JobFailReason.Reason.CapitalizeFirst();
+                            string label = hasThing
+                                ? "prioritize " + giver.verb + " " + Safe(() => target.Thing.LabelShort)
+                                : "prioritize " + giver.verb + " here";
+                            string why = null;
+
+                            if (job == null)
+                            {
+                                // No job AND no reason = the game shows nothing at
+                                // all; that is a skip, not a rejection.
+                                if (!JobFailReason.HaveReason) continue;
+                                why = JobFailReason.Reason.CapitalizeFirst();
+                            }
+                            else
+                            {
+                                why = PrioritizeRejection(pawn, scanner, job, target, hasThing, out string better);
+                                if (better != null) label = better;
+                            }
+                            sink(giver, scanner, why == null ? job : null, label, why);
                         }
-                        else
+                        catch (Exception e)
                         {
-                            why = PrioritizeRejection(pawn, scanner, job, target, hasThing, out string better);
-                            if (better != null) label = better;
+                            // The game logs and continues here too
+                            // (GetWorkGiversOptionsFor's try/catch). Ours journals a
+                            // warning rather than a red error, and never fails the
+                            // verb over one broken modded work giver.
+                            Journal.EmitWarning("orders: work giver " + giver.defName + " threw: " + e.Message);
                         }
-                        sink(giver, scanner, why == null ? job : null, label, why);
-                    }
-                    catch (Exception e)
-                    {
-                        // The game logs and continues here too
-                        // (GetWorkGiversOptionsFor's try/catch). Ours journals a
-                        // warning rather than a red error, and never fails the
-                        // verb over one broken modded work giver.
-                        Journal.EmitWarning("orders: work giver " + giver.defName + " threw: " + e.Message);
                     }
                 }
             }
+            finally
+            {
+                // Vanilla assigns null here rather than restoring, because
+                // vanilla is the only setter and its pass cannot re-enter
+                // itself. We are a SECOND setter, so we restore: prevMakingFor
+                // is null on every real path (verbs drain in
+                // GameComponentUpdate, the float menu builds during OnGUI, so
+                // the two cannot interleave), which makes this identical to
+                // vanilla's null everywhere except the one case where nulling
+                // would clear a value we did not set.
+                FloatMenuMakerMap.makingFor = prevMakingFor;
+            }
+
             return null;
         }
 
