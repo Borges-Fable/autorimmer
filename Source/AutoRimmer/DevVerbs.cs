@@ -1331,6 +1331,16 @@ namespace AutoRimmer
             var kindBefore = other.RelationKindWith(player);
             string how;
 
+            // A permanent enemy's relation cannot move by ANY route —
+            // TryAffectGoodwillWith refuses (CanChangeGoodwillFor) and
+            // SetRelationDirect would be overridden — so refuse up front with
+            // the reason instead of returning an unchanged after-value the
+            // caller has to diff to notice.
+            if (other.def != null && other.def.permanentEnemy)
+                throw new VerbArgsException(
+                    $"'{other.Name}' ({other.def.defName}) is a permanent enemy; "
+                    + "its relation to the colony cannot be changed by any means");
+
             if (a.Has("relation"))
             {
                 string want = a.Str("relation").ToLowerInvariant();
@@ -1342,8 +1352,25 @@ namespace AutoRimmer
                     case "ally": kind = FactionRelationKind.Ally; break;
                     default: throw new VerbArgsException("relation must be hostile|neutral|ally");
                 }
-                other.SetRelationDirect(player, kind, canSendHostilityLetter: false, reason: "AutoRimmer dev fixture");
-                how = "relation=" + kind;
+                if (other.HasGoodwill && player.HasGoodwill)
+                {
+                    // SetRelationDirect Log.Errors AND no-ops for goodwill-using
+                    // factions (Faction.SetRelationDirect's first branch) — a red
+                    // error from a fixture verb breaches the standing invariant,
+                    // and this was found live in session 5's acceptance. For
+                    // these factions the relation IS the goodwill band, so drive
+                    // the goodwill to the band's far value instead.
+                    int target = kind == FactionRelationKind.Hostile ? -100
+                        : kind == FactionRelationKind.Ally ? 100 : 0;
+                    other.TryAffectGoodwillWith(player, target - before,
+                        canSendMessage: false, canSendHostilityLetter: false);
+                    how = "relation=" + kind + " (via goodwill " + before + " -> " + target + ")";
+                }
+                else
+                {
+                    other.SetRelationDirect(player, kind, canSendHostilityLetter: false, reason: "AutoRimmer dev fixture");
+                    how = "relation=" + kind;
+                }
             }
             else if (a.Has("goodwill"))
             {
