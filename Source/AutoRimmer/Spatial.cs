@@ -238,7 +238,10 @@ namespace AutoRimmer
             {
                 var zone = map.zoneManager.ZoneAt(c);
                 if (zone is Zone_Stockpile) { Note(legend, '=', "stockpile: " + zone.label); return '='; }
-                if (zone is Zone_Growing zg) { Note(legend, '"', "growing: " + zg.GetPlantDefToGrow()?.label); return '"'; }
+                // NEVER GetPlantDefToGrow: its getter assigns and SCRIBES a
+                // default onto a never-configured zone, so a map-view was
+                // writing the save (found by 2.4's audit; WorldSafe Class A).
+                if (zone is Zone_Growing zg) { Note(legend, '"', "growing: " + (WorldSafe.PlantToGrow(zg)?.label ?? "unconfigured")); return '"'; }
             }
             if (L("roof") && c.Roofed(map))
             {

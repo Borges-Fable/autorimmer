@@ -393,7 +393,7 @@ namespace AutoRimmer
                 if (i >= KindCap) { top.Add("+" + (byCount.Count - KindCap) + " kinds"); break; }
                 top.Add(byCount[i].Key + " x" + byCount[i].Value);
             }
-            return new Dictionary<string, object>
+            var threats = new Dictionary<string, object>
             {
                 // Recomputes every 101 ticks and re-enters FreeColonistsSpawned
                 // internally — called here outside every pawn loop on purpose.
@@ -401,6 +401,27 @@ namespace AutoRimmer
                 ["hostiles"] = hostiles,
                 ["kinds"] = top,
             };
+            // Alert_FireInHomeArea covers only the home area and no other
+            // vanilla alert covers fire at all, so the alert section — a
+            // verbatim readout passthrough — cannot see a fire on unclaimed
+            // ground (session-4 amendment on 2.4; ThingVerbs.FireScan is the
+            // full answer). One count here so the DIGEST is not blind either;
+            // present only when non-zero, like every other exception field.
+            try
+            {
+                int fires = 0;
+                var fireList = map.listerThings.ThingsInGroup(ThingRequestGroup.Fire);
+                for (int i = 0; i < fireList.Count; i++)
+                {
+                    var f = fireList[i];
+                    if (f == null || !f.Spawned) continue;
+                    try { if (f.Position.Fogged(map)) continue; } catch { continue; }
+                    fires++;
+                }
+                if (fires > 0) threats["fires"] = fires;
+            }
+            catch { }
+            return threats;
         }
 
         private static Dictionary<string, object> ChangedSection(long since)
