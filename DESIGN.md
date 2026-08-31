@@ -442,3 +442,45 @@ queue by default (an agent flailing mid-experiment must not page triage).
   lamp and `interactions` reported `force_pause {count:0}` afterwards. Recorded
   because "we avoided a trap" is worth much less than "the trap was armed, here
   is the reading, and it did not fire."
+- 2026-08-31 — **Deterministic goes in the mod; the playbook carries judgement.
+  And judgement is CHOOSING a policy, not executing one.** Evan, arguing this
+  out: "what can be in the mod should be." The test for "is this deterministic"
+  is whether every branch is computable from state the observers already
+  publish — and if it is not, the answer is to name the missing read, not to
+  reach for the playbook.
+
+  The post-raid procedure is the worked example. It looked like it needed
+  judgement and does not: "the fight is over" is `threats.hostiles == 0` (no
+  STANDING hostile, since `DigestVerb.ThreatSection` skips `p.Downed`); "rescue
+  with the nearest capable pawn" is distance plus capability; "rescue before
+  finishing off" is because bleeding is time-critical and finishing off is not;
+  "finish off or capture" is the world fact *is there a prison*; and "a raider
+  woke up" needs no decision at all because seek-at-will re-engages on its own.
+
+  **The general pattern: what feels like judgement at execution time usually
+  means a policy has not been decided yet.** "Finish off downed raiders?" looked
+  like a judgement call until the policy was fixed, at which point it collapsed
+  to a boolean about the world. The fix is to decide the policy once — in the
+  playbook, with its reasoning, reviewable in a diff — and let the mod execute
+  it every time thereafter.
+
+  What genuinely is NOT deterministic, and belongs to the agent: anything
+  needing a FORECAST rather than an observation (which research next, expand or
+  fortify); anything weighing INCOMMENSURABLE outcomes (risk one colonist to
+  save another, accept a quest whose reward is good and whose cost is a hostile
+  faction); the OBJECTIVE itself, which nothing in world state implies; whom to
+  recruit, which inherits both problems; and genuinely novel situations, where a
+  hardcoded procedure would confidently do the wrong thing.
+
+  Two corrections that produced this entry, recorded because they are easy to
+  repeat. **`map.dangerWatcher.DangerRating` is not `threats.hostiles`** — the
+  live case where a full-health swordsman wandered off to haul wood with three
+  raiders alive was `DangerRating` reading "None" while `hostiles` was still 3.
+  Conflating them is what made "is the fight over" look like a judgement call.
+  And **"changing it needs a rebuild" is a virtue for a load-bearing
+  deterministic procedure**, not a cost: it forces the change through a diff, a
+  build and acceptance, which is the standard every verb is already held to.
+
+  On cost, since that is what drove the question: the mod route is not "zero
+  tokens", it is ONE round trip per firing instead of N. For a procedure that
+  fires every raid and has roughly six steps, that difference is the argument.
