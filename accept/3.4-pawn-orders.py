@@ -902,7 +902,16 @@ def phase5():
     eq("5.12a", "an UNDRAFTED doctor is refused by the drafted-only gate", e,
        "data.counts.accepted", 0)
     eq("5.12b", "with the gate named", e, "data.rejected.0.gate", "drafted-only")
-    eq("5.12c", "and nothing was journalled", e, "data.action.journal_seq", None)
+    # 5.12c CHANGED by 4087644 (session 9). It used to assert journal_seq is
+    #       None — the pre-comment-#1 contract, where an order that changed
+    #       nothing wrote no `action` row at all. That is exactly the behaviour
+    #       4087644 fixed: the wasted orders were the ones invisible to the
+    #       journal, which is the aggregate the agent learns from, so "which of
+    #       my instructions are redundant" was unanswerable at session end. A
+    #       refusal now writes a row carrying its verdict. See
+    #       accept/4087644-order-honesty.py phase 5 for the new contract.
+    ge("5.12c", "and the refusal STILL wrote an action row carrying its verdict",
+       e, "data.action.journal_seq", 1)
 
     # 5.13 the same order, drafted, is accepted or refused for a REAL reason
     send("draft", {"pawns": [A]})
