@@ -990,3 +990,28 @@ the rules are playbook material).
   disjoint new files, the respond-half's core. Then 3.5 (fable, M1-critical),
   3.3 (fable, M2), 3.6, 1.6. 2.5 and 1.4's rwa Windows check remain
   machine-bound (dorian's box / python).
+
+### Round 3 — dispatched and parked (session end)
+
+3.2 + 3.4 were dispatched to opus workers in isolated worktrees with two
+cross-spec contracts settled at dispatch: `flick` belongs to 3.2 (it is a
+designation), and player-verb mutations journal as a new `action` event type
+mirroring the `dev` shape (the orchestrator owns the JOURNAL.md row when the
+first consumer merges). Evan called the wrap-up at the usage line before
+either worker finished reading context: **both stopped clean — no branches,
+no commits, no files, worktrees auto-cleaned — and both issues are PARKED at
+`state:next` with their dispatch comments intact.** Round-2's leftover
+worktrees and auto-branch pointers were removed at the same time.
+
+### Session 5 final state
+
+- **Done this session: 2.2, 1.5, 1.7, 3.1, 2.4** — five specs, plus 4.4
+  filed, seed playbook lessons on 4.1, and three orchestrator fixes on main.
+  **13 of 23 total.** Zero red errors in every bench session; the arrange-
+  act-read verification lesson (Evan's catch) recorded above.
+- **In flight:** none. **Blocked:** none. Tree clean, everything pushed.
+- **Bench:** healthy, stopped cleanly. Saves: kit-accept.rws + pawn-accept.rws
+  + journal-accept.rws + Autosave-1..5; no autostart armed.
+- **Next session picks:** 3.2 + 3.4 (redispatch; dispatch comments current),
+  then 3.5 (fable, M1-critical), 3.3 (fable, M2), 3.6, 1.6. Machine-bound:
+  2.5 (dorian's box), 1.4's rwa Windows check (python).
