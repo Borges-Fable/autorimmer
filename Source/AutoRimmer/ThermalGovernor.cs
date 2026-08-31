@@ -3,12 +3,20 @@ using System.IO;
 
 namespace AutoRimmer
 {
-    // The advance loop's thermal defense (spec 1.3, 0.1 amendment): while the
-    // CPU sits at/above ThermalHalveC for ThermalSustainS, the per-frame tick
-    // budget is halved; it restores below ThermalResumeC. The spike measured
-    // this chassis class plateauing at 93.4-94.1C under ANY sustained full-duty
-    // load with ~1C of headroom — there is no thermally free tps number, only
-    // duty cycle, so the governor acts on the budget, not the tps target.
+    // The advance's thermal defense (spec 1.3, 0.1 amendment; retranslated by
+    // 1.8). While the CPU sits at/above ThermalHalveC for ThermalSustainS, the
+    // advance runs ONE NOTCH slower on vanilla's speed ladder — Ultrafast to
+    // Superfast, Superfast to Fast, and so on — and says so in the result; it
+    // steps back up below ThermalResumeC. The spike measured this chassis class
+    // plateauing at 93.4-94.1C under ANY sustained full-duty load with ~1C of
+    // headroom: there is no thermally free tps number, only duty cycle.
+    //
+    // 1.3 expressed the same idea as a 0.5x multiplier on a per-frame
+    // DoSingleTick budget. That budget no longer exists — the game drives its
+    // own clock now — and this governor must NOT reintroduce a continuous rate
+    // by pausing and unpausing to synthesise one. A notch is the whole control.
+    // Advance reads `StepDown`; `Scale` survives only because status.json's
+    // `thermal.scale` field (Poller.cs, spec 1.3 protocol surface) publishes it.
     //
     // Temperature comes from a FILE, polled off-thread by the poller at ~1Hz:
     //   1. config.json thermalPath (explicit override),
@@ -16,7 +24,7 @@ namespace AutoRimmer
     //   3. <root>/thermal.txt — plain degrees C, for platforms with no
     //      in-process sensor (Windows: Mono has no usable WMI; a sidecar can
     //      write this file, and without one the governor is simply inert).
-    // The quota cap (Config.MaxTpsCap) is the primary, machine-independent
+    // The speed cap (Config.MaxTpsCap) is the primary, machine-independent
     // control; this is defense-in-depth for the bench that has sensors.
     public static class ThermalGovernor
     {
@@ -24,9 +32,14 @@ namespace AutoRimmer
         private static bool probed;
         private static DateTime hotSince = DateTime.MinValue;
 
-        // Read by the advance loop every frame and by status.json.
-        public static volatile float Scale = 1f;
+        // Read by the advance on the frame it changes, and by status.json.
+        public static volatile bool StepDown;
         public static double TempC = -1; // torn reads harmless: diagnostics only
+
+        // Legacy shape for status.json's `thermal.scale`, kept so the 1.3
+        // heartbeat contract does not change under callers. Nothing scales a
+        // rate by it any more.
+        public static float Scale => StepDown ? 0.5f : 1f;
 
         public static bool Available => sensorPath != null;
 
@@ -44,12 +57,12 @@ namespace AutoRimmer
                 {
                     if (hotSince == DateTime.MinValue) hotSince = DateTime.UtcNow;
                     else if ((DateTime.UtcNow - hotSince).TotalSeconds >= Config.ThermalSustainS)
-                        Scale = 0.5f;
+                        StepDown = true;
                 }
                 else if (c < Config.ThermalResumeC)
                 {
                     hotSince = DateTime.MinValue;
-                    Scale = 1f;
+                    StepDown = false;
                 }
             }
             catch { }
