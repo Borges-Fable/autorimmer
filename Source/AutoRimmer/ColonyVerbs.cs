@@ -168,6 +168,21 @@ namespace AutoRimmer
                 ["state"] = WorldSafe.BillState(b, count),
                 ["ingredient_radius"] = b.ingredientSearchRadius >= 999f
                     ? (object)"unlimited" : WorldSafe.R(b.ingredientSearchRadius, 0),
+                // THE INGREDIENT-SEARCH COOLDOWN, plain public field
+                // (RimWorld/Bill.cs). Not scribed — Bill.ExposeData does not
+                // touch it — but it is real and it is INVISIBLE in the UI:
+                // RimWorld/WorkGiver_DoBill.cs StartOrResumeBillJob skips a bill
+                // outright while `TicksGame <= nextTickToSearchForIngredients`,
+                // for every pawn, so a bill can read `active` here and be worked
+                // by nobody. Vanilla sets it when an ingredient search FAILS, to
+                // stop the whole colony re-searching each think tick.
+                // Published because a value in the future is the only observable
+                // proof that something ran a failing ingredient search on this
+                // bill — which is how git-bug 32b9e01 was reproduced, and how a
+                // third-party work giver doing the same thing gets caught.
+                ["next_ingredient_search_tick"] = b.nextTickToSearchForIngredients,
+                ["ingredient_search_cooldown"] = WorldSafe.SafeObj(
+                    () => Math.Max(0, b.nextTickToSearchForIngredients - Find.TickManager.TicksGame)),
                 ["skill_range"] = new List<object> { b.allowedSkillRange.min, b.allowedSkillRange.max },
                 ["pawn_restriction"] = b.PawnRestriction != null
                     ? (object)new Dictionary<string, object>
