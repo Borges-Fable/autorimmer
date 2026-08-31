@@ -1175,3 +1175,134 @@ route into `PawnSafe.Policies` (reading policies postdate 2.2, field name
    CAN be transacted with no window, but `TradeDeal.TryExecute` has an unguarded
    NRE on that exact path (`Find.WindowStack.WindowOfType<Dialog_Trade>()
    .FlashSilver()`) — make the branch unreachable, do not try/catch it.
+
+## Session 7 — 2026-08-31 (dorian's Linux box)
+
+Opus orchestrator, work handed over from BORGES. **1.8 closed and merged (15 of
+25).** 3.4 verified with caveats and deliberately left open; one real defect and
+one spec gap found in it. Both of the branches BORGES pushed have now been built
+and driven against a live bench.
+
+The session's shape was set by a fact the handover did not anticipate: **the two
+boxes have disjoint toolchains.** BORGES has no python, this box has no pwsh.
+3.4's acceptance shipped as a 797-line PowerShell driver, so on the box that now
+owns the bench it could not run at all.
+
+### Issues
+
+| issue | outcome |
+|---|---|
+| 1.8 advance drives the game clock (b8785e8) | **GREEN, 109/0/2, merged FF at `0079e00`, CLOSED** |
+| 3.4 Pawn orders + policies (39c9db7) | 130/148, 1 real defect, stays `state:next` |
+| manual work priorities unreachable (e8f2c32) | **filed**, p2, backlog |
+
+### 1.8 — Evan's challenge, now measured rather than argued
+
+The one commit BORGES left (`fa11564`) was sound and its "unverified draft"
+acceptance script needed no correction — only its exec bit changed. That is
+worth recording, because the commit introducing it said to trust nothing in it.
+
+**The regression test is the result.** A timing-out letter opens itself from
+`LetterStack.LetterStackTick` and stacks a force-pausing dialog. Under 1.3's
+budgeted `DoSingleTick` loop we ticked straight through it and
+`OpenAutomaticLetters` was starved for the rest of the session. Measured under
+1.8: the first letter halted the advance on its own open tick (41202 vs 41202),
+the dialog cleared, and a **second** timing-out letter arrived and opened at
+41801 vs 41801. The old loop was not merely inelegant — it broke vanilla's own
+letter timing, which is exactly what 1.7 had to paper over.
+
+The ladder is exact and replaces 1.3's tps table:
+
+| speed | nominal | measured | overshoot bound |
+|---|---|---|---|
+| Normal | 60 | 59.9857 | 2 |
+| Fast | 180 | 179.9873 | 6 |
+| Superfast | 360 | 359.8356 | 24 |
+| Ultrafast | 900 | 899.7799 | 30 |
+
+20010 ticks in 22.24s wall at Ultrafast; `status.json` showed `paused:false`
+across 109 samples mid-flight with the in-flight `advance` block carrying
+`ticks_done`/`target`. Two SKIPs, both refusals to fake a result: an external
+pause needs a human on the space bar, and `PlayerCanControl` is unreachable from
+the protocol (the script documents the exact `fade-screen` fixture step that
+would reach it, and declines to add it because that file is outside 1.8's set).
+
+### 3.4 — verified with caveats, NOT closed
+
+Ported the acceptance to `accept/3.4-pawn-orders.py`: same check ids, same raw
+file protocol, no `rwa` dependency. **Both drivers now exist on purpose** —
+each is the only one that runs where it lives. Two deviations from the
+PowerShell, both where PowerShell forgives what python throws on: `@($null)` is
+a one-element array there (so an absent list reads as non-empty), and an
+out-of-range read returns null instead of raising.
+
+Built and verified on **main merged into the branch**, not the branch alone:
+3.4 sat 16 commits behind, so a branch-only DLL contains no 3.2 code and would
+be an artifact that never ships. The merge was clean and the combined build is
+0/0, which settles the flagged merge debt as a dedupe question, not a collision.
+
+**Bullets 1 and 4 fully passed** — the draft/move/undraft round trip with the
+4000-tick hold, and a surgery bill performed by a doctor under advance inside
+the first 6000-tick window, with the `Anesthetic` hediff on the patient
+afterwards. Bullet 2 did not run and bullet 3 half-ran, both for fixture
+reasons recorded on the issue.
+
+**One real defect:** `warden {mode:"AttemptRecruit", recruitable:true}` evaluates
+the mode gate against the BEFORE state and applies `recruitable` afterwards, so
+the mode silently does not take — and 3.4's own acceptance makes exactly that
+call. The refusal is at least visible in `refused[]`, which is why it is a
+defect and not a trap.
+
+**One spec gap, filed as `e8f2c32`:** `work-priorities` correctly refuses
+priority 1 or 2 when manual priorities are off, but manual priorities default
+OFF on a new colony and nothing in the ~80-verb surface can turn them on
+(`playSettings.useWorkPriorities`). 8 of 3.4's 18 failures are unreachable
+state, not wrong behaviour — its acceptance cannot pass on a colony the agent
+staged itself.
+
+### The fixture lesson, which cost the first run
+
+The first attempt loaded `Autosave-5.rws` after checking its 39 required mods
+against the bench's 39 — zero missing, so compatibility was verified rather than
+assumed. What was NOT checked was whether the colony was *alive*. It was in a
+mood death spiral: 4 of 5 colonists downed, bleeding and untended, and the
+designated surgery patient **died mid-run**, which is why `surgery-options`
+returned empty. All 44 failures traced to that.
+
+It was not wasted. Zero red errors, and every verb refused cleanly under
+conditions no fixture would have produced deliberately: `undraft` on the whole
+roster returned gates `["downed","downed","downed","downed","downed","already"]`,
+and `assign` on the dead pawn returned a clean bad-args naming the id. **A
+compatible save is not a viable save — check the pawns, not just the modIds.**
+
+### New hazard instance for DESIGN
+
+`Dialog_NamePlayerFactionAndSettlement` force-paused the game mid-run and
+`advance` returned `reason:"dialog"`. A naming dialog on the ordinary play path
+is a 1.7-class wedge not previously in the list, and is concrete evidence for
+3.5 being M1-critical.
+
+### Bench state
+
+- **`autostart.rws` IS ARMED, and this time deliberately** — a quicktest map
+  staged with `dev:starter-kit survival`, 3 healthy colonists, a research bench,
+  32 startable projects, Anesthetize addable. It is a known-good fixture, not a
+  stale one. **It still needs the stockpile re-sited away from where the
+  colonists idle before 3.4 is re-run** — that is what broke bullet 2.
+- **`Prefs.xml` was changed from 640x480 windowed to 2560x1600 fullscreen** so
+  the run could be watched. Backup at `Prefs.xml.bak-640x480`. The small
+  resolution was a deliberate cheap-render choice; restore it for unwatched runs.
+- The launcher re-applies its `special:rwagent` windowrule every boot; `--no-rule`
+  skips it.
+
+### Next, in order
+
+1. **3.4**: fix the `warden` lever ordering, re-site the fixture stockpile,
+   re-run. Bullets 2 and 3 are the only ones outstanding.
+2. **1.9** (placement exact-or-refuse) — p1, blocks 3.3.
+3. **3.5** (M1-critical) and **3.6**, both pre-armed with verified recon.
+4. Orchestrator debt still owed: factor the four private `Act` emitters
+   (AreaVerbs, DesignationVerbs, ZoneVerbs from 3.2; PawnActs from 3.4) into one
+   helper. Both workers left the same comment saying the orchestrator owns it.
+   They differ in one behaviour: 3.2 drops null-valued extras, 3.4 keeps them.
+5. **2.5** is unblocked here — it needed dorian's box and this is it.
