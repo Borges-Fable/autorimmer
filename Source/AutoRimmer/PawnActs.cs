@@ -204,9 +204,19 @@ namespace AutoRimmer
 
             // `gate` names the widget clause that refused; `reason` is the
             // game's own string where the game has one, and only then.
-            public void No(Pawn p, string gate, string reason)
+            //
+            // `extra` carries the same per-pawn diagnostic block an accepted
+            // line gets. It was added 2026-08-31 because a refused pawn is
+            // exactly the one the caller has questions about — "why is this one
+            // not seeking" is not answered by the word "already" — and without
+            // it every rejection costs a second round trip to re-read state the
+            // verb had already computed. Optional, so 3.4's callers are
+            // unaffected.
+            public void No(Pawn p, string gate, string reason,
+                Dictionary<string, object> extra = null)
             {
                 var d = Line(p);
+                if (extra != null) foreach (var kv in extra) d[kv.Key] = kv.Value;
                 d["gate"] = gate;
                 d["reason"] = reason;
                 Rejected.Add(d);

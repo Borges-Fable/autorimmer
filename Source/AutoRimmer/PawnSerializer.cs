@@ -295,6 +295,30 @@ namespace AutoRimmer
                 ["at"] = Positions.Out(pawn.Position),
                 ["spawned"] = pawn.Spawned,
                 ["drafted"] = pawn.Drafted,
+                // Null when SeekAndKill is not loaded — "no such concept on
+                // this bench" is a different answer from "off", and an agent
+                // deciding whether combat is automated needs to tell them apart.
+                //
+                // READ SAFETY, audited 2026-08-31 and CONDITIONAL — do not
+                // shorten this to "read-only". SeekStateOf calls
+                // SeekRegistry.IsToggled/StanceOf/ShouldSeek and
+                // Patch_PawnGetGizmos.ShowsSeekGizmo. Those reach
+                // SeekRegistry.ActiveSet, which has TWO branches:
+                //   * SeekAndKillGameComponent.OwnSeekSet / StanceByPawn are
+                //     `??=` lazy inits over SCRIBED fields, but both carry field
+                //     initialisers and are repaired in ExposeData's PostLoadInit
+                //     arm, so the only null window is INSIDE a scribe pass and
+                //     our verbs run at GameComponentUpdate. Unreachable.
+                //   * PSInterop.PsSeekSet, taken only when Perspective Shift is
+                //     loaded, does a reflective SetValue that INSTALLS a fresh
+                //     HashSet into PS's scribed seekAtWillPawns field when it
+                //     reads null (PSInterop.cs, PsSeekSet). That is a genuine
+                //     write-on-read, and this observer would trigger it.
+                // PS is absent from the agent bench by construction
+                // (profile/make-profile-agent.sh: "no PerspectiveShift"), so the
+                // second branch is dead HERE. If PS is ever added, re-audit
+                // before trusting this line.
+                ["seek"] = PawnActs.SeekStateOf(pawn),
                 ["downed"] = pawn.Downed,
                 ["dead"] = pawn.Dead,
                 ["awake"] = Safe(() => (object)pawn.Awake()) ?? true,

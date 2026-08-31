@@ -1361,3 +1361,87 @@ pattern, so `pgrep` matched itself and the loop could never exit. I hit this
 once with `1.8-game-clock`, said so, then wrote it four more times. Use the
 task-completion notification instead of polling, or match on something the
 waiter does not itself contain.
+
+### Session 7, round 3 — seek-at-will, and a long play session that filed five issues
+
+**`seek-at-will` shipped (git-bug 3a0e042), merged, closed.** The first
+MOD-AWARE verb in the repo: it reflects into SeekAndKill with no compile-time
+reference, calls the mod's own `ShowsSeekGizmo` as the gate authority rather
+than copying it, and toggles through `MpCompat.SyncedToggleSeek`.
+
+Evan's brief was narrow and correct: "all we need for combat is to flip that
+thing on and to configure it in a way that respects the pawns skills, or to make
+it not on at all, they also always need to make sure flee mode is set to attack".
+Hostility stayed `assign`'s lever — one setter, one owner — and `seek-at-will`
+WARNS when a seeking pawn is not set to Attack, which is how the pair stops
+drifting without duplicating the setter.
+
+**Two raids, zero combat orders.** 400 points / 6 hostiles killed to the last;
+700 points / 10 hostiles fought off. Journal across the second:
+`{wear:11, equip:6, unforbid:2, assign:4, seek-at-will:5, drop:1, policy-new:1}`
+— no `draft`, no `attack`, no `move-to`.
+
+**A code review of the file found nine defects before it shipped**, three of
+which defeated its own purpose. Worth repeating as a process point: the file
+built clean, read well, and was wrong in ways only an adversarial pass caught —
+the hostility warning skipped the `already` path, so an idempotent re-issue (how
+an agent CHECKS readiness) reported zero warnings; every read printed "NOT
+WRITTEN — the journal writer is closed"; every rejection discarded diagnostics
+it had already computed.
+
+#### Five issues filed, all from playing rather than reading specs
+
+| id | what |
+|---|---|
+| `4087644` p1 | **Job verbs report success for orders that did nothing.** `TryTakeOrderedJob` returns true when `curJob.JobIsSameAs` — a false positive on every did-my-action-work check. Seen live: `equip` returned `accepted:1` with `job_def:"Wait_MaintainPosture"`. |
+| `1a072fa` p1 | No verb can turn on FSWA auto-arming, so pawns cannot arm themselves. |
+| `1eb2262` p1 | `pawns` returns an unstable order; acceptance keyed on `roster[0]` is flaky. |
+| `826d4bf` p2 | No verb can use a targetable item on a target — resurrector serums, shock lances, EMP all unreachable. |
+| `e8f2c32` p2 | Manual work priorities unreachable (filed earlier this session). |
+
+Plus two in the FSWA repo (`f512ec0` role-from-traits/skills/passions,
+`8070f34` non-CE defaults), because that logic is deterministic and belongs in
+the mod, not guessed per call by an agent.
+
+#### Evan's framing that reshaped the attribution problem
+
+> "We're in the business of optimizing, we can't have any features we're wasting
+> tokens on, and it turns out the whole time another pawn was doing them by
+> themselves. A job is done when it's done, but the reason it's done needs to
+> come along with that."
+
+The point is COST, not correctness. If the agent cannot tell which of its orders
+were redundant, it keeps paying tokens to issue instructions the colony would
+have executed anyway — and it can never learn which classes of instruction to
+stop sending. Three failure shapes, only the first fixable by better reporting:
+the order silently does nothing (confirmed bug, `4087644`); the order works but
+they would have done it anyway (no bug, and the outcome is identical); the order
+works and is interrupted. An investigation into the cheapest attribution signal —
+including whether redundancy can be detected BEFORE spending the order — was
+dispatched and is the input to the next decision.
+
+#### Play lessons for the playbook (4.1)
+
+- **Skill is not assignment.** A queued medical bill does nothing unless some
+  OTHER pawn has that work CHECKED — a pawn cannot operate on itself, and with
+  manual priorities off the Work tab is a checkbox column where 0 is unchecked.
+  Evan caught this live: the only pawn with Doctor ticked was the patient.
+- **Vanilla auto-forbids weapons dropped by downed or dead pawns.** 8 of 23 on
+  the map were unusable until `unforbid`. FSWA skips forbidden weapons
+  explicitly, so autonomous arming silently does nothing — while a direct
+  `equip` order bypasses forbidden, which is what MASKS the problem.
+- **But do not unforbid during a fight**: a colonist immediately went to haul an
+  assault rifle to a stockpile mid-raid.
+- **`equip`/`wear` are jobs, not writes.** The pawn must walk to the item and
+  combat interrupts it. Our best melee fighter spent an engagement empty-handed.
+- **A policy beats an order for durable state.** Nine forced `wear` orders and a
+  `drop` failed to get armour onto a pawn whose apparel policy preferred a
+  parka; one `policy-new` + `assign` did it for all four instantly.
+- **Seek releases a pawn when danger drops**, even with hostiles still alive — a
+  full-health swordsman went back to hauling wood with three raiders on the map.
+
+#### Bench
+
+`autostart.rws` intact at tick 89426 and NOT overwritten with the post-raid
+wreck. Four colonists, marine armour, needs topped, Doctor and Hauling checked
+for all — start here.
