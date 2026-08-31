@@ -42,7 +42,7 @@ Log hooks attach when AutoRimmer's ctor runs — last in the load order — so
 engine-init and earlier-mod load warnings (the bench's SteamAPI.Init line,
 notably) never reach the journal. That is LogRelay's beat (it backfills the
 pre-ctor log); the journal starts at its `boot` marker.
-| `dev` | `verb`, `step`, `target?`, … | provenance of every state-mutating dev action (3.1 owns the type; `journal-selftest` writes it today) |
+| `dev` | `verb`, `step`, `target?`, … | provenance of every state-mutating dev action (3.1 owns the type; `journal-selftest` and `pawn-fixture` write it today) |
 
 ## Letter timing — the "once per frame" claim was half wrong
 
