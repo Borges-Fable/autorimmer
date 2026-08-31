@@ -26,10 +26,20 @@ namespace AutoRimmer
         private const double MinFileAgeMs = 250;     // writer-finished heuristic
         private const double NoGameAfterSeconds = 5;
 
+        // Deliberately much longer than NoGameAfterSeconds. A stalled heartbeat
+        // is ambiguous: the game may have unloaded, or the main thread may just
+        // be inside a long event (map generation, a big-colony autosave), and
+        // falsely abandoning a HEALTHY in-flight advance is far worse than
+        // answering an orphaned one late. 5s is right for refusing a NEW
+        // command with no-active-game (it is retryable); 20s is the bar for
+        // declaring an in-flight command dead (it is not).
+        private const double AbandonAfterSeconds = 20;
+
         private static string root, inboxDir, doneDir, resultsDir, statusPath;
         private static long lastHeartbeat = -1;
         private static DateTime lastBeatChange = DateTime.UtcNow;
         private static DateTime lastStatusWrite = DateTime.MinValue;
+        private static bool sawGame;
 
         public static string Root => root;
 
@@ -60,6 +70,27 @@ namespace AutoRimmer
             t.Start();
         }
 
+        // The cycle order IS the "journal flushed before the result" invariant,
+        // and the old order did not establish it (git-bug 4b65a28, defect 6).
+        // Flush() and the Outgoing drain read two independent queues, so
+        // flushing and then draining proved nothing about what the drain would
+        // find; and ScanInbox ran BEFORE Flush, which executes the off-thread
+        // `journal` verb against a file that is up to one cycle stale.
+        //
+        // Correct order, and the reason for each step:
+        //   1. boundary check   — answer anything the vanished game orphaned
+        //   2. Flush            — the `journal` verb about to run in step 3
+        //                         reads the FILE; it must be current first
+        //   3. ScanInbox        — buffers its results rather than writing them,
+        //                         so no result escapes ahead of step 4
+        //   4. drain Outgoing   — into the SAME buffer, so the set of results
+        //                         this cycle will write is now fixed
+        //   5. Flush            — everything journaled before any of those
+        //                         results is now on disk
+        //   6. write the buffer — every result file is therefore
+        //                         journal-consistent by construction
+        private static readonly List<Result> batch = new List<Result>();
+
         private static void Loop()
         {
             while (true)
@@ -67,13 +98,14 @@ namespace AutoRimmer
                 try
                 {
                     Thread.Sleep(PollMs);
-                    ScanInbox();
-                    // Journal before results, deliberately: an advance halt
-                    // enqueues its journal events strictly before its result,
-                    // so flushing here first makes every result
-                    // journal-consistent (spec 1.3 invariant).
+                    CheckGameBoundary();
                     Journal.Flush();
-                    while (Runtime.Outgoing.TryDequeue(out var result)) WriteResult(result);
+                    batch.Clear();
+                    ScanInbox(batch);
+                    while (Runtime.Outgoing.TryDequeue(out var result)) batch.Add(result);
+                    Journal.Flush();
+                    for (int i = 0; i < batch.Count; i++) WriteResult(batch[i]);
+                    batch.Clear();
                     if ((DateTime.UtcNow - lastStatusWrite).TotalSeconds >= 1)
                     {
                         lastStatusWrite = DateTime.UtcNow;
@@ -85,7 +117,12 @@ namespace AutoRimmer
             }
         }
 
-        private static bool GameLoaded()
+        private static bool GameLoaded() => SecondsSinceHeartbeat() < NoGameAfterSeconds;
+
+        // Poller thread only (it advances the edge-detector's own state).
+        // double.MaxValue before the very first beat, so "never started" reads
+        // the same as "long gone".
+        private static double SecondsSinceHeartbeat()
         {
             long beat = Interlocked.Read(ref Runtime.Heartbeat);
             if (beat != lastHeartbeat)
@@ -93,10 +130,34 @@ namespace AutoRimmer
                 lastHeartbeat = beat;
                 lastBeatChange = DateTime.UtcNow;
             }
-            return beat > 0 && (DateTime.UtcNow - lastBeatChange).TotalSeconds < NoGameAfterSeconds;
+            return beat > 0 ? (DateTime.UtcNow - lastBeatChange).TotalSeconds : double.MaxValue;
         }
 
-        private static void ScanInbox()
+        // The main thread cannot notice its own disappearance: once the game
+        // unloads, GameComponentUpdate stops, so an advance in flight and every
+        // command already queued for the safe point would wait forever — the
+        // commands consumed into done/ with zero result files (1.5 blocker 2).
+        // The heartbeat is the only unload signal available off-thread, so the
+        // poller owns this edge.
+        private static void CheckGameBoundary()
+        {
+            double stalled = SecondsSinceHeartbeat();
+            if (stalled < NoGameAfterSeconds) { sawGame = true; return; }
+            if (!sawGame || stalled < AbandonAfterSeconds) return;
+            sawGame = false;
+            int answered = Runtime.ResetForGameBoundary(Runtime.BoundaryDetail);
+            Journal.Emit("session", new Dictionary<string, object>
+            {
+                ["kind"] = "unloaded",
+                ["aborted"] = answered,
+            });
+        }
+
+        // Results are buffered into `sink` rather than written here: every
+        // result file this cycle produces must land AFTER the cycle's second
+        // Journal.Flush, and an off-thread verb executed inline would otherwise
+        // beat it to disk.
+        private static void ScanInbox(List<Result> sink)
         {
             foreach (var file in Directory.GetFiles(inboxDir, "*.json"))
             {
@@ -111,7 +172,7 @@ namespace AutoRimmer
                 var obj = MiniJson.Parse(text);
                 if (obj == null)
                 {
-                    WriteResult(Result.Fail(fallbackId, "?", Err.BadJson));
+                    sink.Add(Result.Fail(fallbackId, "?", Err.BadJson));
                     continue;
                 }
 
@@ -119,7 +180,7 @@ namespace AutoRimmer
                 string op = MiniJson.GetString(obj, "op");
                 if (op == null)
                 {
-                    WriteResult(Result.Fail(id, "?", Err.UnknownOp, "envelope has no 'op'"));
+                    sink.Add(Result.Fail(id, "?", Err.UnknownOp, "envelope has no 'op'"));
                     continue;
                 }
 
@@ -129,7 +190,7 @@ namespace AutoRimmer
                     args = rawArgs as Dictionary<string, object>;
                     if (args == null)
                     {
-                        WriteResult(Result.Fail(id, op, Err.BadArgs, "'args' must be an object"));
+                        sink.Add(Result.Fail(id, op, Err.BadArgs, "'args' must be an object"));
                         continue;
                     }
                 }
@@ -137,7 +198,7 @@ namespace AutoRimmer
                 var verb = VerbRegistry.Get(op);
                 if (verb == null)
                 {
-                    WriteResult(Result.Fail(id, op, Err.UnknownOp,
+                    sink.Add(Result.Fail(id, op, Err.UnknownOp,
                         "known ops: " + string.Join(", ", VerbRegistry.Ops)));
                     continue;
                 }
@@ -145,11 +206,11 @@ namespace AutoRimmer
                 var cmd = new PendingCommand { Id = id, Op = op, Verb = verb, Args = args };
                 if (!verb.MainThread)
                 {
-                    WriteResult(VerbRegistry.Execute(cmd)); // handler contract: no Verse access
+                    sink.Add(VerbRegistry.Execute(cmd)); // handler contract: no Verse access
                 }
                 else if (!GameLoaded())
                 {
-                    WriteResult(Result.Fail(id, op, Err.NoActiveGame,
+                    sink.Add(Result.Fail(id, op, Err.NoActiveGame,
                         "load a save first; this verb runs at the in-game safe point"));
                 }
                 else
@@ -175,6 +236,22 @@ namespace AutoRimmer
 
         private static string IdOf(string file) => Path.GetFileNameWithoutExtension(file);
 
+        // One result FILE per command id. Sanitizing alone collapsed distinct
+        // ids onto one filename — "a/b" and "a_b" both became "a_b.json", so
+        // one command silently overwrote the other's result (git-bug 4b65a28).
+        // A clean id (letters, digits, - and _, which is every id rwa
+        // generates) is passed through byte-for-byte, so this changes no
+        // existing filename; anything the sanitizer had to touch gets the
+        // original id's hash appended, which makes the mapping injective again.
+        private static string ResultFileName(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return "unnamed.json";
+            string safe = Sanitize(id);
+            if (safe == id && id.Length <= 120) return safe + ".json";
+            if (safe.Length > 120) safe = safe.Substring(0, 120);
+            return safe + "-" + StableHash(id) + ".json";
+        }
+
         private static string Sanitize(string id)
         {
             if (string.IsNullOrEmpty(id)) return "unnamed";
@@ -184,10 +261,54 @@ namespace AutoRimmer
             return sb.ToString();
         }
 
+        // FNV-1a 32-bit. Deliberately not string.GetHashCode(): that is
+        // randomized per process on some runtimes, and the same id must map to
+        // the same filename across a relaunch (the stale-on-restart answer is
+        // written to it).
+        private static string StableHash(string s)
+        {
+            uint h = 2166136261;
+            foreach (char c in s)
+            {
+                h ^= c;
+                h *= 16777619;
+            }
+            return h.ToString("x8");
+        }
+
+        // Every consumed command owes exactly one result file, so the JSON
+        // BUILD has to be inside the guard too, not just the write. Before 1.5
+        // only AtomicWrite was guarded, and the result was already dequeued by
+        // then: a serializer throw lost that result permanently AND aborted the
+        // rest of the poller cycle — the remaining results, the journal flush
+        // and the status heartbeat with it (git-bug 4b65a28, defect 4).
+        //
+        // MiniJson.Write is now throw-proof in its own right; this is the
+        // second line of defence, and it degrades to a result file that says
+        // what happened rather than to silence.
+        private static void WriteResult(Result r)
+        {
+            if (r == null) return;
+            string path;
+            try { path = Path.Combine(resultsDir, ResultFileName(r.Id)); }
+            catch { return; } // nowhere to write it; nothing further is possible
+            string content;
+            try
+            {
+                content = BuildResultJson(r);
+            }
+            catch (Exception e)
+            {
+                try { content = FallbackResultJson(r, e); }
+                catch { return; }
+            }
+            AtomicWrite(path, content);
+        }
+
         // Envelope per DESIGN.md §Protocol, plus a small state header on every
         // response (open-question resolution: yes — the agent learns when its
         // command landed without a second round trip).
-        private static void WriteResult(Result r)
+        private static string BuildResultJson(Result r)
         {
             var snap = Runtime.GameState;
             var sb = new StringBuilder(512);
@@ -213,7 +334,26 @@ namespace AutoRimmer
             sb.Append(",\"sid\":").Append(MiniJson.J(Runtime.SessionId))
               .Append(",\"ts\":").Append(MiniJson.J(DateTime.UtcNow.ToString("o")))
               .Append('}');
-            AtomicWrite(Path.Combine(resultsDir, Sanitize(r.Id) + ".json"), sb.ToString());
+            return sb.ToString();
+        }
+
+        // Hand-built from nothing but MiniJson.J over known-safe strings, so it
+        // cannot fail the same way the real builder did. The command still gets
+        // its one result file and the caller still learns the id, the op and
+        // why.
+        private static string FallbackResultJson(Result r, Exception e)
+        {
+            var sb = new StringBuilder(384);
+            sb.Append("{\"id\":").Append(MiniJson.J(r.Id))
+              .Append(",\"op\":").Append(MiniJson.J(r.Op))
+              .Append(",\"ok\":false,\"error\":{\"code\":").Append(MiniJson.J(Err.Exception))
+              .Append(",\"detail\":").Append(MiniJson.J(
+                  "result serialization failed; the result data is lost but the command is answered: "
+                  + Journal.Truncate(e.ToString(), 1500)))
+              .Append("},\"sid\":").Append(MiniJson.J(Runtime.SessionId))
+              .Append(",\"ts\":").Append(MiniJson.J(DateTime.UtcNow.ToString("o")))
+              .Append('}');
+            return sb.ToString();
         }
 
         private static void WriteStatus()
@@ -236,6 +376,14 @@ namespace AutoRimmer
                   .Append(",\"ticks_done\":").Append(TimeDriver.TicksDone)
                   .Append(",\"target\":").Append(TimeDriver.Target)
                   .Append('}');
+            }
+            // Present only while a force-pausing modal is up — i.e. exactly
+            // when `advance` cannot run (spec 1.7). Its absence is the
+            // heartbeat's way of saying the stack is clear.
+            if (snap.forcePause != null)
+            {
+                sb.Append(",\"forcePause\":");
+                MiniJson.Write(sb, snap.forcePause);
             }
             if (ThermalGovernor.Available)
             {

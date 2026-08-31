@@ -26,7 +26,7 @@ namespace AutoRimmer
             var snap = Runtime.GameState;
             var verbs = new List<object>();
             foreach (var op in VerbRegistry.Ops) verbs.Add(op);
-            return new Dictionary<string, object>
+            var data = new Dictionary<string, object>
             {
                 ["gameLoaded"] = snap.gameLoaded,
                 ["paused"] = snap.paused,
@@ -37,6 +37,11 @@ namespace AutoRimmer
                 ["verbs"] = verbs,
                 ["root"] = Poller.Root,
             };
+            // Present only while a force-pausing modal is up, which is exactly
+            // when `advance` will refuse to tick (spec 1.7). Absent means the
+            // stack is clear.
+            if (snap.forcePause != null) data["forcePause"] = snap.forcePause;
+            return data;
         }
 
         [Verb("version", MainThread = false)]

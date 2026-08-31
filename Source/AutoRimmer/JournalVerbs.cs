@@ -9,6 +9,69 @@ namespace AutoRimmer
 {
     public static class JournalVerbs
     {
+        // Prefix on every letter the `timeout-letter` fixture creates, so
+        // `dialogs-clear` can drop exactly those and nothing the colony
+        // actually cares about.
+        public const string FixtureLetterLabel = "[AutoRimmer] timeout letter";
+
+        // The ONE text both the `error` and `error-at` steps log, because
+        // 1.5 blocker 3's acceptance turns entirely on the journal's per-text
+        // dedupe counting them as the same key.
+        public const string SelftestErrorText = "[AutoRimmer] selftest-induced red error (deliberate)";
+
+        // -1 = disarmed. Set by the `main-menu` fixture step, polled by
+        // AgentGameComponent, cleared at every game boundary so a fixture
+        // armed against one colony can never fire against the next.
+        public static int MainMenuAtTick = -1;
+
+        // Same shape, for `error-at`. Polled from GameComponentTick rather
+        // than GameComponentUpdate, deliberately: GameComponentTick runs
+        // INSIDE DoSingleTick, so the error fires from inside the advance
+        // loop, which is where a real one would.
+        public static int ErrorAtTick = -1;
+        private static int errorRepeats = 1;
+        private static string errorText = SelftestErrorText;
+
+        // Main thread, from AgentGameComponent.GameComponentTick.
+        public static void TickErrorFixture()
+        {
+            if (ErrorAtTick < 0) return;
+            int now;
+            try { now = Find.TickManager.TicksGame; }
+            catch { return; }
+            if (now < ErrorAtTick) return;
+            ErrorAtTick = -1;
+            for (int i = 0; i < errorRepeats; i++) Log.Error(errorText);
+        }
+
+        // Main thread, once per frame from AgentGameComponent AFTER
+        // TimeDriver.FrameStep.
+        //
+        // GenScene.GoToMainMenu disposes the Game, and this runs inside
+        // Game.UpdatePlay — so it is QUEUED as a long event instead of called
+        // inline. Queued events are pumped by LongEventHandler.LongEventsUpdate
+        // at the top of Root.Update, above and outside this call stack, which
+        // is the same phase the vanilla quit-to-menu button unloads from.
+        public static void TickMainMenuFixture()
+        {
+            if (MainMenuAtTick < 0) return;
+            int now;
+            try { now = Find.TickManager.TicksGame; }
+            catch { return; }
+            if (now < MainMenuAtTick) return;
+            MainMenuAtTick = -1;
+            Journal.Emit("dev", new Dictionary<string, object>
+            {
+                ["verb"] = "journal-selftest",
+                ["step"] = "main-menu",
+                ["target"] = "firing at tick " + now,
+                ["advance_in_flight"] = TimeDriver.Active,
+                ["advance_id"] = TimeDriver.ActiveId,
+            }, now);
+            LongEventHandler.QueueLongEvent(GenScene.GoToMainMenu, null,
+                doAsynchronously: false, exceptionHandler: null);
+        }
+
         // Reads the CURRENT session's journal file. Off-thread: file I/O only,
         // no Verse. The file is also directly tail-able from a shell; this verb
         // exists for filtered, protocol-shaped reads (rwa journal, spec 1.4).
@@ -69,6 +132,30 @@ namespace AutoRimmer
         // load. Each is declared as an undeclared addition on its own issue,
         // keeps the Prefs.DevMode gate, and journals a `dev` event per step for
         // provenance. All of them are superseded by 3.1.
+        //
+        // Four more added for 1.5/1.7, same discipline, disclosed on both
+        // issues. Every one exists because the acceptance has to be driveable
+        // from OUTSIDE the game — the worker cannot launch it and the
+        // orchestrator runs the bench through the file protocol:
+        //   `timeout-letter` — a real vanilla LetterWithTimeout armed to open
+        //       ITSELF a few ticks out, which is 1.7's whole mechanism.
+        //   `dialogs`        — read-only report of the force-pause stack.
+        //   `dialogs-clear`  — close force-pausing windows and drop the
+        //       fixture letter. 1.7 deliberately ships no dismiss verb (3.5
+        //       owns that), but its second acceptance bullet requires a CLEAR
+        //       stack, so the escape hatch lives here, dev-gated, and nowhere
+        //       a player verb can reach.
+        //   `main-menu`      — arm a deferred return to the main menu, so
+        //       1.5's "kill a game mid-advance" is a command and not a
+        //       human clicking a menu on a parked window.
+        //   `error-at`       — arm a red error to fire from inside a TICK at a
+        //       future tick. 1.5 blocker 3's acceptance needs an error during
+        //       an advance, after the journal's per-text cap has gone silent
+        //       for that text; nothing else can produce that state.
+        //   `weird-result`   — attach a deliberately unserializable payload
+        //       (null string, Verse object, a ToString() that throws, a cyclic
+        //       tree, NaN) so 1.5 defect 4's acceptance has something to fail
+        //       on. It must still produce exactly one result file.
         [Verb("journal-selftest")]
         public static object Selftest(VerbContext ctx)
         {
@@ -108,7 +195,7 @@ namespace AutoRimmer
                         Messages.Message("[AutoRimmer] selftest message", MessageTypeDefOf.NeutralEvent, historical: false);
                         break;
                     case "error":
-                        Log.Error("[AutoRimmer] selftest-induced red error (deliberate)");
+                        Log.Error(SelftestErrorText);
                         break;
                     case "raid":
                     {
@@ -332,8 +419,171 @@ namespace AutoRimmer
                         };
                         break;
                     }
+                    case "timeout-letter":
+                    {
+                        // 1.7's acceptance mechanism, on the REAL vanilla path
+                        // rather than a stub. LetterDef.letterClass defaults to
+                        // StandardLetter, which is a ChoiceLetter and therefore
+                        // a LetterWithTimeout; StartTimeout arms disappearAtTick;
+                        // ShouldAutomaticallyOpenLetter => LastTickBeforeTimeout
+                        // makes the letter open ITSELF from LetterStackTick —
+                        // inside DoSingleTick, inside the advance loop. Its
+                        // ChoiceLetter.OpenLetter stacks a
+                        // Dialog_NodeTreeWithFactionInfo, whose Dialog_NodeTree
+                        // base sets forcePause = true. That is the whole chain
+                        // the issue documents, driven end to end.
+                        int timeout = ctx.Args.Int("timeout_ticks_letter", 120);
+                        if (timeout < 2 || timeout > 600000)
+                            throw new VerbArgsException("timeout_ticks_letter must be 2..600000");
+                        string tag = ctx.Args.Str("letter_tag", "");
+                        var letter = LetterMaker.MakeLetter(
+                            FixtureLetterLabel + (tag.Length > 0 ? " " + tag : ""),
+                            "Deliberate timing-out letter (spec 1.7 acceptance). It opens itself on its "
+                            + "last tick before timeout, which stacks a force-pausing dialog under the "
+                            + "advance loop.",
+                            LetterDefOf.NeutralEvent);
+                        if (letter == null)
+                            throw new VerbArgsException("LetterMaker refused NeutralEvent as a choice letter");
+                        letter.StartTimeout(timeout);
+                        Find.LetterStack.ReceiveLetter(letter, null, 0, playSound: false);
+                        int now = Find.TickManager.TicksGame;
+                        // LastTickBeforeTimeout is disappearAtTick <= TicksGame+1.
+                        int opensAt = letter.disappearAtTick - 1;
+                        target = $"opens itself at tick {opensAt} (timeout {timeout})";
+                        extras["timeout_letter"] = new Dictionary<string, object>
+                        {
+                            ["label"] = letter.Label.ToString(),
+                            ["now_tick"] = now,
+                            ["disappear_at_tick"] = letter.disappearAtTick,
+                            ["opens_at_tick"] = opensAt,
+                            ["in_stack"] = Find.LetterStack.LettersListForReading.Contains(letter),
+                        };
+                        break;
+                    }
+                    case "dialogs":
+                    {
+                        // Read-only. The same payload shape status.json and the
+                        // advance result use, so an assertion written against
+                        // one holds against all three.
+                        var stack = Find.WindowStack;
+                        extras["dialogs"] = TimeDriver.ForcePausePayload(stack);
+                        target = stack != null && stack.WindowsForcePause ? "force-pause up" : "clear";
+                        break;
+                    }
+                    case "dialogs-clear":
+                    {
+                        // The fixture-only escape hatch. It also drops the
+                        // fixture letter by default, and that is not tidiness:
+                        // a LetterWithTimeout still inside its last tick
+                        // re-opens the SAME dialog on the very next tick, which
+                        // would read as a poisoned queue when nothing is wrong.
+                        var stack = Find.WindowStack;
+                        var closed = new List<object>();
+                        if (stack != null)
+                        {
+                            var doomed = new List<Window>();
+                            var live = stack.Windows;
+                            for (int i = 0; i < live.Count; i++)
+                                if (live[i] != null && live[i].forcePause) doomed.Add(live[i]);
+                            foreach (var w in doomed)
+                            {
+                                string name = w.GetType().Name;
+                                if (stack.TryRemove(w, doCloseSound: false)) closed.Add(name);
+                            }
+                        }
+                        int dropped = 0;
+                        if (ctx.Args.Bool("drop_fixture_letters", true))
+                        {
+                            var ls = Find.LetterStack;
+                            var doomedLetters = new List<Letter>();
+                            foreach (var l in ls.LettersListForReading)
+                            {
+                                if (l == null) continue;
+                                if (l.Label.ToString().StartsWith(FixtureLetterLabel, StringComparison.Ordinal))
+                                    doomedLetters.Add(l);
+                            }
+                            foreach (var l in doomedLetters) { ls.RemoveLetter(l); dropped++; }
+                        }
+                        target = $"{closed.Count} closed, {dropped} fixture letters dropped";
+                        extras["dialogs_cleared"] = new Dictionary<string, object>
+                        {
+                            ["closed"] = closed,
+                            ["letters_dropped"] = dropped,
+                            ["still_force_paused"] = stack != null && stack.WindowsForcePause,
+                        };
+                        break;
+                    }
+                    case "error-at":
+                    {
+                        // 1.5 blocker 3's acceptance needs a red error to fire
+                        // DURING an advance, after the journal's per-text cap
+                        // has already gone silent for that text — which is the
+                        // exact state in which halt_on_error used to do
+                        // nothing. Run `error` nine times first, then arm this.
+                        int delay = ctx.Args.Int("error_delay_ticks", 200);
+                        if (delay < 0 || delay > 600000)
+                            throw new VerbArgsException("error_delay_ticks must be 0..600000");
+                        int repeats = ctx.Args.Int("error_repeats", 1);
+                        if (repeats < 1 || repeats > 50)
+                            throw new VerbArgsException("error_repeats must be 1..50");
+                        errorText = ctx.Args.Str("error_text", SelftestErrorText);
+                        errorRepeats = repeats;
+                        int armedAt = Find.TickManager.TicksGame;
+                        ErrorAtTick = armedAt + delay;
+                        target = $"{repeats}x at tick {ErrorAtTick}";
+                        extras["error_at"] = new Dictionary<string, object>
+                        {
+                            ["armed_at_tick"] = armedAt,
+                            ["fires_at_tick"] = ErrorAtTick,
+                            ["repeats"] = repeats,
+                            ["text"] = errorText,
+                        };
+                        break;
+                    }
+                    case "weird-result":
+                    {
+                        // 1.5 defect 4's acceptance: a verb returning a null
+                        // string and an arbitrary object must still produce
+                        // exactly one result file. Everything in here is a
+                        // shape that used to take the serializer — and with it
+                        // the rest of the poller cycle — down.
+                        var cycleOuter = new Dictionary<string, object>();
+                        cycleOuter["self"] = new List<object> { cycleOuter };
+                        extras["weird"] = new Dictionary<string, object>
+                        {
+                            ["null_string"] = (string)null,
+                            ["null_in_list"] = new List<string> { "a", null, "c" },
+                            ["verse_object"] = (object)map ?? "no map",
+                            ["verse_def"] = ThingDefOf.Steel,
+                            ["throws_on_tostring"] = new ThrowingToString(),
+                            ["cycle"] = cycleOuter,
+                            ["nan"] = double.NaN,
+                            ["infinity"] = double.PositiveInfinity,
+                        };
+                        target = "hostile payload attached";
+                        break;
+                    }
+                    case "main-menu":
+                    {
+                        // Arms only. It fires from the GameComponent AFTER the
+                        // advance loop has run for the frame, so the game
+                        // really does unload with a command in flight — which
+                        // is the only state 1.5's blockers 1 and 2 live in.
+                        int delay = ctx.Args.Int("main_menu_delay_ticks", 0);
+                        if (delay < 0 || delay > 600000)
+                            throw new VerbArgsException("main_menu_delay_ticks must be 0..600000");
+                        int armedAt = Find.TickManager.TicksGame;
+                        MainMenuAtTick = armedAt + delay;
+                        target = $"armed for tick {MainMenuAtTick}";
+                        extras["main_menu"] = new Dictionary<string, object>
+                        {
+                            ["armed_at_tick"] = armedAt,
+                            ["fires_at_tick"] = MainMenuAtTick,
+                        };
+                        break;
+                    }
                     default:
-                        throw new VerbArgsException($"unknown step '{step}' (letter|message|error|raid|downed|break|save|stockpile|alerts|alerts-clear|colonists|power)");
+                        throw new VerbArgsException($"unknown step '{step}' (letter|message|error|error-at|weird-result|raid|downed|break|save|stockpile|alerts|alerts-clear|colonists|power|timeout-letter|dialogs|dialogs-clear|main-menu)");
                 }
                 Journal.Emit("dev", new Dictionary<string, object>
                 {
@@ -379,6 +629,15 @@ namespace AutoRimmer
                 }
             }
             throw new VerbArgsException($"no clear {w}x{h} area within 60 cells of ({anchor.x},{anchor.z})");
+        }
+
+        // Deliberately hostile, for the `weird-result` step. A Verse object's
+        // ToString() is arbitrary game code; this is the shape that used to
+        // lose a result file AND abort the rest of the poller cycle.
+        private sealed class ThrowingToString
+        {
+            public override string ToString()
+                => throw new InvalidOperationException("deliberate ToString failure (1.5 acceptance)");
         }
 
         // Faction set BEFORE spawn (SetFactionDirect, the game's own dev-spawn

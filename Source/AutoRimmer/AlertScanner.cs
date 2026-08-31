@@ -59,14 +59,19 @@ namespace AutoRimmer
             {
                 var alert = active[i];
                 if (alert == null) continue;
+                string id = alert.GetType().Name;
+                // Priority is VIRTUAL and belongs inside the same guard as
+                // Label: a modded alert that throws from it would otherwise
+                // take the whole call down (1.5 nit).
                 string label;
-                try { label = alert.Label; }
-                catch { label = alert.GetType().Name; }
+                AlertPriority priority;
+                try { label = alert.Label; priority = alert.Priority; }
+                catch { label = id; priority = AlertPriority.Medium; }
                 result.Add(new AlertLine
                 {
-                    Id = alert.GetType().Name,
+                    Id = id,
                     Label = label,
-                    Priority = alert.Priority,
+                    Priority = priority,
                     Order = i,
                 });
             }
@@ -118,15 +123,19 @@ namespace AutoRimmer
                 current.Add(alert);
                 if (known.ContainsKey(alert)) continue;
                 string id = alert.GetType().Name;
-                string label;
-                try { label = alert.Label; }
-                catch { label = id; }
+                // alert.Priority is VIRTUAL, and it used to sit OUTSIDE this
+                // try — in the Emit call below. One modded alert throwing from
+                // it aborted the whole GameComponentUpdate body for that frame:
+                // the command drain and the advance loop with it (1.5 nit).
+                string label, priority;
+                try { label = alert.Label; priority = alert.Priority.ToString(); }
+                catch { label = id; priority = "unknown"; }
                 known[alert] = new[] { id, label };
                 Journal.Emit("alert_on", new Dictionary<string, object>
                 {
                     ["id"] = id,
                     ["label"] = label,
-                    ["priority"] = alert.Priority.ToString(),
+                    ["priority"] = priority,
                 }, Find.TickManager.TicksGame);
             }
 

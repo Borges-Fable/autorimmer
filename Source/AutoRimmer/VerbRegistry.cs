@@ -92,9 +92,26 @@ namespace AutoRimmer
             throw new VerbArgsException($"arg '{key}' must be a number");
         }
 
-        public int Int(string key, int fallback) => (int)Num(key, fallback);
+        // Range-checked, not an unchecked cast. `advance {ticks:1e10}` used to
+        // become a garbage int silently — int.MinValue on Mono, 0 on .NET Core,
+        // both undefined behaviour for an out-of-range double-to-int
+        // conversion — and the caller got a misleading error about a negative
+        // tick count instead of being told its number was too big (1.5 nit).
+        // Fractional values still truncate, as before.
+        public int Int(string key, int fallback) => ToInt(key, Num(key, fallback));
 
-        public int IntReq(string key) => (int)NumReq(key);
+        public int IntReq(string key) => ToInt(key, NumReq(key));
+
+        private static int ToInt(string key, double d)
+        {
+            if (double.IsNaN(d) || double.IsInfinity(d) || d > int.MaxValue || d < int.MinValue)
+                throw new VerbArgsException(
+                    $"arg '{key}' must be a whole number in [-2147483648, 2147483647] (got {Show(d)})");
+            return (int)d;
+        }
+
+        private static string Show(double d)
+            => d.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
 
         // Journal seq is a `long` (Journal.CurrentSeq), and `since`/`since_seq`
         // are compared against it. Int() would silently wrap anything past 2^31
@@ -102,7 +119,13 @@ namespace AutoRimmer
         // session, which is the one place it must not (2.6 nit). JSON numbers
         // arrive as double, so exact integers hold to 2^53; the narrowing that
         // was actually reachable is gone.
-        public long Long(string key, long fallback) => (long)Num(key, fallback);
+        public long Long(string key, long fallback)
+        {
+            double d = Num(key, fallback);
+            if (double.IsNaN(d) || double.IsInfinity(d) || d > 9.2233720368547758E18 || d < -9.2233720368547758E18)
+                throw new VerbArgsException($"arg '{key}' is out of range for a journal seq (got {Show(d)})");
+            return (long)d;
+        }
 
         public List<string> StrList(string key)
         {

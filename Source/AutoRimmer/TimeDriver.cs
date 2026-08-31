@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using HarmonyLib;
 using Verse;
 
 namespace AutoRimmer
@@ -22,6 +23,15 @@ namespace AutoRimmer
     // ceiling, never a promise — the result reports what actually happened.
     public static class TimeDriver
     {
+        // Halt reasons the advance result can carry:
+        //   ticks | timeout | interrupted        — the caller's own terms
+        //   letter | threat | alert | event      — the until: matchers
+        //   red_error                            — halt_on_error
+        //   dialog                               — a force-pausing modal is up
+        //                                          (spec 1.7); the advance did
+        //                                          NOT tick under it
+        //   exception                            — the tick itself threw
+        //                                          (a failure result, not this)
         private enum Until { None, Ticks, Letter, Threat, Alert, Event }
 
         // Written on the main thread; read by the poller for status.json.
@@ -37,6 +47,7 @@ namespace AutoRimmer
         private static bool haltOnError;
         private static int timeoutTicks;
         private static int effMaxTps;
+        private static int askedMaxTps;
         private static int startTick;
         private static long startSeq;
         private static DateTime startWall;
@@ -46,6 +57,13 @@ namespace AutoRimmer
         private static string haltReason;
         private static Dictionary<string, object> haltEvent;
         private static long haltSeq;
+
+        // Refreshed once per FrameStep, then read once per TICK by the
+        // force-pause check. Caching it is what keeps the 1.7 guard off the
+        // per-tick cost sheet: WindowsForcePause is a loop over a list that
+        // normally holds nothing, and the alternative (Find.WindowStack per
+        // tick) walks Current.Root through a Unity null check every time.
+        private static WindowStack windowStack;
 
         private static readonly Stopwatch frameClock = new Stopwatch();
         private static int quotaSecond = -1;
@@ -59,6 +77,12 @@ namespace AutoRimmer
         public static void HookJournal()
         {
             Journal.OnEvent += Notice;
+            // NOT Journal.OnEvent: that tap only ever sees EMITTED events, and
+            // the journal's per-text cap stops emitting after the 4th identical
+            // red error — so halt_on_error silently died from the 5th
+            // occurrence onward, which is precisely the repeating error a long
+            // unattended run produces (1.5 blocker 3).
+            Journal.OnRedError += NoticeRedError;
         }
 
         // Main thread, from the advance verb handler. Returns null on success,
@@ -109,8 +133,13 @@ namespace AutoRimmer
 
             haltOnError = args.Bool("halt_on_error", true);
             timeoutTicks = args.Int("timeout_ticks", until == Until.Ticks ? 0 : 600000);
+            // Config.MinTps is a FLOOR as well as MaxTpsCap being a ceiling,
+            // and both are enforced regardless of what the caller asked for.
+            // The floor was undocumented (1.5 nit); it is now named, explained
+            // where it is defined, and reported below when it actually bit.
             int askedTps = args.Int("max_tps", Config.MaxTpsCap);
-            effMaxTps = Math.Min(Math.Max(30, askedTps), Config.MaxTpsCap); // hard cap, always
+            effMaxTps = Math.Min(Math.Max(Config.MinTps, askedTps), Config.MaxTpsCap);
+            askedMaxTps = askedTps;
 
             // Own the pause. The CurTimeSpeed setter silently no-ops when the
             // player cannot control time (cutscenes, landing confirmations) —
@@ -145,11 +174,26 @@ namespace AutoRimmer
         private static void Notice(string type, Dictionary<string, object> payload, int tick, long seq)
         {
             if (!Active || haltFlag) return;
-            if (type == "red_error" && haltOnError)
+            // 1.7. Journal.Emit fires this synchronously on the emitting
+            // thread, and the dialog hook emits from inside WindowStack.Add —
+            // which, for a self-opening letter, is inside the very DoSingleTick
+            // the loop is executing. So this halts one tick earlier than the
+            // loop's own poll would, and the poll is the backstop for a window
+            // whose forcePause is set after Add.
+            //
+            // Unconditional, deliberately: there is no honest "plough on"
+            // option while a force-pausing window is up, because
+            // OpenAutomaticLetters is dead for as long as it is. See the
+            // open-question resolutions on git-bug 8555381.
+            if (type == "dialog")
             {
-                Halt("red_error", payload, seq);
+                Halt("dialog", payload, seq);
                 return;
             }
+            // red_error is deliberately NOT matched here — NoticeRedError below
+            // owns the halt, upstream of the journal's dedupe cap. An explicit
+            // until:{event:{type:"red_error"}} still works through Until.Event,
+            // and it is honestly capped: it is a journal-event matcher.
             switch (until)
             {
                 case Until.Letter:
@@ -174,6 +218,24 @@ namespace AutoRimmer
             }
         }
 
+        // Any thread, from Journal.EmitError — for EVERY occurrence, whether or
+        // not the journal wrote a line for it. `journal_suppressed` tells the
+        // caller not to go hunting for a journal event that the cap kept out
+        // of the file; `occurrence` is which repeat this was.
+        private static void NoticeRedError(string text, int occurrence, long emittedSeq, int tick)
+        {
+            if (!Active || haltFlag || !haltOnError) return;
+            var payload = new Dictionary<string, object>
+            {
+                ["type"] = "red_error",
+                ["msg"] = Journal.Truncate(text, 2000),
+                ["occurrence"] = (double)occurrence,
+                ["tick"] = (double)tick,
+            };
+            if (emittedSeq == 0) payload["journal_suppressed"] = true;
+            Halt("red_error", payload, emittedSeq);
+        }
+
         private static void Halt(string reason, Dictionary<string, object> evt, long seq)
         {
             haltReason = reason;
@@ -187,6 +249,37 @@ namespace AutoRimmer
         {
             if (!Active) return false;
             Halt("interrupted", null, 0);
+            return true;
+        }
+
+        // EITHER thread, from Runtime.ResetForGameBoundary. The game went away
+        // underneath the advance (main menu, load, new game), so there is
+        // nothing left to tick and possibly no Verse to touch: this is the one
+        // exit that does NOT call Teardown, because Teardown pauses the
+        // TickManager and there may not be one (1.5 blocker 1).
+        //
+        // Without it the driver's STATIC state outlives the Game object: the
+        // next load resumes the old advance against a new colony and reports
+        // ticks_elapsed/journal_seq spanning two games, and if no game reloads
+        // every main-thread verb answers busy forever.
+        public static bool Abandon(string code, string detail)
+        {
+            // Interlocked because the poller's unload edge and the main
+            // thread's lifecycle virtual can both fire for one boundary, and
+            // the command owes exactly one result file.
+            var c = System.Threading.Interlocked.Exchange(ref cmd, null);
+            Active = false;
+            ActiveId = null;
+            haltFlag = false;
+            haltReason = null;
+            haltEvent = null;
+            haltSeq = 0;
+            slowerNow = false;
+            windowStack = null; // never hold a Verse reference across a boundary
+            if (c == null) return false;
+            var r = Result.Fail(c.Id, c.Op, code, detail);
+            r.Data = null;
+            Runtime.Outgoing.Enqueue(r);
             return true;
         }
 
@@ -215,6 +308,8 @@ namespace AutoRimmer
                 slowerNow = slower;
             }
 
+            windowStack = Find.WindowStack;
+
             double budgetMs = Config.AdvanceBudgetMs * ThermalGovernor.Scale;
             int second = Environment.TickCount / 1000;
             if (second != quotaSecond)
@@ -227,6 +322,27 @@ namespace AutoRimmer
             while (true)
             {
                 if (haltFlag) { Finish(haltReason); return; }
+                // 1.7. An advance must NOT tick under a force-pausing modal.
+                // LetterStack.OpenAutomaticLetters early-returns for as long as
+                // WindowStack.WindowsForcePause is true, and it is the only
+                // thing that opens a timing-out letter — so from the moment a
+                // modal stacks, every trade offer, quest offer and timed threat
+                // for the rest of the session expires without ever being shown.
+                // Silently: no exception, no red error, no halted advance. The
+                // run looks healthy and the colony simply stops being told
+                // things. Vanilla survives this because a forcePause window
+                // really does pause; we pin CurTimeSpeed=Paused and drive
+                // DoSingleTick ourselves, so nothing pauses us.
+                //
+                // Checked per TICK, not per frame, because a LetterWithTimeout
+                // opens ITSELF from LetterStackTick — i.e. from inside the
+                // DoSingleTick call two lines below.
+                if (windowStack != null && windowStack.WindowsForcePause)
+                {
+                    Halt("dialog", ForcePausePayload(windowStack), Journal.CurrentSeq);
+                    Finish("dialog");
+                    return;
+                }
                 if (Target >= 0 && TicksDone >= Target) { Finish("ticks"); return; }
                 if (timeoutTicks > 0 && TicksDone >= timeoutTicks) { Finish("timeout"); return; }
                 if (ticksThisSecond >= effMaxTps) return;                    // quota met; yield
@@ -245,18 +361,23 @@ namespace AutoRimmer
             }
         }
 
+        // Every exit claims `cmd` with the same interlocked exchange, so a game
+        // boundary that already answered the command (Abandon, from either
+        // thread) can never produce a second result file for it.
         private static void Finish(string reason)
         {
             var data = BuildData(reason);
-            var c = cmd;
+            var c = System.Threading.Interlocked.Exchange(ref cmd, null);
             Teardown();
+            if (c == null) return;
             Runtime.Outgoing.Enqueue(Result.Success(c.Id, c.Op, data));
         }
 
         private static void FinishFailed(string code, string detail)
         {
-            var c = cmd;
+            var c = System.Threading.Interlocked.Exchange(ref cmd, null);
             Teardown();
+            if (c == null) return;
             var r = Result.Fail(c.Id, c.Op, code, detail);
             r.Data = null;
             Runtime.Outgoing.Enqueue(r);
@@ -274,7 +395,8 @@ namespace AutoRimmer
             }
             Active = false;
             ActiveId = null;
-            cmd = null;
+            windowStack = null;
+            System.Threading.Interlocked.Exchange(ref cmd, null);
         }
 
         private static Dictionary<string, object> BuildData(string reason)
@@ -296,6 +418,29 @@ namespace AutoRimmer
                     : new List<object>(),
                 ["slower_spans"] = new List<object>(slowerSpans),
             };
+            // Present ONLY when the caller's number was moved, so silence means
+            // "you got what you asked for". A floor nobody documents is a floor
+            // nobody can debug (1.5 nit).
+            if (askedMaxTps != effMaxTps)
+                data["max_tps_clamped"] = new Dictionary<string, object>
+                {
+                    ["asked"] = askedMaxTps,
+                    ["to"] = effMaxTps,
+                    ["by"] = askedMaxTps < Config.MinTps ? "floor" : "cap",
+                };
+            // 1.7 standing invariant, the same shape as "advance always returns
+            // paused": advance returns with an EMPTY force-pause stack, or it
+            // says so here. Computed live at Finish, not copied from the halt,
+            // so it is true of the moment the caller is being handed — a window
+            // that went up during the final frame shows up even when the halt
+            // reason is something else entirely.
+            try
+            {
+                var stack = Find.WindowStack;
+                if (stack != null && stack.WindowsForcePause)
+                    data["force_pause_windows"] = ForcePausePayload(stack);
+            }
+            catch { }
             if (haltEvent != null)
             {
                 data["halted_on"] = haltEvent;
@@ -308,6 +453,95 @@ namespace AutoRimmer
                 data["thermal_scale"] = ThermalGovernor.Scale;
             }
             return data;
+        }
+
+        // ---- 1.7: force-pausing modals ------------------------------------
+        //
+        // Read-only throughout. Nothing here closes, focuses or reorders a
+        // window: deciding what a dialog MEANS is 3.5's job, and this spec's
+        // job is to stop, report, and not corrupt the letter queue.
+
+        // Main thread. Names every force-pausing window currently up, so the
+        // caller (and 3.5, and rwtest) can route on it. `type` is the short
+        // class name — the assertable identifier — and `type_full` separates a
+        // modded window from a vanilla one that happens to share it.
+        public static Dictionary<string, object> ForcePausePayload(WindowStack stack)
+        {
+            var windows = new List<object>();
+            try
+            {
+                if (stack != null)
+                {
+                    var list = stack.Windows;
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        var w = list[i];
+                        if (w == null || !w.forcePause) continue;
+                        windows.Add(DescribeWindow(w));
+                    }
+                }
+            }
+            catch { }
+            var payload = new Dictionary<string, object>
+            {
+                ["count"] = (double)windows.Count,
+                ["windows"] = windows,
+            };
+            // What decision is actually owed. The window type says a dialog is
+            // up; the letter stack says which one, which is what 3.5 needs.
+            try
+            {
+                var letters = Find.LetterStack?.LettersListForReading;
+                if (letters != null && letters.Count > 0)
+                {
+                    var labels = new List<object>();
+                    for (int i = 0; i < letters.Count && i < 10; i++)
+                        labels.Add(letters[i]?.Label.ToString());
+                    payload["letters"] = labels;
+                }
+            }
+            catch { }
+            return payload;
+        }
+
+        private static Dictionary<string, object> DescribeWindow(Window w)
+        {
+            var d = new Dictionary<string, object>();
+            var t = w.GetType();
+            d["type"] = t.Name;
+            d["type_full"] = t.FullName;
+            try { if (!string.IsNullOrEmpty(w.optionalTitle)) d["title"] = w.optionalTitle; }
+            catch { }
+            try { d["layer"] = w.layer.ToString(); }
+            catch { }
+            return d;
+        }
+
+        // The journal side of 1.7: a modal going up mid-advance used to leave
+        // no trace at all. WindowStack.Add calls PreOpen() before this runs, so
+        // a window that sets forcePause there is caught too.
+        //
+        // It is journaled whether or not an advance is running — a dialog is a
+        // first-class event either way — and because Journal.Emit fires
+        // TimeDriver.Notice synchronously, this is also the fast halt path.
+        [HarmonyPatch(typeof(WindowStack), nameof(WindowStack.Add))]
+        public static class Patch_WindowAdd
+        {
+            public static void Postfix(WindowStack __instance, Window window)
+            {
+                try
+                {
+                    if (window == null || !window.forcePause) return;
+                    if (Current.ProgramState != ProgramState.Playing) return;
+                    var payload = ForcePausePayload(__instance);
+                    payload["opened"] = DescribeWindow(window);
+                    int tick;
+                    try { tick = Find.TickManager.TicksGame; }
+                    catch { tick = Runtime.GameState.tick; }
+                    Journal.Emit("dialog", payload, tick);
+                }
+                catch { }
+            }
         }
 
         private static string Str(Dictionary<string, object> d, string key)

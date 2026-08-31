@@ -419,14 +419,27 @@ starve — enumerated from source):
   QuestManager, WorldPostTick, MapPostTick, History, GameComponentTick,
   LetterStackTick, Autosaver, FilthMonitor, TransportShipManager.
 
-Two per-frame consumers worth knowing about when the loop runs many ticks per
-frame: `LetterStack.OpenAutomaticLetters` opens any letter marked
-open-automatically once per FRAME (a burst can accumulate several before the
-first opens — advance-until on letters, spec 1.3, must read the stack itself,
-not rely on dialogs), and `Alert`s are recalculated by UIRootUpdate on their
-own cadence, so alert-based watchpoints see alerts a frame or two "late"
-relative to the tick that caused them (they are late-by-design anyway; DESIGN
-§Observation already treats alerts as trailing signals).
+Two consumers worth knowing about when the loop runs many ticks per frame.
+**Both statements below were wrong in their first form and are corrected here
+(1.5 doc corrections, git-bug 4b65a28); the conclusions they supported still
+hold, for better reasons.**
+
+- `LetterStack.OpenAutomaticLetters` — this said "once per FRAME". It runs
+  once per frame from `Game.UpdatePlay` **and once per TICK** from
+  `LetterStack.LetterStackTick`, which is inside `DoSingleTick`, i.e. inside
+  our own advance loop. What actually makes a burst unreconstructable from
+  letter-opens is that it opens **at most one** letter per call and `break`s.
+  So advance-until on letters must still read the stack itself — and the
+  per-tick call is the mechanism behind spec 1.7: a `LetterWithTimeout` opens
+  ITSELF on its last tick, stacking a `forcePause` window under our loop.
+- `Alert`s are recalculated by `UIRootUpdate` round-robin — this said alert
+  watchpoints are "a frame or two late". In FRAMES that is roughly right (24
+  frames for the readout's own sweep plus the journal's `alertScanFrames`,
+  default 30 = 54 frames); in TICKS during an advance it is not, because a
+  budgeted advance runs ~33 ticks per frame. **The real figure is up to
+  roughly 800–2000 ticks.** They are late-by-design anyway (DESIGN
+  §Observation treats alerts as trailing signals); the point is that
+  `until:{alert:…}` halts that far past the causing tick, so assert windows.
 
 ## 10. Tick-rate machinery facts (spec 1.3 implementation notes)
 

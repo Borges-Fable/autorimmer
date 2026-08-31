@@ -22,6 +22,39 @@ namespace AutoRimmer
         public static volatile GameSnapshot GameState = new GameSnapshot();
 
         public static string SessionId;
+
+        // A game boundary — return to main menu, load, new game — invalidates
+        // every command waiting on the main thread and any advance in flight:
+        // the tick stream they were queued against no longer exists. Answer
+        // them all with no-active-game, exactly once, right here (1.5 blockers
+        // 1 and 2). Without this an in-flight advance never gets a result file
+        // and RESUMES against the next colony, and everything queued in the
+        // heartbeat window is consumed into commands/done/ with no result at
+        // all.
+        //
+        // Callable from EITHER thread and touches no Verse, deliberately: when
+        // the game is gone there is no main thread running to notice, so the
+        // poller's heartbeat edge is the only detector available; the
+        // GameComponent's lifecycle virtuals cover the load edge. Both routes
+        // can fire for the same boundary, so the claim inside
+        // TimeDriver.Abandon is interlocked and the queue is concurrent —
+        // one command, one result, whoever gets there first.
+        public static int ResetForGameBoundary(string detail)
+        {
+            int answered = 0;
+            if (TimeDriver.Abandon(Err.NoActiveGame, detail)) answered++;
+            while (Pending.TryDequeue(out var cmd))
+            {
+                Outgoing.Enqueue(Result.Fail(cmd.Id, cmd.Op, Err.NoActiveGame, detail));
+                answered++;
+            }
+            return answered;
+        }
+
+        // The one detail string both detectors use, so the caller sees the same
+        // sentence whichever noticed first.
+        public const string BoundaryDetail =
+            "the game was unloaded while this command was in flight";
     }
 
     public sealed class GameSnapshot
@@ -32,6 +65,12 @@ namespace AutoRimmer
         public int tick;
         public double fps;
         public string activeOp;
+
+        // Spec 1.7: a force-pausing modal stops `advance` dead, and nothing
+        // in the protocol could see one. Non-null ONLY while the stack is
+        // non-empty, so the per-frame snapshot allocates nothing in the
+        // overwhelmingly common case.
+        public Dictionary<string, object> forcePause;
     }
 
     public sealed class PendingCommand
