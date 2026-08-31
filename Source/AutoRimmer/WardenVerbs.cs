@@ -296,8 +296,17 @@ namespace AutoRimmer
                         if (b?.recipe == RecipeDefOf.ExtractHemogenPack) { existing = b; break; }
                 if (enabled)
                 {
+                    // sendMessages:FALSE. The tab's own call leaves it at the
+                    // default (true), which reaches
+                    // Bill.CreateNoPawnsWithSkillDialog — a force-pausing
+                    // Dialog_MessageBox that spec 1.7 cannot clear. Vanilla's
+                    // OTHER call site for this same bill,
+                    // Pawn_GuestTracker.GuestTrackerTickInterval, already passes
+                    // false for exactly that reason; this follows the unattended
+                    // one, not the tab.
                     if (existing == null && SanguophageUtility.CanSafelyBeQueuedForHemogenExtraction(pawn))
-                        HealthCardUtility.CreateSurgeryBill(pawn, RecipeDefOf.ExtractHemogenPack, null);
+                        HealthCardUtility.CreateSurgeryBill(pawn, RecipeDefOf.ExtractHemogenPack, null,
+                            null, sendMessages: false);
                 }
                 else if (existing != null)
                 {

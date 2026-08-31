@@ -219,13 +219,28 @@ namespace AutoRimmer
                     ["action"] = NoStamp(),
                 };
 
-            // HealthCardUtility.CreateSurgeryBill. sendMessages:true is the
-            // player path and its four warnings are real information (no pawn
-            // with the skill, no medical bed, will anger a faction, medicine
-            // restriction) — they arrive as `message` journal events, which is
-            // exactly where the agent reads them.
+            // sendMessages:FALSE, and this is not a style choice.
+            // HealthCardUtility.CreateSurgeryBill's sendMessages block calls
+            // `Bill.CreateNoPawnsWithSkillDialog(recipe)` whenever no free
+            // colonist meets the recipe's skill requirement, and that method is
+            // a bare `Find.WindowStack.Add(new Dialog_MessageBox(text))`.
+            // Dialog_MessageBox sets forcePause, and per spec 1.7 a
+            // force-pausing window makes EVERY subsequent `advance` halt at 0
+            // ticks with reason:"dialog" — permanently, until 3.5 ships dialog
+            // routing. So the ordinary "add a bill for a surgery nobody can
+            // perform yet" input would wedge an unattended run.
+            //
+            // It also lets a MODDED RecipeWorker.CheckForWarnings raise
+            // whatever it likes (32 mods on the bench).
+            //
+            // The four warnings that block loses are re-derived below and
+            // returned as `warnings` — better information than a top-of-screen
+            // message, which the agent never reads. Vanilla already treats this
+            // path as unsafe unattended: Pawn_GuestTracker
+            // .GuestTrackerTickInterval's own auto-bill call passes false too.
+            var warnings = SurgeryWarnings(pawn, foundRecipe, foundPart);
             Bill_Medical bill;
-            try { bill = HealthCardUtility.CreateSurgeryBill(pawn, foundRecipe, foundPart, null, sendMessages: true); }
+            try { bill = HealthCardUtility.CreateSurgeryBill(pawn, foundRecipe, foundPart, null, sendMessages: false); }
             catch (Exception e)
             {
                 return new Dictionary<string, object>
@@ -260,6 +275,10 @@ namespace AutoRimmer
                 ["index"] = (pawn.BillStack?.Count ?? 1) - 1,
                 ["bills"] = SurgeryStack(pawn),
                 ["bill_slots_free"] = Math.Max(0, BillStack.MaxCount - (pawn.BillStack?.Count ?? 0)),
+                // The four warnings CreateSurgeryBill would have sent, re-derived
+                // — see the sendMessages:false comment above for why they are
+                // returned rather than messaged.
+                ["warnings"] = warnings,
                 ["action"] = Stamp(seq),
                 ["note"] = "a surgery bill is not a job: the patient walks to a medical bed "
                     + "(WorkGiver_PatientGoToBedTreatment, which itself requires an available doctor) and a "
@@ -537,6 +556,122 @@ namespace AutoRimmer
                 });
             }
             return list;
+        }
+
+        // The four warnings HealthCardUtility.CreateSurgeryBill's sendMessages
+        // block would have raised, re-derived so they can be RETURNED instead —
+        // the first of them is a force-pausing Dialog_MessageBox, which spec 1.7
+        // makes unrecoverable on an unattended bench. Each carries a `key` a
+        // program can switch on and a sentence a human can read.
+        private static List<object> SurgeryWarnings(Pawn medPawn, RecipeDef recipe, BodyPartRecord part)
+        {
+            var list = new List<object>();
+            var map = medPawn.MapHeld;
+            if (map == null) return list;
+
+            // 1. Bill.CreateNoPawnsWithSkillDialog — THE MODAL.
+            try
+            {
+                bool anyCapable = false;
+                foreach (var col in new List<Pawn>(map.mapPawns.PawnsInFaction(Faction.OfPlayer)))
+                {
+                    if (col == null) continue;
+                    if (!col.IsFreeColonist && !col.IsColonyMechPlayerControlled) continue;
+                    if (recipe.PawnSatisfiesSkillRequirements(col)) { anyCapable = true; break; }
+                }
+                if (!anyCapable)
+                    list.Add(new Dictionary<string, object>
+                    {
+                        ["key"] = "no-pawn-with-skill",
+                        ["text"] = "no free colonist or player-controlled mech meets this recipe's skill "
+                            + "requirement",
+                        ["min_skill"] = Safe(() => recipe.MinSkillString),
+                        ["note"] = "in vanilla this raises a force-pausing Dialog_MessageBox "
+                            + "(Bill.CreateNoPawnsWithSkillDialog); returned here instead",
+                    });
+            }
+            catch { }
+
+            // 2. MessageNoMedicalBeds / MessageNoAnimalBeds.
+            try
+            {
+                if (!medPawn.InBed() && medPawn.RaceProps.IsFlesh)
+                {
+                    bool humanlike = medPawn.RaceProps.Humanlike;
+                    bool anyBed = false;
+                    foreach (var b in new List<Building>(map.listerBuildings.allBuildingsColonist))
+                    {
+                        if (!(b is Building_Bed bed)) continue;
+                        if (!RestUtility.CanUseBedEver(medPawn, bed.def)) continue;
+                        if (humanlike && !bed.Medical) continue;
+                        anyBed = true;
+                        break;
+                    }
+                    if (!anyBed)
+                        list.Add(new Dictionary<string, object>
+                        {
+                            ["key"] = humanlike ? "no-medical-beds" : "no-animal-beds",
+                            ["text"] = humanlike
+                                ? "the colony has no medical bed this pawn can use; the surgery will not start"
+                                : "the colony has no bed this animal can use; the surgery will not start",
+                        });
+                }
+            }
+            catch { }
+
+            // 3. MessageMedicalOperationWillAngerFaction.
+            try
+            {
+                if (medPawn.Faction != null && !medPawn.Faction.Hidden
+                    && !medPawn.Faction.HostileTo(Faction.OfPlayer)
+                    && recipe.Worker.IsViolationOnPawn(medPawn, part, Faction.OfPlayer))
+                    list.Add(new Dictionary<string, object>
+                    {
+                        ["key"] = "angers-faction",
+                        ["text"] = "this operation is a violation against " + medPawn.HomeFaction?.Name
+                            + " and will cost goodwill",
+                        ["faction"] = medPawn.HomeFaction?.def?.defName,
+                    });
+            }
+            catch { }
+
+            // 4. MessageWarningNoMedicineForRestriction — HealthCardUtility
+            //    .CanDoRecipeWithMedicineRestriction is private; re-derived.
+            try
+            {
+                if (medPawn.playerSettings != null && !CanDoRecipeWithMedicineRestriction(medPawn, recipe))
+                    list.Add(new Dictionary<string, object>
+                    {
+                        ["key"] = "medicine-restriction",
+                        ["text"] = "no medicine on the map is both an allowed ingredient and permitted by "
+                            + "this pawn's medical care setting (" + medPawn.playerSettings.medCare + ")",
+                        ["med_care"] = medPawn.playerSettings.medCare.ToString(),
+                    });
+            }
+            catch { }
+            return list;
+        }
+
+        // RimWorld/HealthCardUtility.cs CanDoRecipeWithMedicineRestriction
+        // (private there). ThingsInGroup returns the real backing list, snapshot
+        // before iterating per WorldSafe Class E.
+        private static bool CanDoRecipeWithMedicineRestriction(Pawn pawn, RecipeDef recipe)
+        {
+            if (recipe.ingredients == null) return true;
+            bool needsMedicine = false;
+            foreach (var ing in recipe.ingredients)
+            {
+                var any = ing.filter?.AnyAllowedDef;
+                if (any != null && any.IsMedicine) { needsMedicine = true; break; }
+            }
+            if (!needsMedicine) return true;
+            var care = WorkGiver_DoBill.GetMedicalCareCategory(pawn);
+            foreach (var med in new List<Thing>(pawn.MapHeld.listerThings.ThingsInGroup(ThingRequestGroup.Medicine)))
+            {
+                foreach (var ing in recipe.ingredients)
+                    if (ing.filter != null && ing.filter.Allows(med) && care.AllowsMedicine(med.def)) return true;
+            }
+            return false;
         }
 
         private static string PartLabel(BodyPartRecord part)

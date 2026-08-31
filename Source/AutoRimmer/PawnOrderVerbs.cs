@@ -727,6 +727,17 @@ namespace AutoRimmer
         public static object Capture(VerbContext ctx) => TakeToBed(ctx, "capture");
 
         // WIDGET GATE — RimWorld/FloatMenuOptionProvider_Arrest.cs.
+        //
+        // ITS ACTION DELEGATE IS NOT CALLED, and that is load-bearing: the
+        // vanilla action ends in
+        // `TutorUtility.DoModalDialogIfNotKnown(ConceptDefOf.ArrestingCreatesEnemies, …)`,
+        // which adds a Dialog_MessageBox (forcePause = true) on any save where
+        // the concept has not been demonstrated — and
+        // PlayerKnowledgeDatabase.IsComplete has no tutor-enabled short-circuit,
+        // so tutorial settings do not save you. Per spec 1.7 that halts every
+        // subsequent `advance` at 0 ticks with reason:"dialog", permanently,
+        // until 3.5 ships dialog routing. TakeToBedGate reproduces the gate and
+        // TakeToBed takes the job itself; only the tutorial line is dropped.
         [Verb("arrest")]
         public static object Arrest(VerbContext ctx) => TakeToBed(ctx, "arrest");
 
@@ -960,14 +971,17 @@ namespace AutoRimmer
             {
                 ["thing"] = thing.thingIDNumber,
                 ["label"] = label,
-                // The two confirmation dialogs the provider can raise are NOT
-                // raised here: a bladelink already bonded to another weapon, and
-                // a persona-weapon confirmation. Both would be force-pausing
-                // windows (spec 1.7 halts every advance on one), and both are
-                // pure confirmations of an order the caller already gave.
+                // The provider's action delegate is NOT called. It can raise two
+                // Dialog_MessageBoxes — a bladelink already bonded to another
+                // weapon, and a persona-weapon confirmation — and
+                // Dialog_MessageBox sets forcePause, which per spec 1.7 halts
+                // EVERY subsequent advance at 0 ticks with reason:"dialog",
+                // permanently, until 3.5 ships dialog routing. Both are pure
+                // confirmations of an order the caller already gave, so they are
+                // transacted as accepted and DISCLOSED here.
                 ["dialogs_skipped"] = "bladelink-already-bonded and persona-weapon confirmations are "
-                    + "transacted as accepted rather than opened as modals (1.7: a force-pausing window "
-                    + "stops every later advance)",
+                    + "transacted as accepted rather than opened as modals (spec 1.7: one force-pausing "
+                    + "window wedges every later advance and nothing can clear it yet)",
             });
         }
 
@@ -1019,6 +1033,13 @@ namespace AutoRimmer
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
                 ["thing"] = apparel.thingIDNumber,
+                // The provider's action delegate is NOT called: for a mechanitor
+                // dropping bandwidth apparel it routes through
+                // MechanitorUtility.TryConfirmBandwidthLossFromDroppingThing,
+                // which adds a Dialog_MessageBox.CreateConfirmation —
+                // force-pausing, and per spec 1.7 unrecoverable on this bench.
+                ["dialogs_skipped"] = "the mechanitor bandwidth-loss confirmation is transacted as accepted "
+                    + "rather than opened as a modal (spec 1.7)",
                 ["note"] = "a FORCED wear survives the outfit policy: OutfitForcedHandler keeps it on until "
                     + "the pawn takes it off, so `assign {apparel_policy:…}` will not undress this piece",
             });

@@ -86,6 +86,45 @@ namespace AutoRimmer
     //     substantive gates (EverWork, a non-null timetable, a non-null
     //     tracker) already exclude every pawn it would have.
     //
+    // ------------- MODAL DIALOGS: NEVER, AND WHY IT IS A HARD RULE -----------
+    // Spec 1.7 (shipped): a force-pausing window makes every subsequent
+    // `advance` halt at 0 ticks with reason:"dialog", and NOTHING can clear it
+    // until 3.5 ships dialog routing. One such call permanently wedges an
+    // unattended run. `Verse/Dialog_MessageBox.cs` sets `forcePause = true`, and
+    // `PlayerKnowledgeDatabase.IsComplete` is a plain knowledge-DB lookup with
+    // no tutor-enabled short-circuit — so a tutorial modal fires on any save
+    // where the concept is fresh, regardless of tutorial settings.
+    //
+    // So: a player verb reproduces the widget's GATE, then takes the job
+    // ITSELF. It never invokes the FloatMenuOption's `action` delegate, because
+    // several of those delegates end in a modal. The four in this spec's paths,
+    // each avoided at its own call site and named there:
+    //
+    //   * FloatMenuOptionProvider_Arrest's action ->
+    //     TutorUtility.DoModalDialogIfNotKnown(ConceptDefOf.ArrestingCreatesEnemies)
+    //   * FloatMenuOptionProvider_Equip's action -> Dialog_MessageBox twice
+    //     (a bladelink already bonded elsewhere; a persona-weapon confirmation)
+    //   * FloatMenuOptionProvider_Wear's action ->
+    //     MechanitorUtility.TryConfirmBandwidthLossFromDroppingThing, which adds
+    //     a Dialog_MessageBox.CreateConfirmation
+    //   * HealthCardUtility.GenerateSurgeryOption's action ->
+    //     CompRoyalImplant.CheckForViolations and RecipeWorker.GetConfirmation,
+    //     both Dialog_MessageBox
+    //
+    // AND ONE THAT IS NOT AN OPTION DELEGATE AT ALL, found while auditing this
+    // rule and worth stating loudly because a grep for the tutorial helper does
+    // not find it: **HealthCardUtility.CreateSurgeryBill(…, sendMessages:true)
+    // calls Bill.CreateNoPawnsWithSkillDialog, which is a bare
+    // `Find.WindowStack.Add(new Dialog_MessageBox(…))`** whenever no free
+    // colonist meets the recipe's skill requirement. That is a MODAL raised by
+    // the ordinary bill-creation path, on an input an agent will hit constantly.
+    // Both call sites in this spec therefore pass `sendMessages:false` and
+    // re-derive the four warnings as RESULT FIELDS — which is better
+    // information anyway, since a top-of-screen message is not something the
+    // agent reads. Vanilla itself already knows this path is unsafe unattended:
+    // Pawn_GuestTracker.GuestTrackerTickInterval's own auto-bill call passes
+    // sendMessages:false.
+    //
     // ------------------------------ FOG --------------------------------------
     // DESIGN decisions log 2026-08-30: the player-facing surface hides
     // undiscovered ground, one rule rather than a per-verb judgement. Nothing
