@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 using Verse;
 
@@ -35,6 +36,11 @@ namespace AutoRimmer
                 catch (Exception e) { Log.Warning("[AutoRimmer] alert scan error: " + e); }
                 DrainCommands();
                 TimeDriver.FrameStep();
+                // After FrameStep, deliberately: the 1.5 lifecycle acceptance
+                // needs the game to unload with an advance genuinely in
+                // flight, so the advance must have ticked this frame first.
+                try { JournalVerbs.TickMainMenuFixture(); }
+                catch (Exception e) { Log.Warning("[AutoRimmer] main-menu fixture error: " + e); }
             }
             catch (Exception e)
             {
@@ -63,6 +69,7 @@ namespace AutoRimmer
         {
             int answered = Runtime.ResetForGameBoundary(Runtime.BoundaryDetail);
             AlertScanner.Reset();
+            JournalVerbs.MainMenuAtTick = -1; // a fixture armed against the old colony
             var payload = new System.Collections.Generic.Dictionary<string, object>
             {
                 ["kind"] = kind,
@@ -74,6 +81,18 @@ namespace AutoRimmer
         private void PublishSnapshot()
         {
             var tm = Find.TickManager;
+            // Only built when a force-pausing window is actually up — the
+            // bool property allocates nothing, the payload does. This is how
+            // status.json says "an advance cannot run right now, and here is
+            // what is in the way" (spec 1.7).
+            Dictionary<string, object> forcePause = null;
+            try
+            {
+                var stack = Find.WindowStack;
+                if (stack != null && stack.WindowsForcePause)
+                    forcePause = TimeDriver.ForcePausePayload(stack);
+            }
+            catch { }
             Runtime.GameState = new GameSnapshot
             {
                 gameLoaded = true,
@@ -82,6 +101,7 @@ namespace AutoRimmer
                 tick = tm.TicksGame,
                 fps = fpsEma,
                 activeOp = TimeDriver.Active ? "advance:" + TimeDriver.ActiveId : activeOp,
+                forcePause = forcePause,
             };
         }
 

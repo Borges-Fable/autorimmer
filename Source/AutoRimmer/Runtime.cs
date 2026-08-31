@@ -65,6 +65,12 @@ namespace AutoRimmer
         public int tick;
         public double fps;
         public string activeOp;
+
+        // Spec 1.7: a force-pausing modal stops `advance` dead, and nothing
+        // in the protocol could see one. Non-null ONLY while the stack is
+        // non-empty, so the per-frame snapshot allocates nothing in the
+        // overwhelmingly common case.
+        public Dictionary<string, object> forcePause;
     }
 
     public sealed class PendingCommand

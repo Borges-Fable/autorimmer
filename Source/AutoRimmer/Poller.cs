@@ -377,6 +377,14 @@ namespace AutoRimmer
                   .Append(",\"target\":").Append(TimeDriver.Target)
                   .Append('}');
             }
+            // Present only while a force-pausing modal is up — i.e. exactly
+            // when `advance` cannot run (spec 1.7). Its absence is the
+            // heartbeat's way of saying the stack is clear.
+            if (snap.forcePause != null)
+            {
+                sb.Append(",\"forcePause\":");
+                MiniJson.Write(sb, snap.forcePause);
+            }
             if (ThermalGovernor.Available)
             {
                 sb.Append(",\"thermal\":{\"c\":").Append(MiniJson.N(ThermalGovernor.TempC))
