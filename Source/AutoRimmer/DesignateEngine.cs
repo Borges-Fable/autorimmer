@@ -105,19 +105,31 @@ namespace AutoRimmer
             public bool IsThings => Kind == "things" || Kind == "filter";
         }
 
-        public static Targets Resolve(Map map, VerbArgs a, int maxCells)
+        // `filterSelectsTargets` is false for the verbs where `filter` means
+        // something else to the CALLER. `zone` is the case that forced this:
+        // a stockpile's footprint is always cells, and its `filter` argument is
+        // the STORAGE filter (the five presets), so consuming `filter` here as a
+        // target selector made `zone add --rect … --filter meds` — the spec's
+        // own acceptance bullet — impossible, rejecting it as "mutually
+        // exclusive". Found in acceptance, orchestrator, session 6.
+        public static Targets Resolve(Map map, VerbArgs a, int maxCells,
+            bool filterSelectsTargets = true)
         {
             int given = 0;
             if (a.Has("rect")) given++;
             if (a.Has("cells")) given++;
             if (a.Has("things")) given++;
-            if (a.Has("filter") || a.Has("area_things")) given++;
+            if (filterSelectsTargets && (a.Has("filter") || a.Has("area_things"))) given++;
             if (given == 0)
-                throw new VerbArgsException(
-                    "needs a target set: rect:[x,z,w,h] | cells:[P,…] | things:[id,…] | filter:{…} "
-                    + "(the plural form IS the verb — one call, N targets)");
+                throw new VerbArgsException(filterSelectsTargets
+                    ? "needs a target set: rect:[x,z,w,h] | cells:[P,…] | things:[id,…] | filter:{…} "
+                        + "(the plural form IS the verb — one call, N targets)"
+                    : "needs a target set: rect:[x,z,w,h] | cells:[P,…] — a zone's footprint is "
+                        + "always cells, and `filter` here is its STORAGE filter, not a target selector");
             if (given > 1)
-                throw new VerbArgsException("rect, cells, things and filter are mutually exclusive");
+                throw new VerbArgsException(filterSelectsTargets
+                    ? "rect, cells, things and filter are mutually exclusive"
+                    : "rect and cells are mutually exclusive");
 
             if (a.Has("rect")) return FromRect(map, ReadRect(a.Raw("rect")), maxCells);
             if (a.Has("cells")) return FromCells(map, a.Raw("cells"), maxCells);

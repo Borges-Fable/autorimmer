@@ -120,7 +120,7 @@ namespace AutoRimmer
 
             var des = MakeDesignator(kind);
             des.isOrder = true;
-            var targets = DesignateEngine.Resolve(map, a, DesignateEngine.MaxCellsArg(a));
+            var targets = DesignateEngine.Resolve(map, a, DesignateEngine.MaxCellsArg(a), filterSelectsTargets: false);
             if (targets.IsThings)
                 throw new VerbArgsException("zone takes cells: use rect:[x,z,w,h] or cells:[P,…]");
 
@@ -309,7 +309,7 @@ namespace AutoRimmer
             bool dryRun = a.Bool("dry_run", false);
             var des = new Designator_ZoneDelete_Shrink();
             des.isOrder = true;
-            var targets = DesignateEngine.Resolve(map, a, DesignateEngine.MaxCellsArg(a));
+            var targets = DesignateEngine.Resolve(map, a, DesignateEngine.MaxCellsArg(a), filterSelectsTargets: false);
             if (targets.IsThings)
                 throw new VerbArgsException("zone shrink takes cells: use rect:[x,z,w,h] or cells:[P,…]");
 
