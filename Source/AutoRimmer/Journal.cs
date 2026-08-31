@@ -131,43 +131,61 @@ namespace AutoRimmer
         // lock across that is how a deadlock gets built. Handlers may therefore
         // observe two events out of order; they are matchers, not readers, and
         // each carries its own seq.
+
+        // Re-entrancy guard, and it is not theoretical: serializing a payload
+        // calls ToString() on whatever is in it, and a Verse object's
+        // ToString() can Log.Error — which is patched straight back into this
+        // class. Monitor is re-entrant, so that would not deadlock; it would do
+        // something worse and claim seq N+1 and enqueue it BEFORE the outer
+        // call enqueues seq N, recreating the very gap this lock exists to
+        // close. Dropping a journal line produced WHILE writing a journal line
+        // is the right answer, and dropping it before any seq is claimed means
+        // it leaves no hole.
+        [ThreadStatic] private static bool emitting;
+
         public static long Emit(string type, Dictionary<string, object> payload, int? exactTick = null)
         {
-            if (writer == null) return 0;
+            if (writer == null || emitting) return 0;
             int tick = exactTick ?? Runtime.GameState.tick;
             long n;
             lock (journalLock)
             {
-                n = Interlocked.Increment(ref seq);
-                var evt = new Dictionary<string, object>
-                {
-                    ["seq"] = n,
-                    ["tick"] = tick,
-                    ["wall"] = DateTime.UtcNow.ToString("o"),
-                    ["type"] = type,
-                    ["payload"] = payload,
-                };
-                // The seq is claimed by this point, so SOMETHING must be
-                // enqueued or the file gets the gap this lock exists to
-                // prevent. MiniJson.Write is throw-proof as of 1.5; this is
-                // the backstop that keeps the invariant true even if it is not.
-                string line;
+                emitting = true;
                 try
                 {
-                    var sb = new StringBuilder(256);
-                    MiniJson.Write(sb, evt);
-                    line = sb.ToString();
+                    n = Interlocked.Increment(ref seq);
+                    var evt = new Dictionary<string, object>
+                    {
+                        ["seq"] = n,
+                        ["tick"] = tick,
+                        ["wall"] = DateTime.UtcNow.ToString("o"),
+                        ["type"] = type,
+                        ["payload"] = payload,
+                    };
+                    // The seq is claimed by this point, so SOMETHING must be
+                    // enqueued or the file gets the gap this lock exists to
+                    // prevent. MiniJson.Write is throw-proof as of 1.5; this is
+                    // the backstop that keeps the invariant true even if a
+                    // later change makes it not.
+                    string line;
+                    try
+                    {
+                        var sb = new StringBuilder(256);
+                        MiniJson.Write(sb, evt);
+                        line = sb.ToString();
+                    }
+                    catch (Exception e)
+                    {
+                        line = "{\"seq\":" + n + ",\"tick\":" + tick
+                            + ",\"wall\":" + MiniJson.J(DateTime.UtcNow.ToString("o"))
+                            + ",\"type\":" + MiniJson.J(type)
+                            + ",\"payload\":{\"autorimmer_serialize_error\":"
+                            + MiniJson.J(Truncate(e.ToString(), 500)) + "}}";
+                    }
+                    pending.Enqueue(line);
+                    ring[(int)(n % RingSize)] = ValueTuple.Create(n, type);
                 }
-                catch (Exception e)
-                {
-                    line = "{\"seq\":" + n + ",\"tick\":" + tick
-                        + ",\"wall\":" + MiniJson.J(DateTime.UtcNow.ToString("o"))
-                        + ",\"type\":" + MiniJson.J(type)
-                        + ",\"payload\":{\"autorimmer_serialize_error\":"
-                        + MiniJson.J(Truncate(e.ToString(), 500)) + "}}";
-                }
-                pending.Enqueue(line);
-                ring[(int)(n % RingSize)] = ValueTuple.Create(n, type);
+                finally { emitting = false; }
             }
             try { OnEvent?.Invoke(type, payload, tick, n); }
             catch { }
