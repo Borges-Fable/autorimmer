@@ -50,6 +50,16 @@ namespace AutoRimmer
             }
         }
 
+        // Runs INSIDE DoSingleTick (GameComponentUtility.GameComponentTick),
+        // i.e. inside the advance loop. The only thing here is the error
+        // fixture, which has to fire from inside a tick to reproduce 1.5
+        // blocker 3 honestly.
+        public override void GameComponentTick()
+        {
+            try { JournalVerbs.TickErrorFixture(); }
+            catch { }
+        }
+
         public override void StartedNewGame() => GameBoundary("newgame");
 
         public override void LoadedGame() => GameBoundary("loaded");
@@ -69,7 +79,9 @@ namespace AutoRimmer
         {
             int answered = Runtime.ResetForGameBoundary(Runtime.BoundaryDetail);
             AlertScanner.Reset();
-            JournalVerbs.MainMenuAtTick = -1; // a fixture armed against the old colony
+            // Fixtures armed against the colony that just went away.
+            JournalVerbs.MainMenuAtTick = -1;
+            JournalVerbs.ErrorAtTick = -1;
             var payload = new System.Collections.Generic.Dictionary<string, object>
             {
                 ["kind"] = kind,

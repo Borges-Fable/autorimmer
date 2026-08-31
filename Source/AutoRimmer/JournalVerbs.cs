@@ -14,10 +14,35 @@ namespace AutoRimmer
         // actually cares about.
         public const string FixtureLetterLabel = "[AutoRimmer] timeout letter";
 
+        // The ONE text both the `error` and `error-at` steps log, because
+        // 1.5 blocker 3's acceptance turns entirely on the journal's per-text
+        // dedupe counting them as the same key.
+        public const string SelftestErrorText = "[AutoRimmer] selftest-induced red error (deliberate)";
+
         // -1 = disarmed. Set by the `main-menu` fixture step, polled by
         // AgentGameComponent, cleared at every game boundary so a fixture
         // armed against one colony can never fire against the next.
         public static int MainMenuAtTick = -1;
+
+        // Same shape, for `error-at`. Polled from GameComponentTick rather
+        // than GameComponentUpdate, deliberately: GameComponentTick runs
+        // INSIDE DoSingleTick, so the error fires from inside the advance
+        // loop, which is where a real one would.
+        public static int ErrorAtTick = -1;
+        private static int errorRepeats = 1;
+        private static string errorText = SelftestErrorText;
+
+        // Main thread, from AgentGameComponent.GameComponentTick.
+        public static void TickErrorFixture()
+        {
+            if (ErrorAtTick < 0) return;
+            int now;
+            try { now = Find.TickManager.TicksGame; }
+            catch { return; }
+            if (now < ErrorAtTick) return;
+            ErrorAtTick = -1;
+            for (int i = 0; i < errorRepeats; i++) Log.Error(errorText);
+        }
 
         // Main thread, once per frame from AgentGameComponent AFTER
         // TimeDriver.FrameStep.
@@ -123,6 +148,14 @@ namespace AutoRimmer
         //   `main-menu`      — arm a deferred return to the main menu, so
         //       1.5's "kill a game mid-advance" is a command and not a
         //       human clicking a menu on a parked window.
+        //   `error-at`       — arm a red error to fire from inside a TICK at a
+        //       future tick. 1.5 blocker 3's acceptance needs an error during
+        //       an advance, after the journal's per-text cap has gone silent
+        //       for that text; nothing else can produce that state.
+        //   `weird-result`   — attach a deliberately unserializable payload
+        //       (null string, Verse object, a ToString() that throws, a cyclic
+        //       tree, NaN) so 1.5 defect 4's acceptance has something to fail
+        //       on. It must still produce exactly one result file.
         [Verb("journal-selftest")]
         public static object Selftest(VerbContext ctx)
         {
@@ -162,7 +195,7 @@ namespace AutoRimmer
                         Messages.Message("[AutoRimmer] selftest message", MessageTypeDefOf.NeutralEvent, historical: false);
                         break;
                     case "error":
-                        Log.Error("[AutoRimmer] selftest-induced red error (deliberate)");
+                        Log.Error(SelftestErrorText);
                         break;
                     case "raid":
                     {
@@ -480,6 +513,56 @@ namespace AutoRimmer
                         };
                         break;
                     }
+                    case "error-at":
+                    {
+                        // 1.5 blocker 3's acceptance needs a red error to fire
+                        // DURING an advance, after the journal's per-text cap
+                        // has already gone silent for that text — which is the
+                        // exact state in which halt_on_error used to do
+                        // nothing. Run `error` nine times first, then arm this.
+                        int delay = ctx.Args.Int("error_delay_ticks", 200);
+                        if (delay < 0 || delay > 600000)
+                            throw new VerbArgsException("error_delay_ticks must be 0..600000");
+                        int repeats = ctx.Args.Int("error_repeats", 1);
+                        if (repeats < 1 || repeats > 50)
+                            throw new VerbArgsException("error_repeats must be 1..50");
+                        errorText = ctx.Args.Str("error_text", SelftestErrorText);
+                        errorRepeats = repeats;
+                        int armedAt = Find.TickManager.TicksGame;
+                        ErrorAtTick = armedAt + delay;
+                        target = $"{repeats}x at tick {ErrorAtTick}";
+                        extras["error_at"] = new Dictionary<string, object>
+                        {
+                            ["armed_at_tick"] = armedAt,
+                            ["fires_at_tick"] = ErrorAtTick,
+                            ["repeats"] = repeats,
+                            ["text"] = errorText,
+                        };
+                        break;
+                    }
+                    case "weird-result":
+                    {
+                        // 1.5 defect 4's acceptance: a verb returning a null
+                        // string and an arbitrary object must still produce
+                        // exactly one result file. Everything in here is a
+                        // shape that used to take the serializer — and with it
+                        // the rest of the poller cycle — down.
+                        var cycleOuter = new Dictionary<string, object>();
+                        cycleOuter["self"] = new List<object> { cycleOuter };
+                        extras["weird"] = new Dictionary<string, object>
+                        {
+                            ["null_string"] = (string)null,
+                            ["null_in_list"] = new List<string> { "a", null, "c" },
+                            ["verse_object"] = (object)map ?? "no map",
+                            ["verse_def"] = ThingDefOf.Steel,
+                            ["throws_on_tostring"] = new ThrowingToString(),
+                            ["cycle"] = cycleOuter,
+                            ["nan"] = double.NaN,
+                            ["infinity"] = double.PositiveInfinity,
+                        };
+                        target = "hostile payload attached";
+                        break;
+                    }
                     case "main-menu":
                     {
                         // Arms only. It fires from the GameComponent AFTER the
@@ -500,7 +583,7 @@ namespace AutoRimmer
                         break;
                     }
                     default:
-                        throw new VerbArgsException($"unknown step '{step}' (letter|message|error|raid|downed|break|save|stockpile|alerts|alerts-clear|colonists|power|timeout-letter|dialogs|dialogs-clear|main-menu)");
+                        throw new VerbArgsException($"unknown step '{step}' (letter|message|error|error-at|weird-result|raid|downed|break|save|stockpile|alerts|alerts-clear|colonists|power|timeout-letter|dialogs|dialogs-clear|main-menu)");
                 }
                 Journal.Emit("dev", new Dictionary<string, object>
                 {
@@ -546,6 +629,15 @@ namespace AutoRimmer
                 }
             }
             throw new VerbArgsException($"no clear {w}x{h} area within 60 cells of ({anchor.x},{anchor.z})");
+        }
+
+        // Deliberately hostile, for the `weird-result` step. A Verse object's
+        // ToString() is arbitrary game code; this is the shape that used to
+        // lose a result file AND abort the rest of the poller cycle.
+        private sealed class ThrowingToString
+        {
+            public override string ToString()
+                => throw new InvalidOperationException("deliberate ToString failure (1.5 acceptance)");
         }
 
         // Faction set BEFORE spawn (SetFactionDirect, the game's own dev-spawn
