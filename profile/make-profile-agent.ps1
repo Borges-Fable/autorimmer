@@ -117,7 +117,17 @@ Set-Junction 'Mods\Harmony'                 (Join-Path $PACK_MODS 'Harmony')
 Set-Junction 'Mods\LogRelay'                (Join-Path $STEAM_MODS 'LogRelay')
 Set-Junction 'Mods\AnalyzerBridge'          (Join-Path $STEAM_MODS 'AnalyzerBridge')
 Set-Junction 'Mods\DubsPerformanceAnalyzer' (Join-Path $PACK_MODS 'DubsPerformanceAnalyzer')
-Set-Junction 'Mods\BaseVizCatalogDumper'    (Join-Path $STEAM_MODS 'BaseVizCatalogDumper')
+# BaseVizCatalogDumper is GONE as a separate mod (spec 2.5) — its 143 lines are
+# now Source\AutoRimmer\CatalogDump.cs and its startup file-write is the
+# `catalog-dump` verb. Removed rather than merely unlinked, for the reason the
+# Linux twin gives: an existing bench already has the junction, and leaving it
+# keeps a second mod whose startup dump nothing reads.
+$bvcd = Join-Path $ROOT 'Mods\BaseVizCatalogDumper'
+if (Test-Path $bvcd) {
+    if ((Get-Item $bvcd -Force).LinkType) { cmd /c rmdir "$bvcd" | Out-Null }
+    else { Remove-Item $bvcd -Recurse -Force }
+    Write-Host '  removed Mods\BaseVizCatalogDumper (folded into AutoRimmer, spec 2.5)'
+}
 # AutoRimmer itself: the repo root IS the mod folder (spec 1.1). Guarded on
 # About\About.xml exactly like the Linux script: an About-less folder in Mods\
 # draws a red-error-adjacent log line, and this bench holds zero-red-errors.

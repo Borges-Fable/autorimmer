@@ -75,7 +75,20 @@ link "Mods/Harmony"                 "$MP/Harmony"
 link "Mods/LogRelay"                "$REPOS/logrelay"
 link "Mods/AnalyzerBridge"          "$REPOS/analyzerbridge"
 link "Mods/DubsPerformanceAnalyzer" "$TESTING/DubsPerformanceAnalyzer"
-link "Mods/BaseVizCatalogDumper"    "$TOOLS/baseviz/BaseVizCatalogDumper"
+# BaseVizCatalogDumper is GONE as a separate mod (spec 2.5). Its 143 lines are
+# now Source/AutoRimmer/CatalogDump.cs and its startup file-write is the
+# `catalog-dump` verb, so the catalog is produced on request into the protocol
+# root instead of appearing as a side effect of launching the game. This used
+# to link $TOOLS/baseviz/BaseVizCatalogDumper, which was also the last live
+# dependency this bench had on the unversioned rimworld-tools directory.
+#
+# Removed rather than merely unlinked: an existing bench already has the
+# junction, and leaving it would keep a second mod in the modlist whose
+# [StaticConstructorOnStartup] still writes a catalog nothing reads.
+if [ -e "$ROOT/Mods/BaseVizCatalogDumper" ] || [ -L "$ROOT/Mods/BaseVizCatalogDumper" ]; then
+    rm -f "$ROOT/Mods/BaseVizCatalogDumper"
+    echo "  removed Mods/BaseVizCatalogDumper (folded into AutoRimmer, spec 2.5)"
+fi
 # AutoRimmer itself: the repo root IS the mod folder, matching every sibling
 # mod repo (analyzerbridge, logrelay, Factions: About/ + Assemblies/ + Source/
 # at root, alongside docs) and spec 1.1's root-relative paths.
