@@ -224,6 +224,21 @@ namespace AutoRimmer
                                 ["category"] = def.category.ToString(),
                                 ["door"] = def.IsDoor,
                                 ["size"] = new List<object> { (double)def.size.x, (double)def.size.z },
+                                // STRUCTURE. The first render drew every thing
+                                // the same way — an inset block in its catalog
+                                // colour — and a reader could not trace a
+                                // single wall, because an inset block leaves a
+                                // gap on all four sides and two adjacent wall
+                                // cells therefore do NOT touch. Walls have to
+                                // read as one continuous mass, and constructed
+                                // wall has to be distinguishable from natural
+                                // rock (both are grey impassable buildings), so
+                                // the renderer needs these two facts and cannot
+                                // derive either from category or colour.
+                                // Same test Spatial.cs ThingGlyph uses for
+                                // '%' vs '#'.
+                                ["impassable"] = def.passability == Traversability.Impassable,
+                                ["natural_rock"] = def.building != null && def.building.isNaturalRock,
                             });
                             things.Add(idx);
 
@@ -231,7 +246,22 @@ namespace AutoRimmer
                             // every item stack would bury the base under
                             // two-letter tokens, and items are legible from
                             // colour alone at this scale.
+                            //
+                            // And NOT for impassable buildings, which is the
+                            // fix for the first render's worst symptom. Every
+                            // wall cell is its own Thing with its own id, so a
+                            // stone base emitted thousands of `WA` anchors,
+                            // blew LabelCap, and got truncated to an arbitrary
+                            // scatter — "sparse WA labels in ones and twos"
+                            // that a reader could not tell from an opening.
+                            // Structure is read by SHAPE, not by token: walls
+                            // are drawn as a continuous mass and carry no
+                            // label at all. Doors keep theirs (passability is
+                            // PassThroughOnly, not Impassable) — the one thing
+                            // the first render got right was doors, and this
+                            // does not touch them.
                             if (def.category == ThingCategory.Building
+                                && def.passability != Traversability.Impassable
                                 && seenBuildings.Add(best.thingIDNumber))
                             {
                                 if (labels.Count < LabelCap)
@@ -289,6 +319,23 @@ namespace AutoRimmer
                                 ["id"] = r2.ID,
                                 ["outdoors"] = r2.PsychologicallyOutdoors,
                                 ["cells"] = r2.CellCount,
+                                // A door cell is its own single-cell Room
+                                // (Verse/Room.cs IsDoorway -> the district is a
+                                // doorway). The first render enumerated all six
+                                // of them in its ROOMS legend as "NONE / 1
+                                // CELLS" and a reader asked to count rooms got
+                                // six confident wrong answers pointing at
+                                // invisible 1-cell swatches. The renderer needs
+                                // to be able to tell a doorway from a room, so
+                                // the dump says which it is rather than making
+                                // the client guess from CellCount == 1.
+                                ["doorway"] = r2.IsDoorway,
+                                // Verse/Room.cs ProperRoom: does not touch the
+                                // map edge and has a Normal region — i.e. what
+                                // a player would call an enclosed room, as
+                                // opposed to open ground that happens to be
+                                // regioned.
+                                ["proper"] = r2.ProperRoom,
                             }));
                         }
                     }
