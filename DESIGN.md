@@ -379,3 +379,26 @@ queue by default (an agent flailing mid-experiment must not page triage).
   arrange-act-read lesson) instead. The known write-on-read accessors are
   catalogued in `WorldSafe.cs`; this one is a different class and the file's
   header should not be read as covering it.
+- 2026-08-31 — **A vanilla helper can end in a tutorial modal, and a tutorial
+  modal is a force-pause — so it wedges the run.** Found by 3.2's worker in
+  `FlickUtility.UpdateFlickDesignation`, which unconditionally ends with
+  `TutorUtility.DoModalDialogIfNotKnown(ConceptDefOf.SwitchFlickingDesignation)`.
+  That helper does `Find.WindowStack.Add(new Dialog_MessageBox(msg))` whenever
+  the concept has not been demonstrated (`RimWorld/TutorUtility.cs`), and
+  `Dialog_MessageBox` sets `forcePause = true` (`Verse/Dialog_MessageBox.cs`).
+  `PlayerKnowledgeDatabase.IsComplete` is a bare knowledge-lookup with **no
+  tutor-enabled short-circuit**, so it fires on any save where the concept is
+  fresh, whatever the tutorial settings say. Per 1.7 a force-pausing window
+  halts every later `advance` at 0 ticks, and nothing clears it until 3.5's
+  routing ships — so **one call to an innocuous-looking utility permanently
+  wedges an unattended run.** A colony's first power switch would have done it.
+  There are exactly five call sites in the 1.6 tree, and three are in specs we
+  are still building: `FlickUtility` (3.2), `FloatMenuOptionProvider_Arrest`
+  (3.4), `TradeShip.TradeGoodsMustBeNearBeacon` (3.5); `Settlement` is
+  world-map (a v1 non-goal) and `Dialog_Options` is the settings UI. **The rule:
+  a player verb reproduces the helper's gate and its effect, and drops the
+  tutorial line** — never calls the wrapper. This is the same shape as the
+  gate-lives-in-the-widget invariant seen from the other side: there the UI held
+  a check the model lacked, here a "model" helper drags UI in with it. Treat any
+  vanilla utility reaching `Dialog_MessageBox` as UI code wearing a
+  model-shaped name.
