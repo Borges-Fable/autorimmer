@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>baseviz - RimWorld base layout viewer</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.4 ui-sans-serif, system-ui, sans-serif;
+         background: #15171a; color: #cdd2d8; }
+  #bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+         padding: 8px 12px; background: #1c1f24; border-bottom: 1px solid #2b2f36;
+         position: sticky; top: 0; z-index: 2; }
+  #bar label { display: flex; gap: 4px; align-items: center; white-space: nowrap; }
+  select, input[type=range] { background: #23272e; color: #cdd2d8;
+         border: 1px solid #353b44; border-radius: 4px; padding: 3px 6px; }
+  #layers { display: flex; gap: 8px; flex-wrap: wrap; }
+  #layers button { background: #23272e; border: 1px solid #353b44; color: #aeb4bc;
+         border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+  #layers button.on { background: #2d6cdf; border-color: #2d6cdf; color: #fff; }
+  #wrap { position: relative; }
+  canvas { display: block; cursor: grab; }
+  canvas.drag { cursor: grabbing; }
+  #meta { padding: 4px 12px; color: #8b929b; font-size: 12px;
+          border-bottom: 1px solid #2b2f36; }
+  #tip { position: fixed; pointer-events: none; background: #0b0c0eee;
+         border: 1px solid #353b44; border-radius: 5px; padding: 5px 8px;
+         font-size: 12px; max-width: 280px; display: none; z-index: 5; }
+  #tip b { color: #fff; }
+  .muted { color: #777e87; }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <label>Layout
+      <select id="pick"></select>
+    </label>
+    <label>Cell
+      <input id="cell" type="range" min="6" max="36" value="16">
+    </label>
+    <label><input id="terrain" type="checkbox" checked> Terrain</label>
+    <label><input id="roof" type="checkbox"> Roof</label>
+    <label><input id="glyphs" type="checkbox" checked> Glyphs</label>
+    <label><input id="flip" type="checkbox"> Flip Y</label>
+    <span id="layers"></span>
+  </div>
+  <div id="meta"></div>
+  <div id="wrap"><canvas id="c"></canvas></div>
+  <div id="tip"></div>
+  <script src="viewer.js"></script>
+</body>
+</html>
