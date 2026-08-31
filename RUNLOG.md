@@ -1688,3 +1688,238 @@ corpses, no benches. Every phase stages its own fixture on top; nothing was save
 back. Four worktrees still on disk under `.claude/worktrees/` (three from this
 round's auditors, one stale from session 5) — `git worktree prune` when the
 branches are no longer wanted.
+
+## Session 9 — 2026-08-31 (dorian's Linux box AND BORGES, concurrently)
+
+Two orchestrators ran the same calendar day without seeing each other's tree
+until a merge at the very end. **No numbered spec closed — still 21 of 25.**
+The session's yield is two large in-flight defect fixes (neither proven
+in-game by session's end), a backlog verification pass, and three more specs
+authored-but-unmerged for session 10 to audit. This section is written from
+three sources that do not always agree on scope, and where they don't, that is
+said rather than resolved: the run ledger `git-bug fbb2c59` (dorian's box,
+comments #0–#8, last edited 19:03), `HANDOFF.md` as committed at `d153521`
+(BORGES, written at a hard stop), and `git log` on `main`, which is the only
+place the two threads' full combined shape is visible — the ledger's own plan
+never mentions 4.1, 70ac258 or `bc2250b`, because that work happened on the
+other machine.
+
+### Thread 1 — dorian's box (ledger `fbb2c59`, agent:opus)
+
+Three lanes: **A** = 2.5 PNG render channel (`f7b6207`, includes vendoring
+baseviz), **B** = `4087644` remainder (job verbs report success for orders
+that did nothing), **C** = `2f2796e` (verify the open backlog before building
+to it, read-only). A and B each got an isolated worktree and a vet before any
+build (`VET: CONFIRM|AMEND|BLOCK`); both vets AMENDED the plan and both were
+overruled or corrected at least once by the orchestrator re-reading source
+directly — recorded in full on the issues, not repeated here.
+
+**4087644 (B) — merged `983d11a`, NOT closed.** `TryTakeOrderedJob`'s
+early-out is confirmed unconditional on `queue`, and worse queued than not:
+a collision with `queue:true` enqueues nothing and leaves no trace, so the
+caller believes it queued an action that was never created. The "all 17 job
+verbs are blind" framing in the issue body was wrong — the vet found the
+blind set is **14**: `prioritize` already shipped this exact pre-check,
+`move-to` already rejects via `already-there`, and `rest-until-healed` flips
+a field on the *running* job, a real mutation, so converting it would have
+made it less honest. The issue's own acceptance contradicted its own comment
+#1 on whether a wasted order should journal (body said no, comment #1 said
+yes); the orchestrator ruled comment #1 supersedes and amended the body in
+place. **In-game acceptance is what session 9 owed and did not fully pay**:
+a live run (`accept/4087644-order-honesty.py`, swept to 51 checks after the
+first draft couldn't reach phase 1 against invented envelope shapes) went
+**48 of 51** on the merged tree — three real behavioural gaps, filed as
+`ac407f1` (p1): a drafted-only refusal (`tend`) writes a journal row while
+most other refusal gates still don't; the `ordered` triple (`queuedNode &&
+workGiver != null && forced`) is correct for work-giver jobs and wrongly
+false for direct orders like `wear`, which have no `workGiver`; and a queued
+order does not appear in `job_queue.total`. None of that is closed.
+
+**2.5 (A) — merged `762e942`, NOT closed.** The spec's premise was checked
+and found false: **baseviz has no PNG renderer** — grep for png/Pillow/numpy/
+cairo/matplotlib is clean, `canvas.py` is ASCII-only, the colored grid is
+browser JS. The raster encoder is new code (hand-rolled zlib+struct, not
+Pillow, for byte-for-byte determinism across versions), and "reuse baseviz"
+reduces to reusing `catalog.py` and `viewer.js`'s drawing rules. Vendored
+`baseviz/` into this repo (pinned at `rimworld-tools` sha
+`eabba3eb9fbc435bbdcb2a6250d1e3734170d992`, MIT header per Evan's on-issue
+call, no separate LICENSE file), folded the 143-line `CatalogDump.cs` into
+AutoRimmer as source rather than a second mod (Evan's "what can be in the mod
+should be"), and caught a real `.gitignore` leak before it shipped —
+`Source/**/bin/`/`obj/` are anchored at the repo root and do not match a
+vendored subdirectory, so four intermediates would have published absolute
+`/home/dorian/.steam` and `.nuget` paths into a public repo.
+
+**Verified live, twice, with a real defect found and fixed in between.** First
+render: determinism held (byte-identical PNG twice, offline replay matched),
+but **a fresh reader answered 2 of 3 legibility questions wrong** — a 1px
+inset gap made adjacent walls read as a dotted line with no way to tell an
+opening from an unlabelled cell, and six single-cell doorway "rooms" were
+counted as real rooms, quoted back as the room count. Both are fix-the-source
+bugs, not renderer bugs: `map-dump` now emits `doorway`/`proper` on rooms and
+`impassable`/`natural_rock` on things, walls are drawn by shape rather than by
+per-cell label. Re-rendered after the fix (`aac6209`): determinism still
+holds, room-count is now correctly **0** on that fixture (six door-pockets,
+zero enclosed rooms) — but that means the re-render's fixture has no enclosed
+room, so it **cannot answer** the room-count/stove-location questions it was
+supposed to prove. **Legibility is therefore still unverified**, stated as
+such on the issue rather than counted as a pass. Separately: mechanical
+acceptance (`catalog-dump`, live render, offline replay) DID run and go green
+at 19:04 — 3849 defs, two live renders byte-identical, offline replay
+matching — with one disclosed gap: the fixture had no registered landmarks,
+so `--landmarks` rendered identically with and without it and that code path
+is unexercised.
+
+**C (`2f2796e`) — done as a task, but the issue itself was not closed.** 17
+open issues verified, **11 corrected**. The standouts, each independently
+confirmed against decompiled source: `acee526` (1.9) — the proposed fix route
+is wrong, `mode:"direct"` currently *deletes* buildings in the target cell;
+`fc287ba` (1.6) — the flagship acceptance criterion fails on a *correct*
+implementation; `20e5cda` (3.5) — acceptance is impossible as written, an NRE
+on the default path; `96d9315` (4.1) — "an unset growing zone grows nothing"
+is false, it grows potatoes.
+
+**A workspace-CLAUDE.md correction, verified independently and reported
+rather than silently fixed:** `AutoRimmer.dll` *does* embed the commit sha —
+the documented `strings | grep` idiom just never presents it, because
+`InformationalVersion` isn't on its own line. `grep -aoE
+'[0-9]+\.[0-9]+\.[0-9]+\+[0-9a-f]{40}'` over the raw bytes finds it. This
+nearly shipped wrong: a worker rewrote its branch history after a build, and
+the committed artifact named a commit the rewrite had deleted — caught only
+because a same-HEAD rebuild moved 148 bytes, which the workspace rule already
+treats as the tell.
+
+### Thread 2 — BORGES (Fable co-authored commits, `corey@getbi.net`)
+
+Not described in the dorian's-box ledger at all; reconstructed from commit
+messages and `HANDOFF.md`, since no muster handover comment for session 9
+exists — a real silence in the record, noted rather than filled in.
+
+**4.1 playbook landed** (`b2a6010`, `b3d79a0`, `c73e58e` — nine seed lessons,
+checklists reshaped around the loop's own moments, templates, post-mortem
+procedure) but `96d9315` stays `state:backlog`: it is written, **not
+audited**, per Evan's standing instruction that a lot was authored very fast
+and the project was "bitten twice in one day by claims that were plausible,
+well-cited and wrong."
+
+**Two more defects found and fixed on main directly:** `70ac258` — `things`
+(detail rows) and `fires` have the same live-score-ordering bug `1eb2262`
+fixed in `pawns` (`5178458`, merged `b1f6ea7`); and a newly-discovered
+`bc2250b` — `move-to` never read `queue`, silently replacing a running job
+instead of queueing behind it, and `attack` had no way to refuse `queue:true`
+cleanly. Fixed (`734211f`, `9109eaf`) and folded together with 4087644's
+remaining refusal-journaling gaps into one merge (`0fa98ec`, Build
+`93721ac`). **`bc2250b` does not exist as a `git-bug` issue in this repo** —
+every citing commit names it, but `git-bug bug show bc2250b` and a
+`refs/bugs/*` search both come up empty. Most likely filed on BORGES and never
+pushed; flagged here rather than guessed at.
+
+**A new PawnSafe hazard class, Class I:** a vanilla helper that does the
+whole job, returns void, and takes its most important input from *ambient*
+state the bench cannot supply — `FloatMenuOptionProvider_DraftedMove
+.PawnGotoAction` reads queueing from live keyboard state
+(`KeyBindingDefOf.QueueOrder.IsDownEvent`) inside a helper with no queueing
+parameter, so wrapping it was silently unable to ever queue. Documented in
+`PawnSafe.cs` (`b59b830`).
+
+**DESIGN.md corrected in five places** (`d180f57`) on the strength of this
+session's own verifications: baseviz is ASCII-only (the PNG encoder is 2.5's
+own, not reused); BaseVizCatalogDumper is no longer a separate mod; the
+"food_days < 3" leading-indicator example was backwards (`fc287ba`'s
+verification: `Alert_LowFood` trips at nutrition/colonist < 4); `arrest` and
+`equip` are exposed and the modal-hazard entry wrongly claimed otherwise.
+Plus a stale `WorldSafe` hazard note corrected once Spatial.cs had already
+fixed what it warned about (`ebf41bd`, `05dd70e`).
+
+**Wrote `spec/3.5-dialog-verbs`, `spec/3.6-bills-storage`, `spec/4.2-play-loop`
+— none merged, none audited, none run.** Per `HANDOFF.md`: 3.5's verbs are
+complete but its acceptance is "partial and never run"; 3.6's bills+storage
+work is complete with **no acceptance script at all**, and it modifies 3.4's
+already-shipped `MedicalBillVerbs.cs`; 4.2's playbook and Python auditor are
+written but the auditor has never executed — no Python on BORGES. All three
+branches are pushed and sit untouched, deliberately, pending the audit
+Evan's instruction requires before any of them merges.
+
+**Filed:** `8b0b88f` (p2, designate-already-designated), `e6faa51` (p3, PNG/
+ASCII alphabet identity), `05dd70e` (p3, stale hazard note, closed same
+session), `ac407f1` (p1, half of 4087644's journal rule unimplemented).
+**Resolved on the muster:** the session-8 label conflict (4.1/4.3 stay
+`agent:fable`; the "never dispatch Fable on BORGES" rule is a machine rule,
+not a spec-label override — dispatch opus there and say so in the RUNLOG).
+
+### The two threads never shared a tree until the very end
+
+`0c151c1` ("BORGES's session-9 work joins this box's render and sweep") is a
+real three-way merge of two mains that had diverged all session: dorian's box
+touched only `MapDumpVerbs.cs` plus `baseviz/`, `rwa/`, `accept/`; BORGES
+touched `PawnOrderVerbs.cs`, `PawnEmergencyVerbs.cs`, `PawnActs.cs`,
+`ThingVerbs.cs`, `PawnSafe.cs`, `WorldSafe.cs` — source was disjoint, verified
+rather than assumed. Two conflicts, both hand-resolved and recorded in the
+merge commit: `accept/4087644-order-honesty.md`'s stale check-count line, and
+`Assemblies/AutoRimmer.dll` itself, where **neither side was correct** —
+dorian's box's build predated BORGES's verb work, BORGES's predated the
+map-dump structure fields. Rebuilt at `0dd1029`; 0 errors, 0 warnings,
+confirming for the first time that BORGES's verb work and this box's map-dump
+fields compile together at all.
+
+### What this session did NOT prove, stated plainly
+
+- **4087644**: merged, 48/51 live on the merged tree, 3 real gaps open
+  (`ac407f1`), issue stays open.
+- **`bc2250b`/70ac258 remainder** (refusal journaling, move-to queue honesty,
+  things/fires ordering): built and merged (`0fa98ec`, `93721ac`) but **never
+  run on a bench** — `HANDOFF.md` lists phases 5–6 of 4087644 and the whole of
+  70ac258's acceptance as outstanding acceptance debt for the next session.
+- **2.5**: mechanical acceptance is green; legibility acceptance — the spec's
+  actual acceptance bar — has never been demonstrated on a fixture that could
+  answer its own questions.
+- **3.5, 3.6, 4.2**: written, not compiled by an orchestrator, not audited,
+  not merged, not run.
+- **4.1**: written, not audited.
+- No numbered spec closed this session. **21 of 25** stands, unchanged since
+  session 8.
+
+### Where sources were silent or disagreed
+
+- The muster (`git-bug 01f0b85`) has **no session-9 handover comment** —
+  comment #25 is the label-conflict resolution and predates most of this
+  session's work; the run ledger and `HANDOFF.md` are session 9's only
+  first-party record.
+- The ledger `fbb2c59`'s own plan describes only dorian's-box work (A/B/C);
+  it says nothing about 4.1, `bc2250b`, or 70ac258, which happened on BORGES
+  and are known only from `HANDOFF.md` and `git log`.
+- `bc2250b` is cited by six commits as a `git-bug` issue but does not exist in
+  this repo's `refs/bugs/*` — likely filed and never pushed from BORGES.
+  Treated here as real (the code and acceptance both reference it concretely)
+  but its issue text could not be checked.
+- The session ends without a clean "state at session end" summary from either
+  orchestrator; this section's bench-state and next-picks below are assembled
+  from `HANDOFF.md` (BORGES's side) since dorian's box wrote none of its own
+  before the session-10 ledger (`ce15092`) opened.
+
+### Bench state (as left by BORGES; dorian's-box bench state not recorded)
+
+`autostart.rws` — BORGES: 3-colonist quicktest map at tick 607, no violence-
+capable colonist. No `_RimWorld-Agent` state recorded for dorian's box this
+session. Two machine facts worth carrying: BORGES has no Python (accept
+scripts there are hand-driven PowerShell/raw-protocol); dorian's box has no
+`pwsh`. `cmp -l` across machines is confirmed a trap independent of same-box
+determinism — a same-commit Linux build differs from the shipped BORGES blob
+by 185,249 bytes at identical size, purely from the pdb path length shifting
+the tail.
+
+### Next, per `HANDOFF.md`
+
+1. Run `accept/4087644-order-honesty.md` phases 5–6, then
+   `accept/70ac258-things-stable-order.md` in full; close `4087644`,
+   `bc2250b`, `70ac258` only if green.
+2. Audit `spec/3.5-dialog-verbs` and `spec/3.6-bills-storage` (code, one
+   agent each) and `96d9315`/`d2e1229` (prose) before merging any of them.
+3. `DESIGN.md` decisions-log entry for PawnSafe Class I (text drafted in
+   `PawnSafe.cs`'s Class I block).
+4. Factor the four private `Act` emitters into one helper — five sessions
+   old now.
+5. Prune stale worktrees under `.claude/worktrees/`.
+
+Superseded by session 10's ledger (`git-bug ce15092`), which keeps `fbb2c59`
+open only until its two acceptance debts (4087644, f7b6207) discharge.
