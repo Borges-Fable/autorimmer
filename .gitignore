@@ -3,6 +3,19 @@ Assemblies/*.pdb
 Source/**/bin/
 Source/**/obj/
 
+# The three rules above contain a slash, so git anchors them at the REPO ROOT.
+# They do not match a nested Source/obj/ — e.g. one arriving with vendored
+# third-party code. Spec 2.5 nearly proved that the expensive way: vendoring
+# BaseVizCatalogDumper as a mod folder would have tracked 15 files of build
+# intermediates, four of which publish absolute /home/dorian/.steam and
+# /home/dorian/.nuget paths, into a PUBLIC repo. That mod ended up folded into
+# Source/AutoRimmer instead, so nothing nested arrived — but the next person to
+# vendor something should not have to rediscover this. Anchor-free, so they
+# match at any depth:
+**/bin/
+**/obj/
+**/*.pdb
+
 # User-specific build config
 Directory.Build.props.user
 
