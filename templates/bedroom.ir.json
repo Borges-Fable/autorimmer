@@ -1,0 +1,29 @@
+{
+  "defName": "AR_Bedroom_5x7",
+  "size": [5, 7],
+  "spawnConduits": false,
+  "layers": [
+    [
+      ["Wall", "Wall", "Wall", "Wall", "Wall"],
+      ["Wall", ".", "Bed_South", ".", "Wall"],
+      ["Wall", ".", ".", ".", "Wall"],
+      ["Wall", ".", ".", ".", "Wall"],
+      ["Wall", ".", ".", ".", "Wall"],
+      ["Wall", "TorchLamp", ".", ".", "Wall"],
+      ["Wall", "Wall", "Door", "Wall", "Wall"]
+    ]
+  ],
+  "terrain": [],
+  "roof": [
+    [1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1]
+  ],
+  "modRequirements": [],
+  "extension": null,
+  "animalCells": []
+}
