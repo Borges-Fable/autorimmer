@@ -84,23 +84,31 @@ namespace AutoRimmer
                 if (!CanExtinguish(p, at, out string g2, out string r2))
                 { outcome.No(p, g2, r2); continue; }
 
+                bool queued = ctx.Args.Bool("queue", false);
                 var job = JobMaker.MakeJob(JobDefOf.ExtinguishFiresNearby);
                 for (int i = 0; i < fires.Count; i++) job.AddQueuedTarget(TargetIndex.A, fires[i]);
-                if (!p.jobs.TryTakeOrderedJob(job, JobTag.Misc, ctx.Args.Bool("queue", false)))
+                // 4087644 — PawnActs.AlreadyDoing. Worth knowing here in
+                // particular: the queued targets added above are NOT part of the
+                // comparison. Job.JobIsSameAs weighs def, verbToUse and bill and
+                // then targetA/B/C — never targetQueueA — so a pawn already
+                // running ExtinguishFiresNearby matches an order naming a
+                // different set of fires. That is vanilla's own equivalence, and
+                // it is exactly why the order would have been swallowed.
+                if (AlreadyDoing(p, job))
+                { outcome.No(p, GateAlready, AlreadyWhy(queued), AlreadyLine(p, queued)); continue; }
+                if (!p.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
                 { outcome.No(p, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job"); continue; }
                 ids.Add(p.thingIDNumber);
                 outcome.Ok(p, JobLine(p));
             }
 
-            long seq = outcome.Count > 0
-                ? Act(V, "extinguish", $"({at.x},{at.z}) x{fires.Count}",
+            long seq = ActOn(outcome, V, "extinguish", $"({at.x},{at.z}) x{fires.Count}",
                       new Dictionary<string, object>
                       {
                           ["ids"] = ids,
                           ["at"] = Positions.Out(at),
                           ["fires"] = fires.Count,
-                      })
-                : 0;
+                      });
 
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
@@ -193,17 +201,19 @@ namespace AutoRimmer
                 { outcome.No(p, "not-ours", "the game only offers this for a pawn of your faction or your prisoner/guest"); continue; }
                 if (!CanReachThing(p, target, PathEndMode.Touch, out string noPath))
                 { outcome.No(p, "no-path", noPath); continue; }
-                if (!p.jobs.TryTakeOrderedJob(JobMaker.MakeJob(JobDefOf.BeatFire, fire), JobTag.Misc,
-                        ctx.Args.Bool("queue", false)))
+                bool queued = ctx.Args.Bool("queue", false);
+                var job = JobMaker.MakeJob(JobDefOf.BeatFire, fire);
+                // 4087644 — PawnActs.AlreadyDoing.
+                if (AlreadyDoing(p, job))
+                { outcome.No(p, GateAlready, AlreadyWhy(queued), AlreadyLine(p, queued)); continue; }
+                if (!p.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
                 { outcome.No(p, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job"); continue; }
                 ids.Add(p.thingIDNumber);
                 outcome.Ok(p, JobLine(p));
             }
 
-            long seq = outcome.Count > 0
-                ? Act(V, "beat-fire", PawnSafe.Name(target),
-                      new Dictionary<string, object> { ["ids"] = ids, ["target"] = target.thingIDNumber })
-                : 0;
+            long seq = ActOn(outcome, V, "beat-fire", PawnSafe.Name(target),
+                new Dictionary<string, object> { ["ids"] = ids, ["target"] = target.thingIDNumber });
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
                 ["target"] = target.thingIDNumber,
@@ -280,25 +290,30 @@ namespace AutoRimmer
             if (g != null)
             {
                 outcome.No(doctor, g, r);
-                return outcome.Result(V, 0, new Dictionary<string, object> { ["target"] = patient.thingIDNumber });
+                return outcome.Result(V, TendRow(outcome, V, doctor, patient, medicine),
+                    new Dictionary<string, object> { ["target"] = patient.thingIDNumber });
             }
 
+            bool queued = ctx.Args.Bool("queue", false);
             var job = JobMaker.MakeJob(JobDefOf.TendPatient, patient, medicine);
             job.count = 1;
             job.draftedTend = true;
-            if (!doctor.jobs.TryTakeOrderedJob(job, JobTag.Misc, ctx.Args.Bool("queue", false)))
+            // 4087644 — PawnActs.AlreadyDoing. `count` is not one of the fields
+            // JobIsSameAs compares, so an order that differs from the running
+            // job only in count is still swallowed by vanilla's early-out.
+            if (AlreadyDoing(doctor, job))
+            {
+                outcome.No(doctor, GateAlready, AlreadyWhy(queued), AlreadyLine(doctor, queued));
+                return outcome.Result(V, TendRow(outcome, V, doctor, patient, medicine),
+                    new Dictionary<string, object> { ["target"] = patient.thingIDNumber });
+            }
+            if (!doctor.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
             {
                 outcome.No(doctor, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job");
-                return outcome.Result(V, 0);
+                return outcome.Result(V, TendRow(outcome, V, doctor, patient, medicine));
             }
             outcome.Ok(doctor, JobLine(doctor));
-            long seq = Act(V, "tend", PawnSafe.Name(patient),
-                new Dictionary<string, object>
-                {
-                    ["pawn"] = doctor.thingIDNumber,
-                    ["target"] = patient.thingIDNumber,
-                    ["medicine"] = medicine?.def?.defName,
-                });
+            long seq = TendRow(outcome, V, doctor, patient, medicine);
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
                 ["target"] = patient.thingIDNumber,
@@ -315,6 +330,18 @@ namespace AutoRimmer
                     + "tend bare-handed, which is the game's own second option",
             });
         }
+
+        // `tend`'s `action` row, shared by its refusal exits and its success
+        // exit so a refused order journals the same way an accepted one does
+        // (4087644 comment #1). ActOn decides whether a row is owed at all.
+        private static long TendRow(Outcome outcome, string verb, Pawn doctor, Pawn patient, Thing medicine)
+            => ActOn(outcome, verb, "tend", PawnSafe.Name(patient),
+                new Dictionary<string, object>
+                {
+                    ["pawn"] = doctor.thingIDNumber,
+                    ["target"] = patient.thingIDNumber,
+                    ["medicine"] = medicine?.def?.defName,
+                });
 
         // RimWorld/FloatMenuOptionProvider_DraftedTend.cs IsValidTendTarget.
         private static bool ValidTendTarget(Pawn doctor, Pawn patient)
@@ -372,18 +399,26 @@ namespace AutoRimmer
             if (g != null)
             {
                 outcome.No(pawn, g, r);
-                return outcome.Result(V, 0, new Dictionary<string, object> { ["thing"] = thing.thingIDNumber });
+                return outcome.Result(V, RepairRow(outcome, V, pawn, thing),
+                    new Dictionary<string, object> { ["thing"] = thing.thingIDNumber });
             }
 
-            if (!pawn.jobs.TryTakeOrderedJob(JobMaker.MakeJob(JobDefOf.Repair, thing), JobTag.Misc,
-                    ctx.Args.Bool("queue", false)))
+            bool queued = ctx.Args.Bool("queue", false);
+            var job = JobMaker.MakeJob(JobDefOf.Repair, thing);
+            // 4087644 — PawnActs.AlreadyDoing.
+            if (AlreadyDoing(pawn, job))
+            {
+                outcome.No(pawn, GateAlready, AlreadyWhy(queued), AlreadyLine(pawn, queued));
+                return outcome.Result(V, RepairRow(outcome, V, pawn, thing),
+                    new Dictionary<string, object> { ["thing"] = thing.thingIDNumber });
+            }
+            if (!pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
             {
                 outcome.No(pawn, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job");
-                return outcome.Result(V, 0);
+                return outcome.Result(V, RepairRow(outcome, V, pawn, thing));
             }
             outcome.Ok(pawn, JobLine(pawn));
-            long seq = Act(V, "repair", Safe(() => thing.LabelShortCap.ToString()) ?? thing.def?.defName,
-                new Dictionary<string, object> { ["pawn"] = pawn.thingIDNumber, ["thing"] = thing.thingIDNumber });
+            long seq = RepairRow(outcome, V, pawn, thing);
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
                 ["thing"] = thing.thingIDNumber,
@@ -391,6 +426,13 @@ namespace AutoRimmer
                 ["max_hp"] = SafeObj(() => (object)thing.MaxHitPoints),
             });
         }
+
+        // `repair`'s `action` row, shared by its refusal exits and its success
+        // exit so a refused order journals the same way an accepted one does
+        // (4087644 comment #1). ActOn decides whether a row is owed at all.
+        private static long RepairRow(Outcome outcome, string verb, Pawn pawn, Thing thing)
+            => ActOn(outcome, verb, "repair", Safe(() => thing.LabelShortCap.ToString()) ?? thing.def?.defName,
+                new Dictionary<string, object> { ["pawn"] = pawn.thingIDNumber, ["thing"] = thing.thingIDNumber });
 
         // --------------------------------------------------------------------
         // man-turret {pawn, thing}
@@ -448,17 +490,19 @@ namespace AutoRimmer
                 catch (Exception e) { g = "exception"; r = e.GetType().Name + ": " + e.Message; }
 
                 if (g != null) { outcome.No(p, g, r); continue; }
-                if (!p.jobs.TryTakeOrderedJob(JobMaker.MakeJob(JobDefOf.ManTurret, thing), JobTag.Misc,
-                        ctx.Args.Bool("queue", false)))
+                bool queued = ctx.Args.Bool("queue", false);
+                var job = JobMaker.MakeJob(JobDefOf.ManTurret, thing);
+                // 4087644 — PawnActs.AlreadyDoing.
+                if (AlreadyDoing(p, job))
+                { outcome.No(p, GateAlready, AlreadyWhy(queued), AlreadyLine(p, queued)); continue; }
+                if (!p.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
                 { outcome.No(p, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job"); continue; }
                 ids.Add(p.thingIDNumber);
                 outcome.Ok(p, JobLine(p));
             }
 
-            long seq = outcome.Count > 0
-                ? Act(V, "man", Safe(() => thing.LabelShortCap.ToString()) ?? thing.def?.defName,
-                      new Dictionary<string, object> { ["ids"] = ids, ["thing"] = thing.thingIDNumber })
-                : 0;
+            long seq = ActOn(outcome, V, "man", Safe(() => thing.LabelShortCap.ToString()) ?? thing.def?.defName,
+                new Dictionary<string, object> { ["ids"] = ids, ["thing"] = thing.thingIDNumber });
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
                 ["thing"] = thing.thingIDNumber,
@@ -540,9 +584,21 @@ namespace AutoRimmer
                 }
                 else
                 {
+                    bool queued = ctx.Args.Bool("queue", false);
                     var job = JobMaker.MakeJob(JobDefOf.LayDown, bed);
                     job.restUntilHealed = true;
-                    if (!p.jobs.TryTakeOrderedJob(job, JobTag.Misc, ctx.Args.Bool("queue", false)))
+                    // 4087644 — PawnActs.AlreadyDoing, on the ELSE branch only.
+                    // The `inPlace` branch above is NOT a no-op: it flips
+                    // restUntilHealed on the RUNNING job, which is a real
+                    // mutation the provider itself performs, so its `accepted`
+                    // is honest and reporting already-doing-it there would
+                    // introduce a new lie rather than remove one. This branch
+                    // reaches the collision a different way — a LayDown job in
+                    // some OTHER bed, where JobIsSameAs still matches on def
+                    // alone if the target happens to agree.
+                    if (AlreadyDoing(p, job))
+                    { outcome.No(p, GateAlready, AlreadyWhy(queued), AlreadyLine(p, queued)); continue; }
+                    if (!p.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
                     { outcome.No(p, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job"); continue; }
                 }
                 try { p.mindState.ResetLastDisturbanceTick(); } catch { }
@@ -553,10 +609,8 @@ namespace AutoRimmer
                 outcome.Ok(p, line);
             }
 
-            long seq = outcome.Count > 0
-                ? Act(V, "medical-rest", outcome.Count + " pawn(s)",
-                      new Dictionary<string, object> { ["ids"] = ids })
-                : 0;
+            long seq = ActOn(outcome, V, "medical-rest", outcome.Count + " pawn(s)",
+                new Dictionary<string, object> { ["ids"] = ids });
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
                 ["note"] = "job.restUntilHealed is what makes this 'rest until healed' rather than 'lie down'",
@@ -607,10 +661,8 @@ namespace AutoRimmer
                 });
             }
 
-            long seq = outcome.Count > 0
-                ? Act(V, on ? "on" : "off", outcome.Count + " pawn(s)",
-                      new Dictionary<string, object> { ["ids"] = ids, ["on"] = on })
-                : 0;
+            long seq = ActOn(outcome, V, on ? "on" : "off", outcome.Count + " pawn(s)",
+                new Dictionary<string, object> { ["ids"] = ids, ["on"] = on });
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
                 ["on"] = on,

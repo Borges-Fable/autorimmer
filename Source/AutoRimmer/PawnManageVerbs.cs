@@ -210,10 +210,9 @@ namespace AutoRimmer
                     });
                 }
 
-                long copySeq = outcome.Count > 0
-                    ? Act(V, "copy-row", PawnSafe.Name(src) + " -> " + outcome.Count + " pawn(s)",
-                          new Dictionary<string, object> { ["from"] = src.thingIDNumber })
-                    : 0;
+                long copySeq = ActOn(outcome, V, "copy-row",
+                    PawnSafe.Name(src) + " -> " + outcome.Count + " pawn(s)",
+                    new Dictionary<string, object> { ["from"] = src.thingIDNumber });
                 var copyResult = outcome.Result(V, copySeq, new Dictionary<string, object>
                 {
                     ["mode"] = "copy",
@@ -228,7 +227,13 @@ namespace AutoRimmer
                 if (manual != null) copyResult["manual"] = manual;
                 // A copy that accepted nobody still mutated if the `manual`
                 // flip in the same call took. See ManualFallbackStamp.
-                if (outcome.Count == 0) copyResult["action"] = ManualFallbackStamp(manual);
+                // Reached, not Count (4087644 comment #1): a copy that refused
+                // every pawn now journals its verdict, so the manual-flip
+                // fallback must only fire when the copy half wrote NO row at
+                // all. Keyed on Count it would have overwritten a real
+                // journal_seq with "nothing was mutated" — the same false
+                // negative e8f2c32 fixed one branch below.
+                if (!outcome.Reached) copyResult["action"] = ManualFallbackStamp(manual);
                 return copyResult;
             }
 
@@ -299,9 +304,26 @@ namespace AutoRimmer
                 int id = (int)c["pawn"];
                 byPawn[id] = byPawn.TryGetValue(id, out var n) ? n + 1 : 1;
             }
-            long seq = changes.Count > 0
+            // Deliberately NOT ActOn. e8f2c32's rule — the provenance stamp has
+            // to count the same unit `counts` does — applies to the journal row's
+            // verdict too: this path's unit is matrix CELLS, it never calls
+            // Outcome.Ok, so ActOn's verdict would report accepted:0 over a call
+            // that just wrote `changes.Count` cells. Hand-built instead, with the
+            // unit named on the row.
+            bool owed = changes.Count > 0 || outcome.Rejected.Count > 0;
+            long seq = owed
                 ? Act(V, "set", changes.Count + " cell(s) across " + byPawn.Count + " pawn(s)",
-                      new Dictionary<string, object> { ["cells"] = changes.Count })
+                      new Dictionary<string, object>
+                      {
+                          ["cells"] = changes.Count,
+                          ["verdict"] = new Dictionary<string, object>
+                          {
+                              ["accepted"] = changes.Count,
+                              ["rejected"] = outcome.Rejected.Count,
+                              ["by_gate"] = outcome.Verdict()["by_gate"],
+                              ["unit"] = "matrix cells",
+                          },
+                      })
                 : 0;
 
             var result = outcome.Result(V, seq, new Dictionary<string, object>
@@ -335,7 +357,11 @@ namespace AutoRimmer
             // and 3.4's own acceptance asserts against it (4.7e,
             // `action.journal_seq >= 1`) — a check that never ran until this
             // branch's step 0.5 made priority 1 reachable at all.
-            result["action"] = changes.Count > 0 ? Stamp(seq) : ManualFallbackStamp(manual);
+            // `owed`, not changes.Count: a matrix call that refused every cell
+            // now writes a row carrying that verdict, and Stamp(seq) is what
+            // reports it — including seq == 0, which honestly says the journal
+            // writer was closed rather than pretending nothing was attempted.
+            result["action"] = owed ? Stamp(seq) : ManualFallbackStamp(manual);
             return result;
         }
 
@@ -523,10 +549,9 @@ namespace AutoRimmer
                         ["row"] = RowOf(p),
                     });
                 }
-                long cseq = outcome.Count > 0
-                    ? Act(V, "copy-row", PawnSafe.Name(src) + " -> " + outcome.Count + " pawn(s)",
-                          new Dictionary<string, object> { ["from"] = src.thingIDNumber })
-                    : 0;
+                long cseq = ActOn(outcome, V, "copy-row",
+                    PawnSafe.Name(src) + " -> " + outcome.Count + " pawn(s)",
+                    new Dictionary<string, object> { ["from"] = src.thingIDNumber });
                 return outcome.Result(V, cseq, new Dictionary<string, object>
                 {
                     ["mode"] = "copy",
@@ -551,14 +576,12 @@ namespace AutoRimmer
                 });
             }
 
-            long seq = outcome.Count > 0
-                ? Act(V, "set-span", assignment.defName + " x" + hours.Count + "h",
+            long seq = ActOn(outcome, V, "set-span", assignment.defName + " x" + hours.Count + "h",
                       new Dictionary<string, object>
                       {
                           ["assignment"] = assignment.defName,
                           ["hours"] = new List<object>(hours.ConvertAll(h => (object)h)),
-                      })
-                : 0;
+                      });
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
                 ["mode"] = "span",
@@ -903,10 +926,8 @@ namespace AutoRimmer
                 else { line["gate"] = "all-refused"; line["reason"] = "no lever applied to this pawn"; outcome.Rejected.Add(WithPawn(p, line)); }
             }
 
-            long seq = ids.Count > 0
-                ? Act(V, "assign", string.Join(",", touched.ToArray()) + " x" + ids.Count,
-                      new Dictionary<string, object> { ["ids"] = ids, ["levers"] = touched.ConvertAll(t => (object)t) })
-                : 0;
+            long seq = ActOn(outcome, V, "assign", string.Join(",", touched.ToArray()) + " x" + ids.Count,
+                new Dictionary<string, object> { ["ids"] = ids, ["levers"] = touched.ConvertAll(t => (object)t) });
 
             var meta = new Dictionary<string, object>
             {
