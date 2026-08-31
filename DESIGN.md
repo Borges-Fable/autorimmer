@@ -355,3 +355,27 @@ queue by default (an agent flailing mid-experiment must not page triage).
   player-faction test in `PawnColumnWorker_AllowedArea`). Deciding it by which
   spec "feels" spatial or "feels" pawn-ish would have split the same control
   two ways, which is the 2.3 fog-of-war failure in a different costume.
+- 2026-08-31 — **A new hazard class: write-on-SAVE, not just write-on-read —
+  and it means "save and read the Scribe XML" is not a neutral second reader
+  for bills.** `Bill.ExposeData` (`RimWorld/Bill.cs`) runs this during the
+  SAVING pass, before scribing the filter:
+
+      if (Scribe.mode == LoadSaveMode.Saving && recipe.fixedIngredientFilter != null)
+          foreach (ThingDef d in DefDatabase<ThingDef>.AllDefs)
+              if (!recipe.fixedIngredientFilter.Allows(d))
+                  ingredientFilter.SetAllow(d, false);
+
+  So saving a game NARROWS the live `ingredientFilter` of every bill whose
+  recipe has a `fixedIngredientFilter`, in memory, as a side effect of writing
+  the file. It only ever removes allowances and it converges after one save,
+  but two consequences are real. First, an observer can report a bill's filter,
+  an autosave can fire with no player action, and the next read differs —
+  correctly, with nothing wrong. Second, and the reason this is here rather
+  than only in a code comment: **sessions 2.2 and 2.4 established "save the
+  game and read the save's Scribe XML" as the independent second reader that
+  makes an acceptance claim credible.** For bill ingredient filters that reader
+  perturbs what it measures, so it is not independent and must not be cited as
+  though it were. Use a live model read plus a game-acted change (the
+  arrange-act-read lesson) instead. The known write-on-read accessors are
+  catalogued in `WorldSafe.cs`; this one is a different class and the file's
+  header should not be read as covering it.
