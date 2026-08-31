@@ -483,7 +483,21 @@ def phase2():
     else:
         eq("2.2a", "an ORDERED job names ThinkNode_QueuedJob as its giver", e,
            "data.state.job_giver", "ThinkNode_QueuedJob")
-        eq("2.2b", "and the triple reads as ordered", e, "data.state.ordered", True)
+        # 2.2b/c AMENDED by the 4087644 acceptance run (session 9). This used
+        #        to assert `ordered is True` after a plain `wear`. Measured:
+        #        False, with work_giver null - and the CODE is right.
+        #        PawnActs.JobFacts computes ordered = queuedNode && workGiver
+        #        != null && forced, which is the triple this suite's own .md
+        #        defines two paragraphs above its table, and a `wear` order has
+        #        no WorkGiver. The script contradicted its own prose. Asserted
+        #        as a PAIR so the reason travels with the value: a false
+        #        `ordered` is honest only when work_giver is genuinely null.
+        #        See accept/4087644-order-honesty.md section "2.2b WAS WRONG".
+        eq("2.2b", "a direct order carries no WorkGiver", e,
+           "data.state.work_giver", None)
+        eq("2.2c", "so the triple reads NOT ordered - `ordered` means "
+                   "prioritized-WORK order, not 'the player caused this'",
+           e, "data.state.ordered", False)
     eq("2.3", "player_forced is true on an order we gave", e,
        "data.state.player_forced", True)
     ge("2.4", "a RUNNING job has a real start tick", e,
@@ -664,9 +678,195 @@ def phase5():
     eq("5.3b", "no red errors across the whole run", e, "data.count", 0)
 
 
+# ------------------------------------------------------------------- phase 6 --
+# THE REMAINDER (session 9): the gate-refusal early returns that bypassed ActOn,
+# and bc2250b's move-to queue drop. The .md twin carries this same table with
+# its reasoning; keep the two in step.
+
+def phase6():
+    banner("PHASE 6 - the remainder: every refusal journals, and move-to queues")
+
+    # ---- 6A: the four PawnEmergencyVerbs early returns, all ruled REFUSALS.
+    send("undraft", {"pawns": [S["A"]]})
+    e = send("tend", {"pawn": S["A"], "target": S["B"]})
+    eq("6.1a", "an undrafted doctor is refused by the drafted-only gate", e,
+       "data.rejected.0.gate", "drafted-only")
+    ge("6.1b", "and the refusal journals - THE CHECK THAT FAILED (5.1b)", e,
+       "data.action.journal_seq", 1)
+
+    e = state_of(S["A"])
+    at = dig(e, "data.state.at") or (ARGS.dry_run and ["<x>", "<z>"])
+    if at:
+        e = send("extinguish", {"pawns": [S["A"]], "at": at})
+        eq("6.2a", "extinguish at a cell where nothing burns is a REFUSAL, "
+                   "not a silent nothing-to-do", e, "data.rejected.0.gate",
+           "not-burning")
+        ge("6.2b", "and it journals", e, "data.action.journal_seq", 1)
+        eq("6.2c", "the rejected row names the CELL (Outcome.NoAt)", e,
+           "data.rejected.0.at", at)
+    else:
+        note("6.2", "no position read back for A; extinguish check skipped")
+
+    e = send("beat-fire", {"pawns": [S["A"]], "target": S["B"]})
+    eq("6.3a", "beat-fire on a pawn that is not burning is a REFUSAL", e,
+       "data.rejected.0.gate", "not-burning")
+    ge("6.3b", "and it journals", e, "data.action.journal_seq", 1)
+    eq("6.3c", "the rejected row names the TARGET", e,
+       "data.rejected.0.thing", S["B"])
+
+    # B, not the apparel: phases 1 and 4 leave S["ap"] WORN, and a worn item is
+    # unspawned, so ThingArg would refuse it as "no visible thing" and this
+    # check would never reach the gate it is testing. A pawn is always spawned,
+    # is a ThingWithComps, and has no CompMannable.
+    e = send("man-turret", {"pawns": [S["A"]], "thing": S["B"]})
+    eq("6.4a", "man-turret on a thing with no CompMannable is a REFUSAL", e,
+       "data.rejected.0.gate", "not-mannable")
+    ge("6.4b", "and it journals", e, "data.action.journal_seq", 1)
+
+    # THE AGGREGATE, which is the whole point of writing the rows.
+    e = send("journal", {"since_seq": S["seq0"], "types": ["action"], "limit": 300})
+    rows = as_list(dig(e, "data.rows")) or as_list(dig(e, "data.entries"))
+    verbs = set(r.get("verb") for r in rows if isinstance(r, dict))
+    check("6.5", "the journal alone shows the refused emergency orders "
+                 "(extinguish, beat-fire, man, tend)",
+          {"extinguish", "beat-fire", "man-turret", "tend"} <= verbs
+          or {"extinguish", "beat-fire", "man", "tend"} <= verbs,
+          "action rows for all four verbs", sorted(verbs))
+
+    # ---- 6B: the same hardcoded-0 shape swept out of the order verbs.
+    # A PAWN is a Thing and PawnActs.ThingArg resolves one, so B is a
+    # fixture-free non-apparel, non-equippable target — no hunting the ground
+    # for a weapon that may not be there.
+    e = send("wear", {"pawn": S["A"], "thing": S["B"]})
+    eq("6.6a", "wear on a non-apparel thing is a REFUSAL", e,
+       "data.rejected.0.gate", "not-apparel")
+    ge("6.6b", "and it journals", e, "data.action.journal_seq", 1)
+
+    e = send("equip", {"pawn": S["A"], "thing": S["B"]})
+    eq("6.7a", "equip on a thing with no CompEquippable is a REFUSAL", e,
+       "data.rejected.0.gate", "not-equippable")
+    ge("6.7b", "and it journals", e, "data.action.journal_seq", 1)
+
+    e = send("attack", {"pawns": [S["A"]], "target": S["B"]})
+    eq("6.8a", "attack on a target the game offers no option for is a REFUSAL "
+               "(B is a colonist: not hostile, not an animal, not a building)",
+       e, "data.rejected.0.gate", "cannot-target")
+    ge("6.8b", "and it journals", e, "data.action.journal_seq", 1)
+
+    # A prioritize the scan will not match. Any work giver `orders` does not
+    # list for this target will do; Warden_DeliverFood on a free colonist is a
+    # safe bet on any bench (the scanner wants a prisoner).
+    e = send("prioritize", {"pawn": S["A"], "work": "Warden_DeliverFood",
+                            "thing": S["B"]})
+    eq("6.9a", "a prioritize the game does not offer is refused with a gate", e,
+       "data.rejected.0.gate", "not-offered")
+    ge("6.9b", "and it journals - it used to publish 'nothing was mutated'", e,
+       "data.action.journal_seq", 1)
+
+    # ---- 6C: bc2250b. The issue's own reproduction, re-run.
+    send("draft", {"pawns": [S["A"]]})
+    e = state_of(S["A"])
+    here = dig(e, "data.state.at")
+    if ARGS.dry_run:
+        here = [100, 100]
+    if not (isinstance(here, list) and len(here) == 2
+            and all(isinstance(v, (int, float)) for v in here)):
+        note("6.10", "no usable position for A; the move-to queue checks were "
+                     "not driven")
+        send("undraft", {"pawns": [S["A"]]})
+        return
+    x, z = int(here[0]), int(here[1])
+    # Two destinations far apart and in DIFFERENT directions, so 6.12 can tell
+    # which one is being walked. Probed rather than assumed reachable.
+    p1, p2 = None, None
+    for d in (12, 8, 5, 3):
+        cand1, cand2 = [x + d, z], [x - d, z]
+        if dig(send("reachable", {"pawn": S["A"], "from": here, "to": cand1}),
+               "data.reachable") \
+                and dig(send("reachable", {"pawn": S["A"], "from": here, "to": cand2}),
+                        "data.reachable"):
+            p1, p2 = cand1, cand2
+            break
+    if ARGS.dry_run:
+        p1, p2 = [x + 12, z], [x - 12, z]
+    if p1 is None:
+        note("6.10", "no pair of reachable destinations either side of A; the "
+                     "move-to queue checks were not driven (fixture gap)")
+        send("undraft", {"pawns": [S["A"]]})
+        return
+
+    e = send("move-to", {"pawns": [S["A"]], "to": p1})
+    eq("6.10a", "the first move-to is accepted", e, "data.counts.accepted", 1)
+    eq("6.10b", "and records that queueing was not asked for", e,
+       "data.accepted.0.queue", False)
+    running = dig(e, "data.accepted.0.job_id")
+
+    before = dig(state_of(S["A"]), "data.state.job_queue.total")
+    e = send("move-to", {"pawns": [S["A"]], "to": p2, "queue": True})
+    eq("6.11a", "a QUEUED move-to is accepted", e, "data.counts.accepted", 1)
+    eq("6.11b", "and says the flag was honoured", e, "data.accepted.0.queue", True)
+    e = state_of(S["A"])
+    after = dig(e, "data.state.job_queue.total")
+    check("6.11c", "the job queue GREW - the flag reached "
+                   "TryTakeOrderedJob's requestQueueing",
+          isinstance(after, int) and isinstance(before, int) and after == before + 1
+          or ARGS.dry_run, "job_queue.total %s -> %s" % (before, "+1"), after)
+    eq("6.11d", "the queued row is a Goto of its own", e,
+       "data.state.job_queue.list.0.job_def", "Goto")
+    check("6.11e", "and THE RUNNING JOB WAS NOT REPLACED - the measured bug was "
+                   "accepted:1 with an empty queue and the running job gone",
+          dig(e, "data.state.job_id") == running or ARGS.dry_run,
+          "job_id still %s" % show(running), dig(e, "data.state.job_id"))
+
+    # 60 ticks, not the issue's 150: a colonist covers a cell every ~13-20
+    # ticks, so 150 would let it ARRIVE at a destination only 12 cells away,
+    # start the queued job, and make 6.13 test the wrong thing. Direction is
+    # all 6.12 needs.
+    send("advance", {"ticks": 60})
+    e = state_of(S["A"])
+    now = dig(e, "data.state.at")
+    check("6.12", "the pawn walks to the FIRST destination first (x moves "
+                  "toward p1, not p2)",
+          (isinstance(now, list) and int(now[0]) > x) or ARGS.dry_run,
+          "x > %d (toward %s)" % (x, p1), now)
+
+    still_first = dig(state_of(S["A"]), "data.state.job_queue.total")
+    e = send("move-to", {"pawns": [S["A"]], "to": p1})
+    if still_first == 0 and not ARGS.dry_run:
+        note("6.13", "the first Goto had already finished and the queued one "
+                     "started, so the already-doing-it collision could not be "
+                     "staged; shorten the advance and re-run")
+    eq("6.13a", "a move-to to the cell the pawn is ALREADY walking to is not "
+                "accepted", e, "data.counts.accepted", 0)
+    eq("6.13b", "it takes 4087644's gate", e, "data.rejected.0.gate",
+       "already-doing-it")
+    ge("6.13c", "and it journals", e, "data.action.journal_seq", 1)
+
+    e = state_of(S["A"])
+    at_now = dig(e, "data.state.at")
+    if at_now:
+        e = send("move-to", {"pawns": [S["A"]], "to": at_now})
+        eq("6.14", "move-to's own `already-there` gate is still distinct", e,
+           "data.rejected.0.gate", "already-there")
+
+    e = send("attack", {"pawns": [S["A"]], "target": S["B"], "queue": True})
+    eq("6.15a", "attack REFUSES queue:true rather than dropping it", e,
+       "data.rejected.0.gate", "queue-unsupported")
+    check("6.15b", "and the reason names the vanilla delegate that cannot pass "
+                   "requestQueueing",
+          "GetRangedAttackAction" in str(dig(e, "data.rejected.0.reason", "")),
+          "a reason naming FloatMenuUtility.GetRangedAttackAction",
+          dig(e, "data.rejected.0.reason"))
+    ge("6.15c", "and it journals", e, "data.action.journal_seq", 1)
+
+    send("undraft", {"pawns": [S["A"]]})
+    e = send("journal", {"since_seq": S["seq0"], "types": ["red_error"], "limit": 50})
+    eq("6.16", "no red errors across the whole run", e, "data.count", 0)
+
+
 # ---------------------------------------------------------------------- main --
 
-PHASES = {1: phase1, 2: phase2, 3: phase3, 4: phase4, 5: phase5}
+PHASES = {1: phase1, 2: phase2, 3: phase3, 4: phase4, 5: phase5, 6: phase6}
 
 
 def main():
@@ -674,7 +874,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--root", default=DEFAULT_ROOT, help="the protocol root")
-    p.add_argument("--phase", type=int, action="append", choices=[0, 1, 2, 3, 4, 5],
+    p.add_argument("--phase", type=int, action="append", choices=[0, 1, 2, 3, 4, 5, 6],
                    help="run only these phases (repeatable); phase 0 always runs")
     p.add_argument("--dry-run", action="store_true",
                    help="print the plan and every expectation, send nothing")
@@ -689,7 +889,7 @@ def main():
         sys.exit(2)
     os.makedirs(os.path.join(ARGS.root, "commands"), exist_ok=True)
 
-    wanted = sorted(set(ARGS.phase or [1, 2, 3, 4, 5]) - {0})
+    wanted = sorted(set(ARGS.phase or [1, 2, 3, 4, 5, 6]) - {0})
     print("phases: 0 + %s" % ", ".join(str(x) for x in wanted))
 
     phase0()

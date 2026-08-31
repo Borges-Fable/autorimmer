@@ -265,6 +265,46 @@ namespace AutoRimmer
     //       or playerForced. A candidate that differs only in `count` counts as
     //       the same job.
     //
+    // ------- CLASS I: THE WRAPPER THAT DISCARDS WHAT YOU ASKED FOR ----------
+    // Class G is a widget whose CALLER supplied state the provider branched on.
+    // This is the same widening seen from the other side: a vanilla helper that
+    // does the whole job, returns void, and takes its most important input from
+    // AMBIENT state rather than from its signature — so wrapping it is correct
+    // for a player and lossy for us, silently.
+    //
+    //  * RimWorld/FloatMenuOptionProvider_DraftedMove.cs `PawnGotoAction(
+    //    IntVec3 clickCell, Pawn pawn, IntVec3 gotoLoc)`. Its last clause is
+    //    `flag = pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc)` — the default
+    //    `requestQueueing: false`. Vanilla is not missing the capability:
+    //    Verse.AI/Pawn_JobTracker.cs TryTakeOrderedJob reads
+    //    `KeyBindingDefOf.QueueOrder.IsDownEvent` ITSELF, so a player's
+    //    shift-click queues the goto. The switch is LIVE KEYBOARD STATE, which
+    //    for an unattended bench is permanently false and which the helper's
+    //    signature offers no way to override. `move-to` therefore accepted
+    //    `queue:true`, dropped it, replaced the running job and reported
+    //    success (git-bug bc2250b) — and the registry rejects wrong TYPES but
+    //    not unknown KEYS, so nothing could have caught it.
+    //    => the fix is to REPRODUCE the helper's clauses with the parameter
+    //       added, citing it clause for clause, and to keep calling the game's
+    //       own pieces INSIDE that reproduction (RCellFinder
+    //       .BestOrderedGotoDestNear stays vanilla's). Reproduce the smallest
+    //       thing that has the missing parameter, not the whole feature.
+    //    => AND ITS RETURN TELLS YOU NOTHING. `PawnGotoAction` is void; its
+    //       internal `flag` is consumed only to decide whether to draw a
+    //       fleck, and it is TRUE on two paths that take no job at all (the
+    //       pawn already standing on the destination, and the pawn already
+    //       running a Goto to it). So "the call did not throw" was never
+    //       evidence that an order happened — the same shape as FswaBridge's
+    //       read-the-write-back rule, and the reason `move-to` reported
+    //       accepted:1 for an order that changed nothing.
+    //    => THE RULE THIS LEAVES BEHIND, and it is cheap to run: before
+    //       wrapping any vanilla helper, ask what the GAME supplies that we
+    //       cannot — keyboard state, `Event.current`, a UI static, a selection
+    //       — and whether the helper's return distinguishes "did it" from
+    //       "declined". Grep the helper's body for KeyBindingDefOf,
+    //       Find.Selector, Event.current and Messages.Message. Wrap-don't-
+    //       reinvent is still the default; this is the exception's shape.
+    //
     // -------------------------- NOT USED, WHY ------------------------------
     //  * SocialCardUtility.* other than GetPawnSituationLabel: static
     //    cachedForPawn/cachedEntries and a cleared-and-refilled shared static.

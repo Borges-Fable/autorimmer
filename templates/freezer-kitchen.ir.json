@@ -1,0 +1,27 @@
+{
+  "defName": "AR_FreezerKitchen_11x6",
+  "size": [11, 6],
+  "spawnConduits": false,
+  "layers": [
+    [
+      ["Wall", "Wall", "Cooler_North", "Cooler_North", "Wall", "Wall", "Wall", "Wall", "Wall", "Wall", "Wall"],
+      ["Wall", ".", ".", ".", ".", "Wall", "FueledStove_South", ".", ".", ".", "Wall"],
+      ["Wall", ".", ".", ".", ".", "Wall", ".", ".", ".", ".", "Wall"],
+      ["Wall", ".", ".", ".", ".", "Door", ".", ".", ".", ".", "Wall"],
+      ["Wall", ".", ".", ".", ".", "Wall", ".", ".", ".", ".", "Wall"],
+      ["Wall", "Wall", "Wall", "Wall", "Wall", "Wall", "Wall", "Wall", "Door", "Wall", "Wall"]
+    ]
+  ],
+  "terrain": [],
+  "roof": [
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+  ],
+  "modRequirements": [],
+  "extension": null,
+  "animalCells": []
+}
