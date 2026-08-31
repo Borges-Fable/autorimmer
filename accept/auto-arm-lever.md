@@ -16,6 +16,14 @@ Every envelope below is `{"op":…,"args":…}`; with python on the box each is
 | ≥ 1 visible colonist **capable of Violence** | the checkbox is not drawn for a pawn who is not (`PawnColumnWorker_AutoArm.HasCheckbox`) | any colony; this pawn is **A** |
 | ≥ 1 visible colonist **INCAPABLE of Violence** | phase 3's gate check. **Skip phase 3 with a NOTE if the colony has none** — it is not stageable with `dev:*` (no trait/backstory verb exists) and its absence is not a spec failure | a colony that happens to have one; check `pawn {sections:["work"]}` `disabled` |
 | A holds a weapon | phase 4 drops it to make the pawn unarmed | any armed colonist, or `dev:spawn-thing` + `equip` |
+| **A is UNDRAFTED, not downed, in no mental state, spawned on the current map, and capable of Manipulation** | phase 4 only. Every one of these is a clause of FSWA's own `FSWA_MapComponent.CollectEligiblePawns`, and each one silently drops A from the arming pass — the opt-in still reads `true` and nothing ever happens | undraft before 4.6; check `pawn {sections:["state","health"]}` |
+| **`allowSwapWhileDrafted` is OFF** (FSWA's default) | the same clause. If the orchestrator has ever turned it on, a drafted A would still arm and phase 4 proves less than it looks | FSWA mod settings; leave at default |
+
+**Session-8 lesson, applied.** The rows above are the ones `accept/3.4-pawn-orders.md`
+was missing by omission and each cost a full bench cycle. They are FSWA's pass
+gate, not the checkbox gate — the checkbox is drawn (and `assign` accepts the
+lever) for a drafted, downed or manipulation-incapable colonist, exactly as it
+is in the game. Phase 4 is the only phase they touch; phases 1–3 do not care.
 
 Nothing here needs a fixture verb that does not already ship.
 
@@ -91,20 +99,47 @@ rather than a field this repo owns.
 | 4.1 | `{"op":"assign","args":{"pawns":[A],"auto_arm":false}}` | reset to a known state; `after.auto_arm:false` |
 | 4.2 | `{"op":"pawn","args":{"id":A,"sections":["equipment"]}}` | records the BEFORE weapon; A is armed |
 | 4.3 | `{"op":"drop","args":{"pawns":[A]}}` then `advance {ticks:200,max_tps:600}` | the primary is on the ground. `pawn {sections:["equipment"]}` shows **no primary** |
-| 4.4 | `{"op":"things","args":{"category":"weapons","detail":true}}` | the dropped weapon is listed; its id becomes **W**. A colonist's own drop lands UNFORBIDDEN (`Pawn_EquipmentTracker.TryDropEquipment` does not forbid); a RAIDER's drop does not, which is the standing order below |
-| 4.5 | `{"op":"unforbid","args":{"things":[W]}}` | belt and braces — FSWA skips forbidden weapons explicitly (`FSWA_MapComponent.cs`: `thing.def.IsWeapon && !thing.IsForbidden(Faction.OfPlayer)`). Expect `ok:true`; a no-op on an already-unforbidden thing is fine |
+| 4.4 | `{"op":"things","args":{"category":"weapons","detail":true}}` | the dropped weapon is listed; its id becomes **W**. It is **FORBIDDEN** — see below |
+| 4.5 | `{"op":"unforbid","args":{"things":[W]}}` | **REQUIRED, not belt and braces.** Expect `ok:true`. Skipping this makes phase 4 fail and look like the lever is broken |
 | 4.6 | `{"op":"assign","args":{"pawns":[A],"auto_arm":true}}` | `after.auto_arm:true` |
 | 4.7 | `{"op":"advance","args":{"ticks":5000,"max_tps":600}}` | `data.reason:"ticks"` |
 | 4.8 | `{"op":"pawn","args":{"id":A,"sections":["equipment"]}}` | **A holds a weapon again.** If not, advance a documented further 10000 and say which window it took — FSWA re-arms on its map component's own scan cadence, not on a tick we control |
 | 4.9 | `{"op":"journal","args":{"since_seq":seq0,"types":["action"],"limit":300}}` | **no row with `payload.verb:"equip"`.** The pawn armed itself. This is the whole bullet |
 | 4.10 | red-error sweep | `data.count:0` |
 
+**4.5 IS LOAD-BEARING, and the first draft of this note had the reason exactly
+backwards.** It claimed a colonist's own drop lands unforbidden. It does not.
+`Verse/Pawn_EquipmentTracker.cs TryDropEquipment(eq, out resultingEq, pos,
+bool forbid = true)` calls `resultingEq.SetForbidden(forbid, warnOnFail: false)`,
+and `RimWorld/JobDriver_DropEquipment.cs` — the driver behind the `drop` verb's
+`JobDefOf.DropEquipment` — passes only three arguments, so **`forbid` takes its
+default of `true`.** An ordered drop lands FORBIDDEN. FSWA then skips it:
+`FSWA_MapComponent.CollectCandidates` excludes any weapon where
+`ForbidUtility.IsForbidden(thing, Faction.OfPlayer) || FireUtility.IsBurning(thing)`.
+So without 4.5 there are zero candidates, the pass ends at "no candidate
+weapons on the map", A stays unarmed, and phase 4 reads as a broken lever.
+
+The one vanilla path that does un-forbid is `Pawn_EquipmentTracker.MakeRoomFor`,
+which explicitly calls `dropped.SetForbidden(value: false)` on the weapon it
+displaces — so staging phase 4 with an `equip` of a second weapon instead of a
+`drop` would leave the old one usable. `drop` does not.
+
 **The standing order that comes with this feature** (the issue says so, and 4.4
-is where it bites): raider drops land FORBIDDEN, FSWA skips forbidden weapons,
-and a direct `equip` order bypasses forbidden — so the manual path works while
-the autonomous one silently does nothing. The play loop (4.2) must `unforbid`
-after every raid. Not this issue's code, but the reason this issue's feature
-will look broken if it is skipped.
+is where it bites): raider drops land FORBIDDEN too —
+`Pawn_EquipmentTracker.DropAllEquipment(pos, forbid = true)` — FSWA skips
+forbidden weapons, and a direct `equip` order bypasses forbidden, so the manual
+path works while the autonomous one silently does nothing. The play loop (4.2)
+must `unforbid` after every raid. Not this issue's code, but the reason this
+issue's feature will look broken if it is skipped.
+
+**Cadence, so 4.7's tick count is not a guess.** `FSWA_MapComponent
+.MapComponentTick` runs a pass on `Gen.IsHashIntervalTick(map,
+FSWAMod.Settings.evalIntervalTicks)` — default **600** — and only when something
+changed; `AutoArmTracker.SetAutoArm` calls `MarkPawnDirty(pawn)` on opt-in, which
+is exactly that change, so 4.6 arms the next pass. There is also a forced floor
+of 7500 ticks. 5000 ticks therefore covers several passes plus the walk to the
+weapon; if A is still unarmed at 4.8 the cause is an eligibility clause from the
+fixture table, not the window.
 
 ---
 
@@ -142,3 +177,25 @@ Put `ModsConfig.xml` back afterwards.
 - **API drift.** The bridge refuses the lever and journals a warning when
   `IsAutoArm`/`SetAutoArm` no longer match their signatures. Reachable only by
   editing FSWA, so it is verified by reading, not by running.
+- **FSWA loaded with its `AutoArmTracker` GameComponent missing.** Reachable
+  only if `Game.FillComponents` fails to instantiate it, which also logs a red
+  error, so it cannot be staged deliberately. The bridge now answers `null` plus
+  a reason for that case instead of the fabricated `false` FSWA's own
+  `IsAutoArm` returns (`Get?.optedIn.Contains(pawn) ?? false`), and journals
+  `[AutoRimmer] FSWA auto-arm READ is UNKNOWN, not off` — which 2.7 already
+  sweeps for. Verified by reading, not by running.
+
+## A note on the independent second reader
+
+Sessions 2.2 and 2.4 established "save the game and read the save's Scribe XML"
+as the second reader that makes a claim credible, and DESIGN's 2026-08-31 entry
+records the one case where that reader perturbs what it measures. Auto-arm is
+mostly safe for it: `AutoArmTracker.ExposeData` scribes `optedIn` as
+`LookMode.Reference`, so an opted-in pawn appears in the save under
+`<optedIn>`. But `ExposeData` runs `Purge()` during the **Saving** pass, which
+drops every entry whose pawn is null, `Dead` or `Destroyed` — a write-on-SAVE of
+the same class as `Bill.ExposeData`. So the XML is a valid second reader for a
+LIVE pawn's opt-in and is **not** one for a dead pawn's: the save will show it
+opted out because saving removed it, and the live model would have shown the
+same, since `Purge` mutates the in-memory set. Do not read a discrepancy there
+as a bridge fault.

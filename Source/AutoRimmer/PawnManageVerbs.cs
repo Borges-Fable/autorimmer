@@ -738,6 +738,27 @@ namespace AutoRimmer
 
         // FSWA's auto-arm checkbox, gated the way the widgets that draw it are.
         //
+        // WHY THIS COPIES A GATE WHERE `seek-at-will` CALLS ONE. That verb's
+        // rule is the better one and it is followed wherever it can be: the
+        // mod's own predicate is the authority, because a copy drifts and a call
+        // cannot. It does not apply here, and the reason is worth writing down
+        // so nobody "fixes" this into a Class A hazard:
+        //   * The column's predicate is `protected override bool HasCheckbox
+        //     (Pawn)` on an INSTANCE. The only instance the game configures is
+        //     `PawnColumnDef.Worker`, and that getter is a lazy-init that
+        //     CONSTRUCTS the worker and writes `workerInt`/`workerInt.def` on
+        //     first read (RimWorld/PawnColumnDef.cs Worker) — PawnSafe Class A,
+        //     reached from an observer path on a bench where the Assign tab may
+        //     never have been opened. Constructing our own instead gives an
+        //     object with a null `def` that is not the game's.
+        //   * The gizmo's predicate is not a member at all: it is an inline
+        //     clause in a Harmony postfix ITERATOR (FSWA/Patch_PawnGizmos.cs),
+        //     so there is nothing to call.
+        // So: copy, cite both widgets by member, and let the read-back in the
+        // lever catch the case where a drifted copy lets a bad write through —
+        // which it does, because `SetAutoArm` re-checks `MpSync.Configurable`
+        // itself and the verb compares what the tracker says afterwards.
+        //
         // TWO widgets reach AutoArmTracker.SetAutoArm and this verb honours
         // BOTH, because refusing a route the player actually has would be a
         // fabricated restriction:

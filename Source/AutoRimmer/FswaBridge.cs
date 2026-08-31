@@ -33,6 +33,14 @@ namespace AutoRimmer
     //    WE COULD NOT LOOK, it is journaled as a warning, and the reason
     //    travels with it to the caller.
     //
+    //    And the trap has a SECOND MOUTH that no `catch` can cover: FSWA's own
+    //    `IsAutoArm` is `Get?.optedIn.Contains(pawn) ?? false`, so a missing
+    //    `AutoArmTracker` GameComponent answers `false` WITHOUT throwing. A
+    //    bare `false` is therefore probed against `AutoArmTracker.Get` before
+    //    it is published; a definite absence becomes null, and only a definite
+    //    one, because turning every honest "not opted in" into UNKNOWN would be
+    //    the same lie facing the other way. See `AutoArmOf`.
+    //
     // 3. READ THE WRITE BACK. `SetAutoArm` returns `void` and bails SILENTLY on
     //    a null tracker and on a non-Configurable pawn (dead/destroyed), so "the
     //    invoke did not throw" is no evidence at all that anything changed.
@@ -136,29 +144,48 @@ namespace AutoRimmer
                     return;
                 }
 
-                // Diagnosis only, and OPTIONAL: `AutoArmTracker.Get` is what
-                // SetAutoArm's first clause tests, so a null tracker is the
-                // single most likely explanation for a write that returns
-                // normally and does nothing. Failing to bind it costs us the
-                // explanation, not the lever.
-                trackerGetter = AccessTools.PropertyGetter(tracker, "Get");
+                // THE OPTIONAL PROBES, IN THEIR OWN GUARD. Both comments below
+                // promise that failing to bind these costs the EXPLANATION and
+                // not the lever — but the outer `catch` nulls `readAutoArm` and
+                // `writeAutoArm`, so without this inner guard a throw down here
+                // would break exactly the promise they make, disabling a lever
+                // whose two core members had already bound cleanly.
+                try
+                {
+                    // Diagnosis only, and OPTIONAL: `AutoArmTracker.Get` is what
+                    // SetAutoArm's first clause tests, so a null tracker is the
+                    // single most likely explanation for a write that returns
+                    // normally and does nothing. Failing to bind it costs us the
+                    // explanation, not the lever.
+                    trackerGetter = AccessTools.PropertyGetter(tracker, "Get");
 
-                // The gizmo's second route (see the gate in PawnManageVerbs).
-                // Also optional: without it a MECHANOID is refused with a named
-                // reason, which is not the same as being told auto-arm is off.
-                Type mech = AccessTools.TypeByName(MechType);
-                if (mech == null)
-                {
-                    mechWhyNot = "no type " + MechType + " in the loaded " + ModName + " assembly";
-                }
-                else
-                {
-                    var mechDrift = new List<string>();
-                    MethodInfo usable = Bind(mech, "IsWeaponUsableMech", typeof(bool), new[] { typeof(Pawn) }, mechDrift);
-                    if (usable != null)
-                        weaponUsableMech = (Func<Pawn, bool>)Delegate.CreateDelegate(typeof(Func<Pawn, bool>), usable);
+                    // The gizmo's second route (see the gate in PawnManageVerbs).
+                    // Also optional: without it a MECHANOID is refused with a named
+                    // reason, which is not the same as being told auto-arm is off.
+                    Type mech = AccessTools.TypeByName(MechType);
+                    if (mech == null)
+                    {
+                        mechWhyNot = "no type " + MechType + " in the loaded " + ModName + " assembly";
+                    }
                     else
-                        mechWhyNot = string.Join("; ", mechDrift.ToArray());
+                    {
+                        var mechDrift = new List<string>();
+                        MethodInfo usable = Bind(mech, "IsWeaponUsableMech", typeof(bool), new[] { typeof(Pawn) }, mechDrift);
+                        if (usable != null)
+                            weaponUsableMech = (Func<Pawn, bool>)Delegate.CreateDelegate(typeof(Func<Pawn, bool>), usable);
+                        else
+                            mechWhyNot = string.Join("; ", mechDrift.ToArray());
+                    }
+                }
+                catch (Exception probe)
+                {
+                    trackerGetter = null;
+                    weaponUsableMech = null;
+                    mechWhyNot = "probing " + ModName + "'s optional members threw: "
+                        + probe.GetType().Name + ": " + Journal.Truncate(probe.Message, 160);
+                    Journal.EmitWarning("[AutoRimmer] FSWA optional probes failed; the auto-arm lever "
+                        + "still works but a mechanoid refusal and the write diagnosis lose their "
+                        + "detail. " + mechWhyNot);
                 }
             }
             catch (Exception e)
@@ -219,10 +246,40 @@ namespace AutoRimmer
             try
             {
                 // FSWA/AutoArmTracker.cs IsAutoArm: a HashSet lookup on a
-                // GameComponent. No lazy init, nothing scribed, nothing
+                // GameComponent, reached through `Get` => `Current.Game
+                // .GetComponent<AutoArmTracker>()`, which is a plain scan over
+                // `Game.components` (Verse/Game.cs GetComponent<T>) and creates
+                // nothing. No lazy init, no write to scribed state, nothing
                 // rebuilt-on-read — which is why the OBSERVER surface is allowed
                 // to call it too (DESIGN §Observation model).
-                return readAutoArm(pawn);
+                bool v = readAutoArm(pawn);
+                if (v) return true;
+
+                // RULE 2, THE HALF A `catch` CANNOT SEE. IsAutoArm's body is
+                // `Get?.optedIn.Contains(pawn) ?? false`, so a MISSING
+                // AutoArmTracker answers the legal value `false` and never
+                // throws — the fabricated-data failure this file exists to
+                // prevent, arriving by the one route the try/catch above does
+                // not cover. The WRITE path already catches it (the read-back
+                // disagrees and WriteDiagnosis names the null tracker); the
+                // OBSERVER path did not, and an observer publishing "auto-arm is
+                // off" for a game whose tracker is gone is precisely the lie.
+                //
+                // Only a DEFINITE absence downgrades the answer. A probe we
+                // could not run leaves the `false` standing, because turning
+                // every ordinary "not opted in" into UNKNOWN would be a worse
+                // lie in the other direction. Paid for only on a `false`, which
+                // is also the only value that is ambiguous.
+                bool? tracker = TrackerPresent(out _);
+                if (tracker == false)
+                {
+                    error = ModName + " is loaded but its AutoArmTracker GameComponent is not on the "
+                        + "current Game, and " + TrackerType + ".IsAutoArm answers a plain `false` in "
+                        + "that case — so this is NOT evidence that auto-arm is off.";
+                    Journal.EmitWarning("[AutoRimmer] FSWA auto-arm READ is UNKNOWN, not off. " + error);
+                    return null;
+                }
+                return false;
             }
             catch (Exception e)
             {
