@@ -38,22 +38,31 @@ namespace AutoRimmer
             }
         }
 
-        public override void StartedNewGame()
-        {
-            AlertScanner.Reset();
-            Journal.Emit("session", new System.Collections.Generic.Dictionary<string, object>
-            {
-                ["kind"] = "newgame",
-            }, Find.TickManager.TicksGame);
-        }
+        public override void StartedNewGame() => GameBoundary("newgame");
 
-        public override void LoadedGame()
+        public override void LoadedGame() => GameBoundary("loaded");
+
+        // Both lifecycle virtuals do the same thing, because both are the same
+        // event as far as the bridge is concerned: a Game object that was NOT
+        // there is there now, and everything armed against the previous one is
+        // void. AutoRimmer's driver state is static, so it outlives the Game —
+        // without this reset an advance in flight when the colony unloaded
+        // resumes here and ticks the NEW colony to finish the old command,
+        // reporting ticks_elapsed and journal_seq spanning two games
+        // (1.5 blocker 1).
+        //
+        // The poller's heartbeat edge does the same reset when NO game comes
+        // back, which is the case this hook structurally cannot see.
+        private static void GameBoundary(string kind)
         {
+            int answered = Runtime.ResetForGameBoundary(Runtime.BoundaryDetail);
             AlertScanner.Reset();
-            Journal.Emit("session", new System.Collections.Generic.Dictionary<string, object>
+            var payload = new System.Collections.Generic.Dictionary<string, object>
             {
-                ["kind"] = "loaded",
-            }, Find.TickManager.TicksGame);
+                ["kind"] = kind,
+            };
+            if (answered > 0) payload["aborted"] = answered;
+            Journal.Emit("session", payload, Find.TickManager.TicksGame);
         }
 
         private void PublishSnapshot()

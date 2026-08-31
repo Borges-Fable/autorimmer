@@ -190,6 +190,36 @@ namespace AutoRimmer
             return true;
         }
 
+        // EITHER thread, from Runtime.ResetForGameBoundary. The game went away
+        // underneath the advance (main menu, load, new game), so there is
+        // nothing left to tick and possibly no Verse to touch: this is the one
+        // exit that does NOT call Teardown, because Teardown pauses the
+        // TickManager and there may not be one (1.5 blocker 1).
+        //
+        // Without it the driver's STATIC state outlives the Game object: the
+        // next load resumes the old advance against a new colony and reports
+        // ticks_elapsed/journal_seq spanning two games, and if no game reloads
+        // every main-thread verb answers busy forever.
+        public static bool Abandon(string code, string detail)
+        {
+            // Interlocked because the poller's unload edge and the main
+            // thread's lifecycle virtual can both fire for one boundary, and
+            // the command owes exactly one result file.
+            var c = System.Threading.Interlocked.Exchange(ref cmd, null);
+            Active = false;
+            ActiveId = null;
+            haltFlag = false;
+            haltReason = null;
+            haltEvent = null;
+            haltSeq = 0;
+            slowerNow = false;
+            if (c == null) return false;
+            var r = Result.Fail(c.Id, c.Op, code, detail);
+            r.Data = null;
+            Runtime.Outgoing.Enqueue(r);
+            return true;
+        }
+
         // Main thread, every GameComponentUpdate.
         public static void FrameStep()
         {
@@ -245,18 +275,23 @@ namespace AutoRimmer
             }
         }
 
+        // Every exit claims `cmd` with the same interlocked exchange, so a game
+        // boundary that already answered the command (Abandon, from either
+        // thread) can never produce a second result file for it.
         private static void Finish(string reason)
         {
             var data = BuildData(reason);
-            var c = cmd;
+            var c = System.Threading.Interlocked.Exchange(ref cmd, null);
             Teardown();
+            if (c == null) return;
             Runtime.Outgoing.Enqueue(Result.Success(c.Id, c.Op, data));
         }
 
         private static void FinishFailed(string code, string detail)
         {
-            var c = cmd;
+            var c = System.Threading.Interlocked.Exchange(ref cmd, null);
             Teardown();
+            if (c == null) return;
             var r = Result.Fail(c.Id, c.Op, code, detail);
             r.Data = null;
             Runtime.Outgoing.Enqueue(r);
@@ -274,7 +309,7 @@ namespace AutoRimmer
             }
             Active = false;
             ActiveId = null;
-            cmd = null;
+            System.Threading.Interlocked.Exchange(ref cmd, null);
         }
 
         private static Dictionary<string, object> BuildData(string reason)

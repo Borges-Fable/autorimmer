@@ -26,10 +26,20 @@ namespace AutoRimmer
         private const double MinFileAgeMs = 250;     // writer-finished heuristic
         private const double NoGameAfterSeconds = 5;
 
+        // Deliberately much longer than NoGameAfterSeconds. A stalled heartbeat
+        // is ambiguous: the game may have unloaded, or the main thread may just
+        // be inside a long event (map generation, a big-colony autosave), and
+        // falsely abandoning a HEALTHY in-flight advance is far worse than
+        // answering an orphaned one late. 5s is right for refusing a NEW
+        // command with no-active-game (it is retryable); 20s is the bar for
+        // declaring an in-flight command dead (it is not).
+        private const double AbandonAfterSeconds = 20;
+
         private static string root, inboxDir, doneDir, resultsDir, statusPath;
         private static long lastHeartbeat = -1;
         private static DateTime lastBeatChange = DateTime.UtcNow;
         private static DateTime lastStatusWrite = DateTime.MinValue;
+        private static bool sawGame;
 
         public static string Root => root;
 
@@ -67,6 +77,7 @@ namespace AutoRimmer
                 try
                 {
                     Thread.Sleep(PollMs);
+                    CheckGameBoundary();
                     ScanInbox();
                     // Journal before results, deliberately: an advance halt
                     // enqueues its journal events strictly before its result,
@@ -85,7 +96,12 @@ namespace AutoRimmer
             }
         }
 
-        private static bool GameLoaded()
+        private static bool GameLoaded() => SecondsSinceHeartbeat() < NoGameAfterSeconds;
+
+        // Poller thread only (it advances the edge-detector's own state).
+        // double.MaxValue before the very first beat, so "never started" reads
+        // the same as "long gone".
+        private static double SecondsSinceHeartbeat()
         {
             long beat = Interlocked.Read(ref Runtime.Heartbeat);
             if (beat != lastHeartbeat)
@@ -93,7 +109,27 @@ namespace AutoRimmer
                 lastHeartbeat = beat;
                 lastBeatChange = DateTime.UtcNow;
             }
-            return beat > 0 && (DateTime.UtcNow - lastBeatChange).TotalSeconds < NoGameAfterSeconds;
+            return beat > 0 ? (DateTime.UtcNow - lastBeatChange).TotalSeconds : double.MaxValue;
+        }
+
+        // The main thread cannot notice its own disappearance: once the game
+        // unloads, GameComponentUpdate stops, so an advance in flight and every
+        // command already queued for the safe point would wait forever — the
+        // commands consumed into done/ with zero result files (1.5 blocker 2).
+        // The heartbeat is the only unload signal available off-thread, so the
+        // poller owns this edge.
+        private static void CheckGameBoundary()
+        {
+            double stalled = SecondsSinceHeartbeat();
+            if (stalled < NoGameAfterSeconds) { sawGame = true; return; }
+            if (!sawGame || stalled < AbandonAfterSeconds) return;
+            sawGame = false;
+            int answered = Runtime.ResetForGameBoundary(Runtime.BoundaryDetail);
+            Journal.Emit("session", new Dictionary<string, object>
+            {
+                ["kind"] = "unloaded",
+                ["aborted"] = answered,
+            });
         }
 
         private static void ScanInbox()
