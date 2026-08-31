@@ -6,32 +6,46 @@ namespace AutoRimmer
     // Optional config.json under the protocol root, read once at init. Every
     // knob has a shipped default; the file exists for bench tuning, not play.
     //
-    //   {"alertScanFrames":30, "maxTpsCap":1000, "advanceBudgetMs":25,
+    //   {"alertScanFrames":30, "maxTpsCap":1000, "stallFrames":300,
     //    "thermalHalveC":93, "thermalResumeC":90, "thermalSustainS":30,
     //    "thermalPath":"/sys/class/hwmon/hwmon3/temp1_input"}
+    //
+    // `advanceBudgetMs` was 1.3's per-frame DoSingleTick budget and is GONE:
+    // 1.8 sets the game's own time speed and lets RimWorld tick, so there is no
+    // budget to spend. Unknown keys are ignored, so an old config.json still
+    // loads — it just no longer says anything.
     public static class Config
     {
         public static int AlertScanFrames = 30;
 
-        // The 0.1 spike's hard recommendation: max_tps 1000 as a <=25ms
-        // per-frame DoSingleTick budget. The cap is enforced regardless of what
-        // a caller asks for; the budget clamps at 25ms because beyond it the
-        // chassis gains tps but only by pinning the thermal plateau harder.
-        public static int MaxTpsCap = 1000;
-        public static double AdvanceBudgetMs = 25;
-
-        // The FLOOR under advance's max_tps, and the floor MaxTpsCap itself is
-        // clamped to. It existed unnamed and undocumented (1.5 nit): a caller
-        // asking for max_tps 5 silently got 30, and nothing said so.
+        // The bench's own throughput ceiling, enforced regardless of what a
+        // caller asks for (DESIGN: "max_tps is a hard thermal cap"). Since 1.8
+        // it selects a vanilla SPEED rather than sizing a tick budget: the
+        // fastest rung of the ladder whose nominal tps does not exceed this.
+        // At 1000 that is Ultrafast (900 tps nominal), the fastest speed the
+        // game offers without the UltraSpeedBoost TweakValue — which AutoRimmer
+        // deliberately does not set.
         //
-        // Why 30 and not 1: the quota is per WALL SECOND and the loop yields
-        // every frame, so below about one tick per frame the advance stops
-        // being a fast-forward and becomes a very slow real-time run — 30 is
-        // the bench's unwatched fps cap, i.e. the slowest rate that still
-        // delivers a tick per frame. Anyone who wants fewer ticks than that
-        // wants `advance {ticks:N}`, not a throttle. The clamp is now REPORTED:
-        // an advance whose max_tps was moved says so in max_tps_clamped.
-        public const int MinTps = 30;
+        // The ladder is coarse (60 / 180 / 360 / 900), so a cap between rungs
+        // rounds DOWN and the advance result says so in `max_tps_clamped`. A
+        // cap below 60 cannot be honoured at all — nothing in vanilla runs
+        // slower than Normal — and that is reported too, as by:"floor", rather
+        // than being silently rounded up.
+        public static int MaxTpsCap = 1000;
+
+        // The stall watchdog (1.8). An advance no longer drives the clock, so
+        // "the clock stopped" is a state it can be in, and `timeout_ticks` is
+        // counted in GAME ticks — a stalled game never reaches it. After this
+        // many consecutive frames with zero tick progress the advance halts
+        // with reason "stalled" and reports what it observed.
+        //
+        // Counted in FRAMES, not seconds, deliberately: `Root_Play.Update`
+        // returns early while `LongEventHandler.ShouldWaitForEvent`, so a long
+        // event (autosave, map generation) stops calling GameComponentUpdate
+        // altogether and costs no frames. Only a game that is rendering and not
+        // ticking accumulates here. 300 frames is ~10s at the bench's unwatched
+        // 30 fps cap, ~5s watched.
+        public static int StallFrames = 300;
 
         public static double ThermalHalveC = 93;
         public static double ThermalResumeC = 90;
@@ -49,9 +63,9 @@ namespace AutoRimmer
                 if (cfg.TryGetValue("alertScanFrames", out var a) && a is double af)
                     AlertScanFrames = Clamp((int)af, 1, 600);
                 if (cfg.TryGetValue("maxTpsCap", out var m) && m is double mc)
-                    MaxTpsCap = Clamp((int)mc, MinTps, 5000);
-                if (cfg.TryGetValue("advanceBudgetMs", out var b) && b is double bm)
-                    AdvanceBudgetMs = Math.Max(1, Math.Min(25, bm));
+                    MaxTpsCap = Clamp((int)mc, 1, 10000);
+                if (cfg.TryGetValue("stallFrames", out var s2) && s2 is double sf)
+                    StallFrames = Clamp((int)sf, 30, 100000);
                 if (cfg.TryGetValue("thermalHalveC", out var h) && h is double hc) ThermalHalveC = hc;
                 if (cfg.TryGetValue("thermalResumeC", out var r) && r is double rc) ThermalResumeC = rc;
                 if (cfg.TryGetValue("thermalSustainS", out var s) && s is double sc) ThermalSustainS = Math.Max(1, sc);
