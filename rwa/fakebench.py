@@ -43,9 +43,9 @@ MOD_VERSION = "0.1.0"
 POLL_MS = 500
 MIN_FILE_AGE_MS = 250
 
-VERBS = ["advance", "digest", "find-rect", "journal", "journal-selftest", "landmark",
-         "map-view", "nearest", "path-cost", "pause", "ping", "reachable", "room-at",
-         "status", "unpause", "version"]
+VERBS = ["advance", "catalog-dump", "digest", "find-rect", "journal", "journal-selftest",
+         "landmark", "map-dump", "map-view", "nearest", "path-cost", "pause", "ping",
+         "reachable", "room-at", "status", "unpause", "version"]
 
 # Poller.cs writes DateTime.UtcNow.ToString("o"): 7 fractional digits, trailing Z.
 def now_o():
@@ -61,6 +61,151 @@ def atomic(path, text):
     tmp = Path(str(path) + ".tmp")
     tmp.write_text(text)
     tmp.replace(path)
+
+
+# --- canned map-dump (spec 2.5) ---------------------------------------------
+# A two-room base with a door each, a stove in one and a bed in the other, plus
+# a stockpile, two colonists and a band of fog along the south edge. It is
+# shaped to exercise exactly what 2.5's acceptance asks a reader to answer —
+# how many rooms, where are the doors, which room holds the stove — so
+# `selftest.sh` can check the render end to end with no game anywhere.
+BASE_OX, BASE_OZ, BASE_W, BASE_H = 100, 100, 24, 24
+
+CANNED_CATALOG = {
+    "Wall": {"kind": "thing", "thingCategory": "Building", "designationCategory": "Structure",
+             "size": [1, 1], "rotatable": False, "stuffable": True, "isStuff": False,
+             "color": None, "stuffColor": None, "mod": "ludeon.rimworld", "label": "wall"},
+    "Door": {"kind": "thing", "thingCategory": "Building", "designationCategory": "Structure",
+             "size": [1, 1], "rotatable": False, "stuffable": True, "isStuff": False,
+             "color": None, "stuffColor": None, "mod": "ludeon.rimworld", "label": "door"},
+    "ElectricStove": {"kind": "thing", "thingCategory": "Building",
+                      "designationCategory": "Production", "size": [2, 1], "rotatable": True,
+                      "stuffable": False, "isStuff": False, "color": None, "stuffColor": None,
+                      "mod": "ludeon.rimworld", "label": "electric stove"},
+    "Bed": {"kind": "thing", "thingCategory": "Building", "designationCategory": "Furniture",
+            "size": [1, 2], "rotatable": True, "stuffable": True, "isStuff": False,
+            "color": None, "stuffColor": None, "mod": "ludeon.rimworld", "label": "bed"},
+    "WoodLog": {"kind": "thing", "thingCategory": "Item", "designationCategory": "",
+                "size": [1, 1], "rotatable": False, "stuffable": False, "isStuff": True,
+                "color": None, "stuffColor": [133, 97, 67], "mod": "ludeon.rimworld",
+                "label": "wood"},
+    "Soil": {"kind": "terrain", "thingCategory": "", "designationCategory": "Floors",
+             "size": [1, 1], "rotatable": False, "stuffable": False, "isStuff": False,
+             "color": [95, 90, 80], "stuffColor": None, "mod": "ludeon.rimworld",
+             "label": "soil"},
+    "WoodPlankFloor": {"kind": "terrain", "thingCategory": "", "designationCategory": "Floors",
+                       "size": [1, 1], "rotatable": False, "stuffable": False, "isStuff": False,
+                       "color": [108, 78, 55], "stuffColor": None, "mod": "ludeon.rimworld",
+                       "label": "wooden floor"},
+}
+
+
+def rle(vals):
+    """MapDumpVerbs.Plane's encoding: bare index for one cell, else count:index."""
+    out, cur, n = [], None, 0
+    for v in vals:
+        if v == cur:
+            n += 1
+            continue
+        if n:
+            out.append(str(cur) if n == 1 else f"{n}:{cur}")
+        cur, n = v, 1
+    if n:
+        out.append(str(cur) if n == 1 else f"{n}:{cur}")
+    return ",".join(out)
+
+
+def synthetic_dump(rect, layers=None):
+    ox, oz, w, h = (int(v) for v in rect[:4])
+    w, h = max(1, w), max(1, h)
+    terr = [[1] * w for _ in range(h)]
+    things = [[0] * w for _ in range(h)]
+    rooms = [[0] * w for _ in range(h)]
+    zones = [[0] * w for _ in range(h)]
+    roof = [[0] * w for _ in range(h)]
+    pawns = [[0] * w for _ in range(h)]
+    fog = [[0] * w for _ in range(h)]
+
+    def box(r0, c0, r1, c1, idx):
+        for r in range(max(0, r0), min(h, r1 + 1)):
+            for c in range(max(0, c0), min(w, c1 + 1)):
+                if r in (r0, r1) or c in (c0, c1):
+                    things[r][c] = 1
+                else:
+                    rooms[r][c] = idx
+                    terr[r][c] = 2
+                    roof[r][c] = 1
+
+    def put(r, c, v, grid):
+        if 0 <= r < h and 0 <= c < w:
+            grid[r][c] = v
+
+    box(3, 2, 12, 11, 1)
+    box(3, 12, 12, 21, 2)
+    put(12, 6, 2, things)
+    put(12, 17, 2, things)
+    put(4, 4, 3, things)
+    put(4, 5, 3, things)
+    put(10, 18, 4, things)
+    put(9, 18, 4, things)
+    for r, c in ((8, 15), (8, 16), (9, 15), (9, 16)):
+        put(r, c, 1, zones)
+    put(6, 7, 1, pawns)
+    put(7, 16, 2, pawns)
+    for r in range(h):
+        for c in range(w):
+            if r > h - 4:
+                fog[r][c] = 1
+    for r in range(h):
+        for c in range(w):
+            if fog[r][c]:
+                for g in (terr, things, rooms, zones, roof, pawns):
+                    g[r][c] = 0
+
+    flat = lambda g: [v for row in g for v in row]
+    planes = {"terrain": terr, "things": things, "zones": zones, "rooms": rooms,
+              "roof": roof, "pawns": pawns}
+    want = set(layers) if layers else set(planes)
+    out_planes = {k: rle(flat(v)) for k, v in planes.items() if k in want}
+    out_planes["fog"] = rle(flat(fog))
+
+    pal = {
+        "terrain": [None, {"def": "Soil", "label": "soil"},
+                    {"def": "WoodPlankFloor", "label": "wooden floor"}],
+        "things": [None,
+                   {"def": "Wall", "stuff": "WoodLog", "label": "wall",
+                    "category": "Building", "door": False, "size": [1, 1]},
+                   {"def": "Door", "stuff": "WoodLog", "label": "door",
+                    "category": "Building", "door": True, "size": [1, 1]},
+                   {"def": "ElectricStove", "stuff": None, "label": "electric stove",
+                    "category": "Building", "door": False, "size": [2, 1]},
+                   {"def": "Bed", "stuff": "WoodLog", "label": "bed",
+                    "category": "Building", "door": False, "size": [1, 2]}],
+        "zones": [None, {"id": 3, "label": "Stockpile 1", "kind": "stockpile"}],
+        "rooms": [None,
+                  {"id": 11, "outdoors": False, "cells": 81, "role": "Kitchen"},
+                  {"id": 12, "outdoors": False, "cells": 81, "role": "Bedroom"}],
+        "roof": [None, {"def": "RoofConstructed", "label": "constructed roof",
+                        "thick": False, "natural": False}],
+        "pawns": [None, {"id": 215, "name": "Yun", "kind": "colonist"},
+                  {"id": 218, "name": "Foxy", "kind": "colonist"}],
+    }
+    return {
+        "channel": {"name": "map-dump", "alphabet": "baseviz-catalog/1",
+                    "distinct_from": "map-view/ascii-1",
+                    "note": "colours and 2-char glyphs resolve from the def catalog"},
+        "origin": [ox, oz], "w": w, "h": h, "north_up": True, "clipped": False,
+        "map": {"w": 250, "h": 250},
+        "cells": w * h, "fogged_cells": sum(flat(fog)), "fog_respected": True,
+        "encoding": "rle-v1",
+        "palettes": {k: v for k, v in pal.items() if k in want},
+        "planes": out_planes,
+        "runs": {k: len(v.split(",")) if v else 0 for k, v in out_planes.items()},
+        "labels": [
+            {"p": 3, "at": [ox + 4, oz + h - 1 - 4], "size": [2, 1], "rot": "North"},
+            {"p": 4, "at": [ox + 18, oz + h - 1 - 10], "size": [1, 2], "rot": "North"},
+        ],
+    }
 
 
 class Bench:
@@ -219,6 +364,24 @@ class Bench:
             if was:
                 self.finish_advance("interrupted")
             return self.write_result(cid, op, True, {"was_advancing": was, "paused": True})
+        if op == "landmark":
+            # Listing only. `set`/`remove` would need persistent state this
+            # bench deliberately does not keep.
+            return self.write_result(cid, op, True, {
+                "landmarks": {"base-center": [110, 116], "kitchen-door": [106, 111]}})
+        if op == "catalog-dump":
+            path = self.root / "catalog.json"
+            atomic(path, json.dumps({"defs": CANNED_CATALOG}))
+            return self.write_result(cid, op, True, {
+                "path": str(path), "file": "catalog.json", "schema": 1,
+                "defs": len(CANNED_CATALOG), "things": len(CANNED_CATALOG) - 2,
+                "terrains": 2, "bytes": path.stat().st_size})
+        if op == "map-dump":
+            if "rect" not in args and "around" not in args and not args.get("whole_map"):
+                return self.write_result(cid, op, False, code="bad-args",
+                                         detail="map-dump needs 'rect', 'around' or whole_map:true")
+            rect = args.get("rect") or [BASE_OX, BASE_OZ, BASE_W, BASE_H]
+            return self.write_result(cid, op, True, synthetic_dump(rect, args.get("layers")))
         return self.write_result(cid, op, False, code="unknown-op",
                                  detail="known ops: " + ", ".join(VERBS))
 

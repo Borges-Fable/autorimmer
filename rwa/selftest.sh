@@ -309,6 +309,59 @@ run 0 "the bench dir is derived from the protocol root, not hardcoded" -- \
 has "$BENCH"
 
 
+section "12. render: the PNG channel (spec 2.5)"
+# The acceptance's determinism half — "same dump twice -> byte-identical PNG" —
+# is checkable here and nowhere else, because it needs two renders of ONE dump
+# and a live colony moves between calls. fakebench serves a fixed two-room base
+# so the dump is stable by construction; the legibility half (can an agent read
+# it) is the orchestrator's, on the real bench.
+serve
+PNG="$TMP/render"
+run 0 "catalog-dump writes the catalog into the protocol root" -- \
+    "$RWA" catalog-dump --json
+has '"file": "catalog.json"'
+run 0 "…and it is really there" -- test -f "$RWA_ROOT/catalog.json"
+
+run 0 "render a rect off the bench" -- \
+    "$RWA" render --rect 100,100,24,24 --out "$PNG-a.png" --scale 16 --save-dump "$TMP/dump.json" --json
+has '"rooms": 2'
+has '"alphabet": "baseviz-catalog/1"'
+hasre '"catalog": "[^"]*catalog\.json"'
+run 0 "the file is a PNG, not an empty file or an error page" -- \
+    sh -c 'head -c 8 "$1" | od -An -tx1 | tr -d " \n"' _ "$PNG-a.png"
+has "89504e470d0a1a0a"
+
+run 0 "render the same rect again" -- \
+    "$RWA" render --rect 100,100,24,24 --out "$PNG-b.png" --scale 16 --json
+run 0 "SAME DUMP, SAME BYTES — the acceptance's determinism claim" -- \
+    cmp "$PNG-a.png" "$PNG-b.png"
+
+run 0 "the saved dump renders offline to those same bytes" -- \
+    "$RWA" render --dump "$TMP/dump.json" --out "$PNG-c.png" --scale 16 --json
+run 0 "…byte-identical to the bench render" -- cmp "$PNG-a.png" "$PNG-c.png"
+
+stop
+run 3 "the bench path needs a bench and says so" -- \
+    "$RWA" render --rect 100,100,4,4 --out "$PNG-d.png" --root "$TMP/no-such-root"
+run 0 "…but an offline render still works with the bench down" -- \
+    "$RWA" render --dump "$TMP/dump.json" --out "$PNG-e.png" --scale 8 --json
+run 0 "…and that is the whole point: same bytes, no game anywhere" -- \
+    sh -c '"$RWA" render --dump "$1" --out "$2" --scale 16 --json >/dev/null && cmp "$3" "$2"' \
+    _ "$TMP/dump.json" "$PNG-f.png" "$PNG-a.png"
+
+run 2 "--out is required" -- "$RWA" render --rect 100,100,4,4
+run 2 "a malformed rect is refused, not guessed at" -- \
+    "$RWA" render --rect 1,2,3 --out "$PNG-g.png"
+has "four integers"
+run 0 "no catalog: renders anyway, and says the colours are fallbacks" -- \
+    "$RWA" render --dump "$TMP/dump.json" --out "$PNG-h.png" --no-catalog --json
+hasre '"catalog": null'
+run 0 "--layers restricts what is drawn, so the bytes differ" -- \
+    sh -c '"$RWA" render --dump "$1" --out "$2" --layers terrain --scale 16 --json >/dev/null; cmp -s "$2" "$3" && echo IDENTICAL || echo DIFFERENT' \
+    _ "$TMP/dump.json" "$PNG-i.png" "$PNG-a.png"
+has "DIFFERENT"
+
+
 section "results"
 printf '\n  %d passed, %d failed\n\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

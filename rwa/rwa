@@ -51,6 +51,7 @@ bare shell on either bench.
 """
 
 import calendar
+import hashlib
 import json
 import os
 import re
@@ -1432,6 +1433,191 @@ def cmd_replay(opts, root, tokens):
     return emit(env, opts)
 
 
+def cmd_render(opts, root, tokens):
+    """`rwa render` — the PNG channel (spec 2.5).
+
+    `map-dump` publishes per-cell planes; this draws them. The mod does no
+    image work at all, so a render is a pure function of (dump, catalog,
+    options) and the same dump always produces the same bytes.
+
+    Two sources, and the offline one is not a convenience — it is what makes
+    the determinism claim checkable and what lets a post-mortem re-draw
+    evidence months later with no bench running:
+        rwa render --rect 100,110,24,24 --out base.png     (asks the bench)
+        rwa render --dump base.json --out base.png         (offline, no bench)
+    `--save-dump` on the first form writes the dump the second form replays.
+
+    The catalog is what makes the picture mod-aware — colours, footprints and
+    the 2-char glyph token all resolve out of it. It comes from the
+    `catalog-dump` verb, which writes `<root>/catalog.json`. Without one the
+    render still answers every geometry question (rooms, doors, walls, where
+    the stove is) in fallback greys, and both the legend and this command's
+    output say so rather than letting a grey base look authoritative.
+    """
+    known = {"--rect": 1, "--around": 1, "--radius": 1, "--whole-map": 0,
+             "--out": 1, "--scale": 1, "--layers": 1, "--landmarks": 0,
+             "--catalog": 1, "--no-catalog": 0, "--dump": 1, "--save-dump": 1,
+             "--no-legend": 0, "--no-ruler": 0, "--max-side": 1}
+    words, flags = split_words(tokens)
+    _, mine = parse_op_args(flags, known)
+    if words:
+        die(f"rwa render takes no positional words (got {words[0]!r}); "
+            "the rect is --rect x,z,w,h")
+
+    out = one(mine, "--out")
+    if not out:
+        die("rwa render needs --out <file.png>")
+    scale = int(one(mine, "--scale") or 12)
+    layers = (one(mine, "--layers") or "").split(",") if one(mine, "--layers") else None
+    if layers:
+        layers = [s.strip() for s in layers if s.strip()]
+
+    # baseviz is imported lazily and by module, never `from … import render`:
+    # this file already has a `render()` of its own (the pretty-printer), and
+    # shadowing it would break every non-JSON code path in the client.
+    sys.path.insert(0, str(REPO))
+    try:
+        from baseviz import render as bv
+        from baseviz.catalog import Catalog
+    except ImportError as e:
+        return emit(envelope("rwa:render", False, code="rwa-render-no-baseviz",
+                             detail=f"cannot import the vendored baseviz package from {REPO}: {e}"),
+                    opts)
+
+    # --- 1. the dump ------------------------------------------------------
+    dump_path = one(mine, "--dump")
+    if dump_path:
+        try:
+            dump = json.loads(Path(dump_path).read_text())
+        except (OSError, ValueError) as e:
+            return emit(envelope("rwa:render", False, code=E_IO,
+                                 detail=f"cannot read dump {dump_path}: {e}"), opts)
+        # Accept either a bare dump or a whole result envelope, because the
+        # obvious way to save one is `rwa map-dump --json > d.json`.
+        if "planes" not in dump and isinstance(dump.get("data"), dict):
+            dump = dump["data"]
+        source = dump_path
+    else:
+        args = {}
+        rect = one(mine, "--rect")
+        around = one(mine, "--around")
+        if rect:
+            parts = [p for p in re.split(r"[,\s]+", rect.strip()) if p]
+            if len(parts) != 4 or not all(re.fullmatch(r"-?\d+", p) for p in parts):
+                die(f"--rect must be x,z,w,h (four integers); got {rect!r}")
+            args["rect"] = [int(p) for p in parts]
+        elif around:
+            args["around"] = around
+            if one(mine, "--radius"):
+                args["radius"] = int(one(mine, "--radius"))
+        elif mine.get("--whole-map"):
+            args["whole_map"] = True
+        else:
+            die("rwa render needs --rect x,z,w,h, --around <pos>, or --whole-map")
+        if layers:
+            args["layers"] = layers
+
+        # This path needs the bench; the offline --dump path above does not,
+        # which is why main dispatches `render` before its no-root guard.
+        if root is None:
+            return emit(envelope("rwa:render", False, code=E_NO_ROOT, detail=(
+                "no AutoRimmer protocol root found, so there is no bench to ask "
+                "for a dump. Set RWA_ROOT or pass --root — or render an "
+                "already-saved dump offline with --dump FILE.json.")), opts)
+
+        h = health(root, float(opts.get("--stale-secs") or STALE_SECS),
+                   float(opts.get("--fps-floor") or FPS_FLOOR))
+        t = open_transcript(opts, root, h)
+        env = send(root, "map-dump", args, opts, h, t)
+        if not env.get("ok"):
+            return emit(env, opts)
+        dump = env.get("data") or {}
+        source = "bench"
+        if one(mine, "--save-dump"):
+            try:
+                Path(one(mine, "--save-dump")).write_text(json.dumps(dump))
+            except OSError as e:
+                warn(f"--save-dump failed: {e}")
+
+    # --- 2. the catalog ---------------------------------------------------
+    cat = None
+    cat_path = None
+    if not mine.get("--no-catalog"):
+        cand = one(mine, "--catalog")
+        if cand:
+            cat_path = Path(cand)
+        elif root:
+            cat_path = Path(root) / "catalog.json"
+        if cat_path and cat_path.is_file():
+            try:
+                cat = Catalog.load(cat_path)
+            except (OSError, ValueError, KeyError) as e:
+                warn(f"catalog at {cat_path} unreadable ({e}); rendering in fallback colours")
+                cat_path = None
+        else:
+            if cat_path:
+                warn(f"no catalog at {cat_path} — run `rwa catalog-dump` for real colours; "
+                     "rendering in fallback greys")
+            cat_path = None
+
+    # --- 3. landmarks -----------------------------------------------------
+    marks = None
+    if mine.get("--landmarks"):
+        if dump_path:
+            warn("--landmarks needs the bench (it reads the landmark registry) "
+                 "and is ignored for an offline --dump render")
+        else:
+            lenv = send(root, "landmark", {}, opts, health(root), None)
+            if lenv.get("ok"):
+                marks = (lenv.get("data") or {}).get("landmarks") or {}
+            else:
+                warn("landmark lookup failed; rendering without them")
+
+    # --- 4. draw ----------------------------------------------------------
+    try:
+        im = bv.render(dump, cat, scale=scale, layers=layers, landmarks=marks,
+                       legend=not mine.get("--no-legend"),
+                       ruler=not mine.get("--no-ruler"),
+                       max_side=int(one(mine, "--max-side") or 8000))
+        nbytes = im.write(out)
+    except bv.RenderError as e:
+        return emit(envelope("rwa:render", False, code="rwa-render-failed",
+                             detail=str(e)), opts)
+    except OSError as e:
+        return emit(envelope("rwa:render", False, code=E_IO,
+                             detail=f"cannot write {out}: {e}"), opts)
+
+    rooms = [e for e in (dump.get("palettes", {}).get("rooms") or [])
+             if e and not e.get("outdoors")]
+    data = {
+        "out": str(Path(out).resolve()),
+        "bytes": nbytes,
+        "sha256": hashlib.sha256(Path(out).read_bytes()).hexdigest(),
+        "image": [im.w, im.h],
+        "scale": scale,
+        "source": source,
+        "catalog": str(cat_path) if cat_path else None,
+        "rect": {"origin": dump.get("origin"), "w": dump.get("w"), "h": dump.get("h")},
+        "cells": dump.get("cells"),
+        "fogged_cells": dump.get("fogged_cells"),
+        "rooms": len(rooms),
+        "alphabet": (dump.get("channel") or {}).get("alphabet"),
+    }
+    env = envelope("rwa:render", True, data=data)
+    if not want_json(opts):
+        cat_note = data["catalog"] or "NONE (fallback colours)"
+        return emit(env, opts, pretty_body="\n".join([
+            f"{data['out']}",
+            f"  {im.w}x{im.h}px  {nbytes} bytes  scale {scale}",
+            f"  rect {dump.get('w')}x{dump.get('h')} at {dump.get('origin')}"
+            f"  cells {dump.get('cells')}  fogged {dump.get('fogged_cells')}",
+            f"  rooms {len(rooms)}  alphabet {data['alphabet']}",
+            f"  catalog {cat_note}",
+            f"  sha256 {data['sha256']}",
+        ]))
+    return emit(env, opts)
+
+
 USAGE = """rwa — drive an AutoRimmer bench over the file protocol.
 
   rwa <op> [--arg value …]      send any op the mod knows (ping, digest, advance,
@@ -1446,6 +1632,13 @@ USAGE = """rwa — drive an AutoRimmer bench over the file protocol.
   rwa tail [--type T] [-n N] [--from-start] [--full] [--once]
   rwa watch [on|off] [--fps N]           reveal/hide the window, re-cap a running game
   rwa replay <transcript-dir> [--dry-run] [--same-ids] [--stop-on-error]
+  rwa render --out FILE.png (--rect x,z,w,h | --around POS [--radius N] | --whole-map)
+                            [--scale N] [--layers a,b] [--landmarks] [--catalog PATH]
+                            [--dump FILE.json] [--save-dump FILE.json]
+                            [--no-legend] [--no-ruler] [--max-side N]
+                            the PNG channel: draws a map-dump. --dump renders an
+                            already-saved dump offline, with no bench at all.
+                            Colours need the catalog — `rwa catalog-dump` writes it.
 
 Op arguments:
   --key value      type guessed: true/false/null, a number, else a string
@@ -1495,7 +1688,7 @@ def main(argv):
 
     if cmd == "root":
         return cmd_root(opts, root, why, cands)
-    if root is None:
+    if root is None and cmd not in ROOTLESS_COMMANDS:
         env = envelope(cmd, False, code=E_NO_ROOT, detail=(
             "no AutoRimmer protocol root found. tried: "
             + "; ".join(str(p) for p, _ in cands)
@@ -1532,7 +1725,16 @@ def main(argv):
 CLIENT_COMMANDS.update({
     "status": cmd_status, "journal": cmd_journal, "tail": cmd_tail,
     "watch": cmd_watch, "verbs": cmd_verbs, "replay": cmd_replay,
+    "render": cmd_render,
 })
+
+# Commands that can do useful work with no protocol root at all, and so are
+# dispatched before main's no-root guard. `render --dump file.json` is a pure
+# offline function of a saved dump — refusing it because no bench happens to be
+# running would defeat the point of being able to re-draw evidence later. Such
+# a command must produce its OWN no-root error on the paths that do need the
+# bench; cmd_render does.
+ROOTLESS_COMMANDS = {"render"}
 
 if __name__ == "__main__":
     try:
