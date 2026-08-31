@@ -705,3 +705,39 @@ queue by default (an agent flailing mid-experiment must not page triage).
   verb says so in its `manual.note` rather than leaving the agent to find out.
   Note also that the mask is gated on `RaceProps.Humanlike`: a Biotech mech's
   priorities read raw whatever the setting says.
+- 2026-08-31 — **A vanilla helper can do the whole job, return `void`, and take
+  its most important input from AMBIENT state rather than from its signature —
+  so wrapping it is correct for a player and lossy for us, silently.** PawnSafe
+  Class G is a widget whose CALLER supplied the state the provider branched on;
+  this is the same widening seen from the other side, and it is why `move-to`
+  accepted `queue:true`, dropped it, replaced the running job and reported
+  success (git-bug bc2250b). `RimWorld/FloatMenuOptionProvider_DraftedMove.cs
+  PawnGotoAction` ends in `pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc)` — the
+  default `requestQueueing: false`. Vanilla is not missing the capability:
+  `Verse.AI/Pawn_JobTracker.cs TryTakeOrderedJob` reads
+  `KeyBindingDefOf.QueueOrder.IsDownEvent` ITSELF and ORs it with that
+  parameter, so a player's shift-click queues the goto. The switch is LIVE
+  KEYBOARD STATE — permanently false on an unattended bench, and the helper's
+  signature offers no way to override it. The verb registry rejects wrong TYPES
+  but not unknown KEYS, so nothing on the way in could have caught the dropped
+  argument either.
+
+  **And the helper's return tells you nothing.** `PawnGotoAction` is `void`; its
+  internal `flag` is consumed only to decide whether to draw a fleck, and it is
+  TRUE on two paths that take no job at all — the pawn already standing on the
+  destination, and the pawn already running a `Goto` to it. So "the call did not
+  throw" was never evidence that an order happened. That is the `FswaBridge`
+  read-the-write-back rule reached from the opposite direction: there a `void`
+  setter that bails silently, here a `void` helper that reports nothing.
+
+  The fix is to REPRODUCE the helper's clauses with the parameter added, citing
+  it clause for clause, and to keep calling the game's own pieces INSIDE that
+  reproduction (`RCellFinder.BestOrderedGotoDestNear` stays vanilla's):
+  **reproduce the smallest thing that has the missing parameter, not the whole
+  feature.** **The rule this leaves behind is cheap to run — before wrapping any
+  vanilla helper, ask what the GAME supplies that we cannot (keyboard state,
+  `Event.current`, a UI static, a selection) and whether the return
+  distinguishes "did it" from "declined"; grep the helper's body for
+  `KeyBindingDefOf`, `Find.Selector`, `Event.current` and `Messages.Message`.**
+  Wrap-don't-reinvent is still the default; this is the exception's shape.
+  Recorded as PawnSafe Class I.
