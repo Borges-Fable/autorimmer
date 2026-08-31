@@ -442,3 +442,22 @@ queue by default (an agent flailing mid-experiment must not page triage).
   lamp and `interactions` reported `force_pause {count:0}` afterwards. Recorded
   because "we avoided a trap" is worth much less than "the trap was armed, here
   is the reading, and it did not fire."
+- 2026-08-31 — **A mod-aware bridge answers `null` for "we could not look", never
+  the mod's own falsy value** (git-bug 1a072fa, `Source/AutoRimmer/FswaBridge.cs`).
+  `IsAutoArm` answers `false` for a pawn that is merely not opted in, so
+  `catch { return false; }` on a reflection throw would make a broken bridge
+  indistinguishable from a working one reporting "off" — wrong in the worst way,
+  because it reads as data. Three rules, and they generalise to every third-party
+  bridge this repo grows: **bind by signature** (parameter-type array AND return
+  type AND a typed delegate, so drift fails at load rather than at invoke);
+  **journal the fabrication instead of committing it** (`Journal.EmitWarning`,
+  with pawn-free text, because EmitWarning dedupes by exact string and a per-pawn
+  message burns the distinct-text cap); and **read the write back**, since a
+  `void` setter that bails silently makes "the invoke did not throw" no evidence
+  at all. An absent optional mod is refused BY NAME on its own lever while every
+  other lever in the same call still applies — absence is not an error.
+  Multiplayer, checked: `MpSync` registers `SetAutoArm` ITSELF as the synced
+  method, so the direct call is the only route and the correct one — but MP's
+  prefix fires only in interface context and AutoRimmer's verbs run from
+  `GameComponentUpdate`, so under MP the write would stay local. Out of scope
+  for a single-player bench, recorded so nobody rediscovers it.
