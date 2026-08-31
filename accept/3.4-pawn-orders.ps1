@@ -606,9 +606,21 @@ function Phase4 {
     Ge '4.5b' 'an `action` row was written' $e 'data.action.journal_seq' 1
     $recipes = @(@(Dig $e 'data.bills') | ForEach-Object { $_.recipe })
     Has '4.5c' "the bill is on the pawn's stack" $recipes 'Anesthetize'
+    # ASK WHETHER THE KEY IS THERE, not whether Dig returned something.
+    # `SurgeryWarnings` returns an EMPTY list when nothing is wrong, never null —
+    # and `Dig` cannot represent that: PowerShell unrolls an empty array on
+    # `return`, so the caller sees $null and "no warnings" is indistinguishable
+    # from "no warnings FIELD". This check went red against a correct mod on the
+    # first fixture clean enough to raise zero warnings. Do not "fix" Dig to
+    # return `,$cur` — every other caller here relies on it unrolling, and
+    # wrapping it makes a 3-pawn roster read as 1.
+    $surgeryData = Dig $e 'data'
     Check '4.5d' 'the four CreateSurgeryBill warnings are RETURNED, not messaged (one of them is a force-pausing Dialog_MessageBox)' `
-    ($null -ne (Dig $e 'data.warnings')) 'a warnings list' (Dig $e 'data.warnings')
-    $w = @(Dig $e 'data.warnings'); if ($w.Count) { Write-Host "          warnings: $(($w | ForEach-Object { $_.key }) -join ', ')" }
+    ([bool](($surgeryData -is [System.Collections.IDictionary]) -and $surgeryData.Contains('warnings'))) `
+    'a `warnings` key (an EMPTY list is a pass — it means nothing was wrong)' `
+    (($surgeryData -is [System.Collections.IDictionary]) ? ($surgeryData.Keys -join ',') : $surgeryData)
+    $w = @(Dig $e 'data.warnings')
+    Write-Host ("          warnings: {0}" -f $(if ($w.Count) { ($w | ForEach-Object { $_.key }) -join ', ' } else { 'none — no surgery warning applies to this fixture' }))
 
     # 4.6 2.4's observer sees the same bill in the same vocabulary
     $e = Send-Cmd bills @{ bench = $B }
