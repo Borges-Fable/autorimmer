@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using RimWorld;
+using RimWorld.Planet;   // FormCaravanComp, for move-to's exit-grid re-derivation
 using Verse;
 using Verse.AI;
 
@@ -21,16 +22,48 @@ namespace AutoRimmer
     // FloatMenuUtility.GetRangedAttackAction) this file CALLS IT rather than
     // reimplementing it — wrap, don't reinvent.
     //
-    // QUEUEING. TryTakeOrderedJob decides between "interrupt now" and "append to
-    // the queue" by reading `KeyBindingDefOf.QueueOrder.IsDownEvent` — live
-    // keyboard state, which for an unattended bench is always false. The
-    // `requestQueueing` parameter is the same switch without a keyboard, so
-    // every order here takes `queue:true` and passes it through. Without that
-    // the agent could never build a queue at all.
+    // QUEUEING, AND WHICH VERBS ACTUALLY HONOUR IT. TryTakeOrderedJob decides
+    // between "interrupt now" and "append to the queue" by reading
+    // `KeyBindingDefOf.QueueOrder.IsDownEvent` — live keyboard state, which for
+    // an unattended bench is always false. The `requestQueueing` parameter is
+    // the same switch without a keyboard. Without it the agent could never
+    // build a queue at all.
+    //
+    // This paragraph used to say "every order here takes queue:true and passes
+    // it through" and that was FALSE (git-bug bc2250b): `move-to` never read
+    // the argument, and the registry rejects wrong TYPES but not unknown KEYS,
+    // so the drop was invisible by construction. The audit that issue asked
+    // for, and what is true now:
+    //
+    //   HONOURED (reads `queue`, passes it to TryTakeOrderedJob):
+    //     move-to · prioritize · rescue · capture · arrest · carry · equip ·
+    //     wear · drop · consume · extinguish · beat-fire · tend · repair ·
+    //     man-turret · rest-until-healed (on its job branch — the in-place
+    //     branch takes no job and says so on the line)
+    //   REFUSED WITH A GATE, because it cannot be honoured without
+    //   reimplementing the game's own targeting:
+    //     attack — FloatMenuUtility.GetRangedAttackAction /
+    //     GetMeleeAttackAction hand back a delegate that hardcodes
+    //     `TryTakeOrderedJob(job, JobTag.Misc)`, with no requestQueueing to
+    //     pass. Refusing is bc2250b's option 2; silently accepting is the one
+    //     unacceptable outcome.
+    //   NOT A JOB, so no queue exists to append to:
+    //     draft · undraft · fire-at-will · clear-priority-work · orders
+    //     (`orders` takes no job at all). These do not read `queue` and never
+    //     should; the arg is meaningless on them.
+    //
+    // `move-to` is honoured by REPRODUCING FloatMenuOptionProvider_DraftedMove
+    // .PawnGotoAction rather than calling it — see the citation at that verb.
     internal static partial class PawnActs
     {
         // --------------------------------------------------------------------
-        // draft {pawns:[…], queue?}  ·  undraft {pawns:[…]|"colonists"}
+        // draft {pawns:[…]}  ·  undraft {pawns:[…]|"colonists"}
+        //
+        // NO `queue` ARGUMENT, and this line said `queue?` until bc2250b's
+        // audit: drafting is not a job, so there is no job queue to append to.
+        // A `queue` key passed here is accepted by the registry (it rejects
+        // wrong types, not unknown keys) and means nothing, exactly as it would
+        // on any other non-job verb.
         //
         // THE PLURAL IS THE VERB: draft takes a list, and UNDRAFT IS ITS OWN OP
         // rather than `draft {drafted:false}`. That is not symmetry for its own
@@ -167,7 +200,7 @@ namespace AutoRimmer
         }
 
         // --------------------------------------------------------------------
-        // move-to {pawns:[…], to:P}
+        // move-to {pawns:[…], to:P, queue?:bool}
         //
         // WIDGET GATE — RimWorld/FloatMenuOptionProvider_DraftedMove.cs:
         //   Drafted=true, Undrafted=FALSE, Multiselect=true, MechanoidCanDo=true,
@@ -184,9 +217,52 @@ namespace AutoRimmer
         // DEVIATION, named: the multi-select branch drives
         // `Find.Selector.gotoController`, which is UI state (a drag interaction
         // that spreads the selection around the clicked cell). DESIGN forbids
-        // driving widgets, so this calls the SINGLE-select path per pawn —
-        // PawnGotoAction with RCellFinder.BestOrderedGotoDestNear, which is the
-        // same spreading function the controller ultimately uses.
+        // driving widgets, so this takes the SINGLE-select path per pawn —
+        // PawnGotoAction's decision tree with RCellFinder.BestOrderedGotoDestNear,
+        // which is the same spreading function the controller ultimately uses.
+        //
+        // ---- git-bug bc2250b: WHY PawnGotoAction IS REPRODUCED, NOT CALLED --
+        // This verb used to CALL FloatMenuOptionProvider_DraftedMove
+        // .PawnGotoAction(to, p, dest) — wrap, don't reinvent — and therefore
+        // never read `queue` at all. Measured on the bench: a drafted pawn
+        // walking to [120,120] given `move-to {to:[90,120], queue:true}`
+        // returned accepted:1, left `job_queue.total` at 0, and walked to
+        // [90,120] — the running job replaced, nothing enqueued, success
+        // reported. The registry rejects wrong TYPES but not unknown KEYS, so
+        // the drop was invisible by construction.
+        //
+        // VANILLA IS NOT AT FAULT AND CAN QUEUE THIS ORDER. PawnGotoAction's
+        // last clause is `pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc)`, and
+        // TryTakeOrderedJob reads `KeyBindingDefOf.QueueOrder.IsDownEvent`
+        // ITSELF — so a player shift-clicking GoHere queues it. The parameter
+        // `requestQueueing` is that same switch for a caller with no keyboard,
+        // and PawnGotoAction simply has no parameter to pass it through.
+        // bc2250b offered two shapes: honour the flag, or refuse it with a
+        // gate. Honouring it is chosen because the capability exists in vanilla
+        // and the caller wanted it; refusing would have denied the agent a
+        // multi-leg route the player has.
+        //
+        // So the four clauses of PawnGotoAction are reproduced below, in its
+        // own order, with the ONE parameter it does not take. What is kept:
+        // the position/goto early-outs, `exitMapOnArrival`, the FeedbackGoto
+        // fleck (no Rand, pure visual — FleckMaker.Static is the whole call),
+        // and the destination from BestOrderedGotoDestNear, which is still the
+        // game's own picker and is NOT reimplemented.
+        //
+        // What is DROPPED, and re-derived as a result field instead of a
+        // message: the caravan/exit-grid `Messages.Message` branch. A
+        // top-of-screen message is not something the agent reads (DESIGN
+        // 2026-08-31: re-derive what a suppressed message would have said as
+        // RESULT FIELDS), and its condition begins `!map.IsPlayerHome`, so on a
+        // single-map colony — a v1 non-goal boundary — it can never fire.
+        // Published as `exit_map_note` when the condition WOULD have held.
+        //
+        // AND THE TWO EARLY-OUTS BECOME HONEST GATES, which is 4087644's family
+        // arriving in this verb by another road. `flag = true` in vanilla means
+        // "draw the fleck", not "an order was taken": clause 2 (already walking
+        // to exactly this cell) did nothing at all and this verb reported
+        // accepted:1 for it. It is now `already-doing-it`, the same gate every
+        // other job verb uses for the same fact.
         // --------------------------------------------------------------------
         [Verb("move-to")]
         public static object MoveTo(VerbContext ctx)
@@ -197,17 +273,47 @@ namespace AutoRimmer
             var to = Positions.Resolve(map, ctx.Args.Raw("to")
                 ?? throw new VerbArgsException("missing required arg 'to' (a position)"));
 
+            bool queued = ctx.Args.Bool("queue", false);
+
             var near = CellFinder.StandableCellNear(to, map, 2.9f);
             var outcome = new Outcome();
+            var ids = new List<object>();
+
+            // 4087644's sweep: a refusal with a gate and a reason journals. The
+            // destination is unusable, every pawn named is refused, and the
+            // order is wasted — exactly the row the ledger was missing.
             if (!near.IsValid)
-                return outcome.Result(V, 0, new Dictionary<string, object>
+            {
+                outcome.NoAt(to, "no-standable-cell",
+                    "no standable cell within 2.9 of the destination "
+                    + "(CellFinder.StandableCellNear); the game offers no GoHere option there either");
+                return outcome.Result(V, GotoRow(outcome, V, to, ids), new Dictionary<string, object>
                 {
                     ["to"] = Positions.Out(to),
                     ["error"] = "no standable cell within 2.9 of the destination "
                         + "(CellFinder.StandableCellNear); the game offers no GoHere option there either",
                 });
+            }
 
-            var ids = new List<object>();
+            // The caravan/exit-grid branch of PawnGotoAction, re-derived rather
+            // than shown as a Messages.Message. `!map.IsPlayerHome` short-
+            // circuits on every bench colony, so this is normally one bool.
+            string exitNote = null;
+            try
+            {
+                if (!map.IsPlayerHome && !map.exitMapGrid.MapUsesExitGrid
+                    && CellRect.WholeMap(map).IsOnEdge(to, 3)
+                    && map.Parent?.GetComponent<FormCaravanComp>() != null)
+                {
+                    exitNote = map.Parent.GetComponent<FormCaravanComp>().CanFormOrReformCaravanNow
+                        ? Tr("MessagePlayerTriedToLeaveMapViaExitGrid_CanReform",
+                             "this map has no exit grid; form a caravan to leave")
+                        : Tr("MessagePlayerTriedToLeaveMapViaExitGrid_CantReform",
+                             "this map has no exit grid and no caravan can be formed here");
+                }
+            }
+            catch { }
+
             foreach (var p in pawns)
             {
                 if (!ProviderGate(p, drafted: true, undrafted: false,
@@ -232,26 +338,123 @@ namespace AutoRimmer
                 IntVec3 dest;
                 try { dest = RCellFinder.BestOrderedGotoDestNear(near, p); }
                 catch { dest = near; }
-                FloatMenuOptionProvider_DraftedMove.PawnGotoAction(to, p, dest);
+
+                // ---- PawnGotoAction clause 1: `pawn.Position == gotoLoc`.
+                // BestOrderedGotoDestNear returns `searcher.Position` when it
+                // finds no good cell inside radius 30, so this is reachable
+                // even though `near != p.Position` was already checked above.
+                // Vanilla ends a running Goto here and draws the fleck; it
+                // takes NO job. The end-current-job half is the widget's own
+                // side effect and is reproduced (DESIGN 2026-08-31: a widget's
+                // side effect is as much a part of the click as its gate); the
+                // "success" half is not, because nothing was ordered.
+                if (dest == p.Position)
+                {
+                    bool endedGoto = false;
+                    try
+                    {
+                        if (p.CurJobDef == JobDefOf.Goto)
+                        { p.jobs.EndCurrentJob(JobCondition.Succeeded); endedGoto = true; }
+                    }
+                    catch { }
+                    var stay = JobLine(p);
+                    stay["dest"] = Positions.Out(dest);
+                    stay["queue"] = queued;
+                    stay["ended_running_goto"] = endedGoto;
+                    outcome.No(p, "already-there",
+                        "the destination picker returned the pawn's own cell "
+                        + "(RCellFinder.BestOrderedGotoDestNear falls back to searcher.Position), so "
+                        + "FloatMenuOptionProvider_DraftedMove.PawnGotoAction takes no job at all — it "
+                        + "only ends a running Goto and draws a fleck"
+                        + (endedGoto ? "; the running Goto WAS ended, as the click does" : ""),
+                        stay);
+                    continue;
+                }
+
+                // ---- PawnGotoAction clause 2: already walking to exactly this
+                // cell. Vanilla sets flag=true and does nothing. That is
+                // 4087644's family — a wasted order reported as accepted — so
+                // it takes 4087644's gate rather than an Ok line.
+                bool alreadyGoing = false;
+                try
+                {
+                    alreadyGoing = p.CurJobDef == JobDefOf.Goto
+                        && p.CurJob != null && p.CurJob.targetA.Cell == dest;
+                }
+                catch { }
+                if (alreadyGoing)
+                {
+                    var same = AlreadyLine(p, queued);
+                    same["dest"] = Positions.Out(dest);
+                    outcome.No(p, GateAlready,
+                        "already running a Goto to exactly this cell. "
+                        + "FloatMenuOptionProvider_DraftedMove.PawnGotoAction's own clause "
+                        + "(`CurJobDef == Goto && CurJob.targetA.Cell == gotoLoc`) takes no job and "
+                        + "reports success, and with queue:true it enqueues nothing either",
+                        same);
+                    continue;
+                }
+
+                // ---- PawnGotoAction clause 3: build and take the job. The
+                // ONE deviation is `requestQueueing`, which the vanilla helper
+                // has no parameter for and which TryTakeOrderedJob otherwise
+                // only ever gets from live keyboard state.
+                var job = JobMaker.MakeJob(JobDefOf.Goto, dest);
+                try
+                {
+                    // IsExitCell short-circuits on MapUsesExitGrid, which is
+                    // false on a player-home map, so this touches no grid on a
+                    // colony bench.
+                    if (map.exitMapGrid.IsExitCell(to)) job.exitMapOnArrival = !p.IsColonyMech;
+                }
+                catch { }
+                // 4087644 — PawnActs.AlreadyDoing. Clause 2 above is vanilla's
+                // OWN narrower test (Goto to this exact cell); this is the
+                // general one TryTakeOrderedJob would have applied silently,
+                // and it catches a JobDriver-level IsSameJobAs that clause 2
+                // cannot see.
+                if (AlreadyDoing(p, job))
+                { outcome.No(p, GateAlready, AlreadyWhy(queued), AlreadyLine(p, queued)); continue; }
+                if (!p.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
+                { outcome.No(p, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job"); continue; }
+                try { FleckMaker.Static(dest, map, FleckDefOf.FeedbackGoto); } catch { }
+
                 ids.Add(p.thingIDNumber);
                 var line = JobLine(p);
                 line["dest"] = Positions.Out(dest);
+                line["queue"] = queued;
                 outcome.Ok(p, line);
             }
 
-            long seq = ActOn(outcome, V, "goto", $"({to.x},{to.z})",
-                new Dictionary<string, object> { ["ids"] = ids, ["to"] = Positions.Out(to) });
+            long seq = GotoRow(outcome, V, to, ids);
 
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
                 ["to"] = Positions.Out(to),
                 ["standable_near"] = Positions.Out(near),
+                ["queue"] = queued,
                 ["fogged_destination"] = SafeObj(() => (object)to.Fogged(map)),
+                ["exit_map_note"] = exitNote,
                 ["note"] = "a drafted pawn HOLDS this cell until it is given another order or undrafted; "
                     + "the destination may be fogged because FloatMenuOptionProvider_DraftedMove sets "
-                    + "IgnoreFogged=false, unlike every other order provider",
+                    + "IgnoreFogged=false, unlike every other order provider. "
+                    + "queue:true APPENDS (Pawn_JobTracker.TryTakeOrderedJob's requestQueueing) — but "
+                    + "read `job_queue` rather than assuming: an IDLE pawn takes a queued order "
+                    + "immediately, because TryTakeOrderedJob's first branch fires when "
+                    + "`mindState.IsIdle || CurJob == null || CurJob.def.isIdle`. That is vanilla's "
+                    + "own shift-click behaviour, not a dropped flag.",
             });
         }
+
+        // `move-to`'s `action` row, shared by its no-destination refusal exit
+        // and its normal exit (4087644 comment #1).
+        private static long GotoRow(Outcome outcome, string verb, IntVec3 to, List<object> ids)
+            => ActOn(outcome, verb, "goto", $"({to.x},{to.z})",
+                new Dictionary<string, object>
+                {
+                    ["ids"] = ids ?? new List<object>(),
+                    ["to"] = Positions.Out(to),
+                });
 
         // --------------------------------------------------------------------
         // attack {pawns:[…], target:<thing id>, mode?:auto|ranged|melee}
@@ -306,14 +509,56 @@ namespace AutoRimmer
                 ["mental"] = (target as Pawn)?.MentalStateDef?.defName,
             };
 
-            if (!CanDraftAttack(target, out string why))
-                return outcome.Result(V, 0, new Dictionary<string, object>
-                {
-                    ["target"] = targetInfo,
-                    ["error"] = why,
-                });
-
             var ids = new List<object>();
+
+            // 4087644's sweep: a target the game offers no attack option for is
+            // a refusal with a gate and a reason, so it journals.
+            if (!CanDraftAttack(target, out string why))
+            {
+                outcome.NoThing(target, "cannot-target", why);
+                return outcome.Result(V, AttackRow(outcome, V, target, removal, ids),
+                    new Dictionary<string, object>
+                    {
+                        ["target"] = targetInfo,
+                        ["error"] = why,
+                    });
+            }
+
+            // bc2250b's queue audit, and this verb's answer is REFUSE, not
+            // honour. `attack` never builds the Job: FloatMenuUtility
+            // .GetRangedAttackAction / GetMeleeAttackAction hand back a
+            // delegate whose body is
+            //     Job job = JobMaker.MakeJob(JobDefOf.AttackStatic, target);
+            //     pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc);
+            // — a hardcoded non-queueing take with no requestQueueing to pass.
+            // Honouring `queue` here would mean constructing AttackStatic /
+            // AttackMelee (plus killIncappedTarget) ourselves, i.e. reproducing
+            // the game's own targeting, which this file's wrap-don't-reinvent
+            // rule and 4087644's acceptance both refuse. A PLAYER can still
+            // queue an attack, because TryTakeOrderedJob reads
+            // KeyBindingDefOf.QueueOrder.IsDownEvent itself and we have no
+            // keyboard — so this is a real capability gap and it is REPORTED
+            // rather than silently swallowed (bc2250b: silently accepting the
+            // argument is the one unacceptable outcome).
+            if (ctx.Args.Bool("queue", false))
+            {
+                foreach (var p in pawns)
+                    outcome.No(p, "queue-unsupported",
+                        "`attack` cannot queue. It wraps FloatMenuUtility.GetRangedAttackAction / "
+                        + "GetMeleeAttackAction, whose delegate hardcodes "
+                        + "Pawn_JobTracker.TryTakeOrderedJob(job, JobTag.Misc) with no requestQueueing, "
+                        + "and building the attack job here instead would mean reimplementing the "
+                        + "game's own targeting. Issue the attack unqueued, or queue a `move-to` and "
+                        + "attack after it lands.");
+                return outcome.Result(V, AttackRow(outcome, V, target, removal, ids),
+                    new Dictionary<string, object>
+                    {
+                        ["target"] = targetInfo,
+                        ["mode"] = mode,
+                        ["queue"] = true,
+                    });
+            }
+
             foreach (var p in pawns)
             {
                 if (!ProviderGate(p, drafted: true, undrafted: false,
@@ -421,23 +666,30 @@ namespace AutoRimmer
                 outcome.Ok(p, line);
             }
 
-            long seq = ActOn(outcome, V, "attack", Safe(() => target.LabelShortCap.ToString()) ?? target.def?.defName,
-                new Dictionary<string, object>
-                {
-                    ["ids"] = ids,
-                    ["target"] = target.thingIDNumber,
-                    ["removal"] = removal,
-                });
+            long seq = AttackRow(outcome, V, target, removal, ids);
 
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
                 ["target"] = targetInfo,
                 ["mode"] = mode,
+                ["queue"] = false,
                 ["note"] = "fire-at-will is a separate standing toggle (`fire-at-will`); this order is one "
                     + "attack job and a pawn that finishes or is interrupted returns to whatever its "
-                    + "drafted posture says",
+                    + "drafted posture says. `queue:true` is REFUSED here, not dropped — see the "
+                    + "queue-unsupported gate (git-bug bc2250b)",
             });
         }
+
+        // `attack`'s `action` row, shared by its refusal exits and its normal
+        // exit (4087644 comment #1).
+        private static long AttackRow(Outcome outcome, string verb, Thing target, string removal, List<object> ids)
+            => ActOn(outcome, verb, "attack", Safe(() => target.LabelShortCap.ToString()) ?? target.def?.defName,
+                new Dictionary<string, object>
+                {
+                    ["ids"] = ids ?? new List<object>(),
+                    ["target"] = target.thingIDNumber,
+                    ["removal"] = removal,
+                });
 
         // RimWorld/FloatMenuOptionProvider_DraftedAttack.cs CanTarget(Thing) —
         // private in the game, so reproduced clause for clause here.
@@ -656,6 +908,16 @@ namespace AutoRimmer
             if (!EverWork(pawn, out string noWork))
                 throw new VerbArgsException(noWork);
 
+            // 4087644's sweep. This verb hand-builds its result rather than
+            // using Outcome.Result, and every refusal exit below published
+            // `NoStamp()` — "not applicable, nothing was mutated" — so a
+            // prioritize order the game refused left NO `action` row. That is
+            // the same false negative comment #1 names: the wasted orders were
+            // the ones invisible to the ledger. The Outcome here exists only to
+            // carry the verdict into ActOn; the result shape is unchanged apart
+            // from `action` now being a real stamp on the refusal paths.
+            var outcome = new Outcome();
+
             Job job = null;
             WorkGiver_Scanner scanner = null;
             string label = null, why = null;
@@ -669,39 +931,52 @@ namespace AutoRimmer
                 });
 
             if (fatal != null)
+            {
+                outcome.No(pawn, "no-work-thinknode", fatal);
                 return new Dictionary<string, object>
                 {
                     ["verb"] = V,
                     ["ok"] = false,
                     ["work"] = giverDef.defName,
                     ["reason"] = fatal,
-                    ["action"] = NoStamp(),
+                    ["rejected"] = outcome.Rejected,
+                    ["action"] = Stamp(PrioritizeRow(outcome, V, pawn, giverDef, null, thing, cell)),
                 };
+            }
             if (!matched)
+            {
+                string notOffered = "the game offers no option for this work giver on this target "
+                    + "(not directOrderable, not a WorkGiver_Scanner, the scanner skipped the target, "
+                    + "or — if the pawn is drafted — canBeDoneWhileDrafted is false). "
+                    + "Call `orders` for what IS offered.";
+                outcome.No(pawn, "not-offered", notOffered);
                 return new Dictionary<string, object>
                 {
                     ["verb"] = V,
                     ["ok"] = false,
                     ["work"] = giverDef.defName,
-                    ["reason"] = "the game offers no option for this work giver on this target "
-                        + "(not directOrderable, not a WorkGiver_Scanner, the scanner skipped the target, "
-                        + "or — if the pawn is drafted — canBeDoneWhileDrafted is false). "
-                        + "Call `orders` for what IS offered.",
+                    ["reason"] = notOffered,
                     ["drafted"] = pawn.Drafted,
                     ["while_drafted"] = giverDef.canBeDoneWhileDrafted,
-                    ["action"] = NoStamp(),
+                    ["rejected"] = outcome.Rejected,
+                    ["action"] = Stamp(PrioritizeRow(outcome, V, pawn, giverDef, null, thing, cell)),
                 };
+            }
             if (job == null || why != null)
+            {
+                // The game's own disabled-option text, verbatim.
+                outcome.No(pawn, "blocked", why ?? "the work giver produced no job");
                 return new Dictionary<string, object>
                 {
                     ["verb"] = V,
                     ["ok"] = false,
                     ["work"] = giverDef.defName,
                     ["label"] = label,
-                    // The game's own disabled-option text, verbatim.
                     ["reason"] = why ?? "the work giver produced no job",
-                    ["action"] = NoStamp(),
+                    ["rejected"] = outcome.Rejected,
+                    ["action"] = Stamp(PrioritizeRow(outcome, V, pawn, giverDef, label, thing, cell)),
                 };
+            }
 
             // The provider stamps the giver def on the job before ordering it;
             // TryTakeOrderedJobPrioritizedWork does it again, but doing it here
@@ -723,25 +998,24 @@ namespace AutoRimmer
             }
 
             if (!took)
+            {
+                string refused = "Pawn_JobTracker.TryTakeOrderedJob refused the job "
+                    + "(pre-toil reservations failed)";
+                outcome.No(pawn, "refused", refused);
                 return new Dictionary<string, object>
                 {
                     ["verb"] = V,
                     ["ok"] = false,
                     ["work"] = giverDef.defName,
                     ["label"] = label,
-                    ["reason"] = "Pawn_JobTracker.TryTakeOrderedJob refused the job "
-                        + "(pre-toil reservations failed)",
-                    ["action"] = NoStamp(),
+                    ["reason"] = refused,
+                    ["rejected"] = outcome.Rejected,
+                    ["action"] = Stamp(PrioritizeRow(outcome, V, pawn, giverDef, label, thing, cell, job)),
                 };
+            }
 
-            long seq = Act(V, "prioritize", label,
-                new Dictionary<string, object>
-                {
-                    ["pawn"] = pawn.thingIDNumber,
-                    ["work"] = giverDef.defName,
-                    ["job_def"] = job.def?.defName,
-                    ["target"] = thing != null ? (object)thing.thingIDNumber : Positions.Out(cell),
-                });
+            outcome.Ok(pawn);
+            long seq = PrioritizeRow(outcome, V, pawn, giverDef, label, thing, cell, job);
 
             var data = JobLine(pawn);
             data["verb"] = V;
@@ -765,6 +1039,20 @@ namespace AutoRimmer
                   + "one-shot job and nothing durable was written";
             return data;
         }
+
+        // `prioritize`'s `action` row, shared by its four refusal exits and its
+        // success exit so a refused order journals the same way an accepted one
+        // does (4087644 comment #1). ActOn decides whether a row is owed.
+        private static long PrioritizeRow(Outcome outcome, string verb, Pawn pawn, WorkGiverDef giverDef,
+            string label, Thing thing, IntVec3 cell, Job job = null)
+            => ActOn(outcome, verb, "prioritize", label ?? giverDef?.defName,
+                new Dictionary<string, object>
+                {
+                    ["pawn"] = pawn.thingIDNumber,
+                    ["work"] = giverDef?.defName,
+                    ["job_def"] = job?.def?.defName,
+                    ["target"] = thing != null ? (object)thing.thingIDNumber : Positions.Out(cell),
+                });
 
         // --------------------------------------------------------------------
         // clear-priority-work {pawns:[…]}
@@ -831,7 +1119,10 @@ namespace AutoRimmer
             => ActOn(outcome, verb, "equip", label,
                 new Dictionary<string, object> { ["pawn"] = pawn.thingIDNumber, ["thing"] = thing.thingIDNumber });
 
-        private static long WearRow(Outcome outcome, string verb, Pawn pawn, Apparel apparel)
+        // Takes a Thing rather than an Apparel: `wear`'s two earliest refusals
+        // fire before the target is known to BE apparel, and they owe a row
+        // like every other refusal (4087644's sweep).
+        private static long WearRow(Outcome outcome, string verb, Pawn pawn, Thing apparel)
             => ActOn(outcome, verb, "wear", Safe(() => apparel.LabelShort) ?? apparel.def?.defName,
                 new Dictionary<string, object> { ["pawn"] = pawn.thingIDNumber, ["thing"] = apparel.thingIDNumber });
 
@@ -1062,17 +1353,23 @@ namespace AutoRimmer
             var thing = ThingArg(map, ctx.Args, "thing");
             var outcome = new Outcome();
 
+            string label = Safe(() => thing.LabelShort) ?? thing.def?.defName;
+            // 4087644's sweep. Both of these recorded a verdict on their target
+            // and then returned a hardcoded 0 for the journal seq — the same
+            // shape as `tend`'s proven failure, in a verb whose LATER refusal
+            // exits already route through EquipRow.
             if (pawn.equipment == null)
             {
                 outcome.No(pawn, "no-equipment", "this pawn has no equipment tracker");
-                return outcome.Result(V, 0);
+                return outcome.Result(V, EquipRow(outcome, V, label, pawn, thing),
+                    new Dictionary<string, object> { ["thing"] = thing.thingIDNumber, ["label"] = label });
             }
             if (!thing.HasComp<CompEquippable>())
             {
                 outcome.NoThing(thing, "not-equippable", "this thing has no CompEquippable");
-                return outcome.Result(V, 0);
+                return outcome.Result(V, EquipRow(outcome, V, label, pawn, thing),
+                    new Dictionary<string, object> { ["thing"] = thing.thingIDNumber, ["label"] = label });
             }
-            string label = Safe(() => thing.LabelShort) ?? thing.def?.defName;
             string gate = null, reason = null;
             if (thing.def.IsWeapon && pawn.WorkTagIsDisabled(WorkTags.Violent))
             { gate = "violence"; reason = Tr("IsIncapableOfViolenceLower", "incapable of violence"); }
@@ -1140,15 +1437,18 @@ namespace AutoRimmer
             var thing = ThingArg(map, ctx.Args, "thing");
             var outcome = new Outcome();
 
+            // 4087644's sweep — the same hardcoded-0 shape as `tend`'s.
             if (pawn.apparel == null)
             {
                 outcome.No(pawn, "no-apparel", "this pawn has no apparel tracker");
-                return outcome.Result(V, 0);
+                return outcome.Result(V, WearRow(outcome, V, pawn, thing),
+                    new Dictionary<string, object> { ["thing"] = thing.thingIDNumber });
             }
             if (!(thing is Apparel apparel))
             {
                 outcome.NoThing(thing, "not-apparel", "this thing is not apparel");
-                return outcome.Result(V, 0);
+                return outcome.Result(V, WearRow(outcome, V, pawn, thing),
+                    new Dictionary<string, object> { ["thing"] = thing.thingIDNumber });
             }
             string gate = null, reason = null;
             if (!CanReachThing(pawn, apparel, PathEndMode.ClosestTouch, out reason)) gate = "no-path";

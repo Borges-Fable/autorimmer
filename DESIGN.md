@@ -57,7 +57,10 @@ Prior art in-tree — copy, don't reinvent:
   file half, `BridgeGameComponent.cs` the main-thread half).
 - `logrelay/` — log capture + background flusher pattern.
 - `rimworld-tools/baseviz/` — layout IR (JSON grid ↔ KCSG XML), def catalog
-  dumped from the live DefDatabase, colored-grid renderer.
+  dumped from the live DefDatabase, ASCII canvas. (It has NO raster renderer —
+  its colored grid is browser JS in `static/viewer.js`. Vendored into this
+  repo as `baseviz/` by 2.5, which added its own PNG encoder; the sibling copy
+  is now reference-only.)
 - `_RimWorld-Test/make-profile.sh` — symlink-farm bench profile (128K install).
 - `rimworld-tools/Info/decompiled/RimWorldBase/` — decompiled vanilla source.
 - `_mp/DETERMINISM.md` — the lazy-getter/UI-mutation hazard classes.
@@ -185,8 +188,10 @@ Principle: **the model does topology, the game does geometry.**
   for play, instant mode for fixtures).
 - Named landmark registry (`base-center`, `kitchen-door`) so plans reference
   places, not numbers.
-- ASCII viewports with coordinate rulers; a PNG render channel (baseviz canvas)
-  the agent Reads as an image — an independent second visual check.
+- ASCII viewports with coordinate rulers; a PNG render channel (vendored
+  `baseviz/` catalog + a deterministic stdlib PNG encoder written for 2.5 —
+  baseviz itself never had one) the agent Reads as an image — an independent
+  second visual check.
 - Fallback: parametric room templates if freeform IR authoring underperforms.
 
 ## Journal
@@ -210,7 +215,9 @@ detached runs.
 
 v1 mod set (ONE set — the suite coexisting is itself the integration test):
 - **Infra**: Harmony (+ transitive infra only if required), LogRelay,
-  AnalyzerBridge + Dubs Performance Analyzer, BaseVizCatalogDumper, AutoRimmer.
+  AnalyzerBridge + Dubs Performance Analyzer, AutoRimmer (which carries the
+  catalog dump — BaseVizCatalogDumper was folded in as source by 2.5, so it is
+  no longer a separate mod on the bench).
 - **Own vanilla+DLC mods**: Factions, SeekAndKill, FindSuitableWeaponAndAmmo
   (vanilla mode), RandomResearch, MechPatrol, JoyVariety, FuzzyRoomRequirements,
   RetryFailedSurgery, Church, CruelAndUnusualPunishment, Fingerkill, AutoQuest,
@@ -286,11 +293,12 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `rwtest/`, not in `rimworld-tools`. Reverses the original split. The CLI is
   the client half of a protocol whose server half is here, so a verb and its
   CLI surface change in one commit, one clone is a working system, and rwtest
-  asserts against `JOURNAL.md`, which is also here. `rimworld-tools` has no git
-  at all (467MB, 206MB of it decompiled RimWorld and ~60 third-party mods), so
-  the original split also had no review trail and no route to the second bench.
-  It stays unversioned and reference-only. 2.5 still REUSES `baseviz/`'s
-  catalog and canvas — that reuse is a code dependency, not a location.
+  asserts against `JOURNAL.md`, which is also here. `rimworld-tools` has git
+  but NO REMOTE (one "Initial import" commit, eabba3eb; 467MB, 206MB of it
+  decompiled RimWorld and ~60 third-party mods), so the original split had no
+  review trail and no route to the second bench. It stays reference-only.
+  (Session 9 finished the move: 2.5 VENDORED baseviz into this repo — the
+  in-repo `baseviz/` is the pinned copy, provenance sha in its README.)
 - 2026-08-30 — **Fog of war is respected by the whole player-facing surface;
   `dev:*` is exempt.** Every observer and query hides undiscovered cells —
   `map-view`, `find-rect`, `nearest`, `room-at` alike — mirroring the action
@@ -309,9 +317,14 @@ queue by default (an agent flailing mid-experiment must not page triage).
   categorically different from an event tap (nothing is emitted when a
   continuous value crosses a threshold), and it is the direct answer to this
   document's own observation that **alerts fire late** — `Alert_LowFood` is a
-  lagging indicator, `food_days < 3` is a leading one. Filed as its own spec so
-  it has a home, dependencies and an acceptance section instead of being a word
-  in a list nobody implemented.
+  lagging indicator. (This entry originally claimed `food_days < 3` leads the
+  alert; the fc287ba verification refuted it — `Alert_LowFood` trips at
+  nutrition per colonist < 4, and the digest divides by colonists PLUS
+  prisoners, so `< 3` is strictly LATER on a prisoner-free colony. A leading
+  predicate must sit above the alert's threshold, e.g. `food_days < 6`; the
+  corrected acceptance lives on fc287ba.) Filed as its own spec so it has a
+  home, dependencies and an acceptance section instead of being a word in a
+  list nobody implemented.
 - 2026-08-30 — **The observer surface has its own gate-in-the-widget rule:
   where the game's accessor writes, the serializer re-implements the
   derivation and cites the member.** 2.4's audit found four vanilla accessors
@@ -414,7 +427,9 @@ queue by default (an agent flailing mid-experiment must not page triage).
     `FloatMenuOptionProvider_Arrest` and friends build the modal INSIDE the
     `FloatMenuOption`'s action closure. Reproducing a provider's GATE and then
     taking the job yourself never runs that closure. This is already our
-    practice and it is why arrest and equip were never exposed.
+    practice and it is how `arrest` and `equip` are exposed safely
+    (PawnOrderVerbs.cs reproduces each provider's gate and never invokes the
+    option's action closure).
   * **On a utility's own execution path — dangerous.** The method raises the
     window as a side effect of doing its job, with no delegate in between:
     `FlickUtility.UpdateFlickDesignation` (tutorial modal), and
