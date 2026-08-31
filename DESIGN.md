@@ -144,6 +144,15 @@ Two layers:
 Every mutation echoes evidence (before/after crop for spatial verbs, result
 data otherwise) and lands in the journal.
 
+**The plural form IS the verb; the singular is its degenerate case.** Each verb
+call is one round trip through the agent's attention, so a verb that does one
+thing at a time turns a 40-cell job into 40 turns of thinking. Every verb whose
+job can plausibly be asked of N things takes the N: `designate --cells rect`,
+`place-layout` over a whole house, work priorities as a matrix, `zone` over a
+rect. A verb that can only be called in a loop is the defect. The client-side
+escape hatch — a shell loop over `rwa` — exists and is fine for the ragged
+tail, but it costs a 0.25–1s round trip each and hands back N envelopes to read.
+
 **The gate lives in the widget, not in the model — so every player verb must
 re-implement its precondition and cite it.** This is the standing invariant that
 "transact against the model, never drive widgets" does not by itself give you.
