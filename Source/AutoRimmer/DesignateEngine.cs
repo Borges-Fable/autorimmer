@@ -344,6 +344,84 @@ namespace AutoRimmer
 
         public const string WhyFogged = "fogged";
 
+        // A REDUNDANT ORDER IS NOT AN IMPOSSIBLE ONE (git-bug 8b0b88f)
+        // ---------------------------------------------------------------
+        // The game's own gates do not distinguish them. `Designator_Mine
+        // .CanDesignateCell` and `.CanDesignateThing` return
+        // `AcceptanceReport.WasRejected` — reason `""` — for a target that
+        // already carries the designation; `Designator_MineVein` does the same
+        // with its own def; `Designator_Hunt.CanDesignateThing`,
+        // `Designator_Plants.CanDesignateThing` and `Designator_Haul
+        // .CanDesignateThing` return a bare `false`. `ReasonOf` turns `""`
+        // into null — correctly, it refuses to invent words the game did not
+        // say — so every one of those arrives as
+        // `{why:"not-designatable", reason:null}`, which reads exactly like
+        // "this rock is not mineable" or "this animal is not huntable". Those
+        // are OPPOSITE corrections: one says stop asking, the other says aim
+        // somewhere else. `rejects_by_reason.already-designated` is then a
+        // free per-call count of wasted orders.
+        public const string WhyAlready = "already-designated";
+
+        // Is the designation ALREADY on this target? Asked only after the
+        // game's gate has rejected, so the gate stays the sole authority on
+        // what may be designated and the accept path is untouched — this only
+        // re-keys a rejection we were going to emit anyway.
+        //
+        // HAZARD, and the reason this dispatches on `targetType` instead of
+        // picking an accessor per verb: `DesignationManager.DesignationOn(
+        // Thing, DesignationDef)` `Log.Error`s on a Cell-targeted def and
+        // `DesignationManager.DesignationAt(IntVec3, DesignationDef)`
+        // `Log.Error`s on a Thing-targeted def (Verse/DesignationManager.cs,
+        // both members). THE TABLE IS NOT UNIFORM: Mine and MineVein are
+        // TargetType.Cell — `Designator_Mine.CanDesignateCell` and
+        // `Designator_MineVein.CanDesignateThing` call `DesignationAt` with
+        // them — while Hunt, HarvestPlant, CutPlant, Haul and Flick are
+        // TargetType.Thing, called through `DesignationOn` by
+        // `Designator_Hunt.CanDesignateThing` and
+        // `Designator_Plants.CanDesignateThing`. Backwards is a RED ERROR in
+        // the log, not a silent null, and a red error breaches the
+        // zero-red-errors invariant — so the wrong check here would be worse
+        // than no check. `def.targetType` is the game's OWN discriminator, the
+        // one `DesignationManager.AddDesignation` and `IndexDesignation`
+        // switch on, which makes a swapped pair unrepresentable rather than
+        // merely untested.
+        public static bool AlreadyDesignated(Map map, DesignationDef def, IntVec3 cell, Thing thing)
+        {
+            if (def == null || map == null || map.designationManager == null) return false;
+            var mgr = map.designationManager;
+            try
+            {
+                if (def.targetType == TargetType.Thing)
+                {
+                    if (thing != null) return mgr.DesignationOn(thing, def) != null;
+                    // A CELL aimed at a THING designation — `designate chop
+                    // --rect` over an already-marked forest is the common case.
+                    // `IntVec3.GetThingList` is `ThingGrid.ThingsListAt`, the
+                    // live grid list returned by reference: nothing lazily
+                    // built, nothing shared-and-refilled like
+                    // `DesignationManager.AllDesignationsAt`'s static (Class E),
+                    // and we only read it.
+                    if (!cell.IsValid || !cell.InBounds(map)) return false;
+                    var list = cell.GetThingList(map);
+                    for (int i = 0; i < list.Count; i++)
+                        if (list[i] != null && mgr.DesignationOn(list[i], def) != null) return true;
+                    return false;
+                }
+                if (def.targetType == TargetType.Cell)
+                {
+                    // Cell designations are indexed by location only, so a
+                    // THING target asks about the cell it stands on — which is
+                    // what `Designator_Mine.CanDesignateThing` itself does
+                    // (`DesignationAt(t.Position, Designation)`).
+                    var c = thing != null ? thing.Position : cell;
+                    if (!c.IsValid || !c.InBounds(map)) return false;
+                    return mgr.DesignationAt(c, def) != null;
+                }
+            }
+            catch { }
+            return false;
+        }
+
         public static Dictionary<string, object> RejectOut(Map map, Reject r)
         {
             var d = new Dictionary<string, object>
@@ -405,8 +483,13 @@ namespace AutoRimmer
         // CanDesignateCell/Thing then DesignateSingleCell/Thing, per target,
         // with our fog gate in front. Never DesignateMultiCell — it re-enters
         // TutorSystem and (for zones) drives Find.Selector.
+        //
+        // `designation` is the def the designator ADDS, taken from the caller's
+        // own table — passed so a rejection can be told apart from a redundancy
+        // (see WhyAlready). Optional: a designator that adds no designation
+        // (claim, smooth, the area brushes) passes null and nothing changes.
         public static void RunCells(Map map, Designator des, List<IntVec3> cells, bool dryRun,
-            List<IntVec3> accepted, List<Reject> rejects)
+            List<IntVec3> accepted, List<Reject> rejects, DesignationDef designation = null)
         {
             for (int i = 0; i < cells.Count; i++)
             {
@@ -430,7 +513,29 @@ namespace AutoRimmer
                 }
                 if (!report.Accepted)
                 {
-                    rejects.Add(new Reject { At = c, Why = "not-designatable", Reason = ReasonOf(report) });
+                    // `reason` stays the game's own words verbatim even here —
+                    // this file's REJECTIONS contract — and for every type in
+                    // the table it is null at this branch, with ONE exception,
+                    // recorded rather than papered over:
+                    //
+                    // KNOWN MISATTRIBUTION. `RimWorld/Designator_Hunt
+                    // .CanDesignateCell` answers "MessageMustDesignateHuntable"
+                    // when the true cause is already-designated, because its
+                    // `HuntablesInCell` filters through `CanDesignateThing`,
+                    // which drops animals that already carry the Hunt
+                    // designation — so a cell whose animals are all already
+                    // marked looks to it like a cell with no huntables in it.
+                    // When `why` is already-designated, `why` is the
+                    // classification and that `reason` answers a different
+                    // question. It is kept anyway: a reason we deleted or
+                    // invented would be worse than the game's own inaccurate
+                    // one, and `why` is what `rejects_by_reason` keys on.
+                    rejects.Add(new Reject
+                    {
+                        At = c,
+                        Why = AlreadyDesignated(map, designation, c, null) ? WhyAlready : "not-designatable",
+                        Reason = ReasonOf(report),
+                    });
                     continue;
                 }
                 if (!dryRun)
@@ -447,7 +552,7 @@ namespace AutoRimmer
         }
 
         public static void RunThings(Map map, Designator des, List<Thing> things, bool dryRun,
-            List<Thing> accepted, List<Reject> rejects)
+            List<Thing> accepted, List<Reject> rejects, DesignationDef designation = null)
         {
             for (int i = 0; i < things.Count; i++)
             {
@@ -475,7 +580,18 @@ namespace AutoRimmer
                 }
                 if (!report.Accepted)
                 {
-                    rejects.Add(new Reject { At = t.Position, Thing = t, Why = "not-designatable", Reason = ReasonOf(report) });
+                    // See RunCells: the gate has spoken, we only say WHICH kind
+                    // of no it was. `Designator_Hunt`, `Designator_Plants` and
+                    // `Designator_Haul` all return a bare `false` here for an
+                    // already-designated thing, so `reason` is null either way
+                    // and `why` carries the whole distinction.
+                    rejects.Add(new Reject
+                    {
+                        At = t.Position,
+                        Thing = t,
+                        Why = AlreadyDesignated(map, designation, t.Position, t) ? WhyAlready : "not-designatable",
+                        Reason = ReasonOf(report),
+                    });
                     continue;
                 }
                 if (!dryRun)

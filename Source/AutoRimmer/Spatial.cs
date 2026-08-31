@@ -132,6 +132,27 @@ namespace AutoRimmer
         private const string ReservedBand = "?@$!&^;";
         public const char FogGlyph = '?';
 
+        // THE ALPHABET'S NAME (git-bug e6faa51)
+        // -------------------------------------
+        // 2.5's PNG channel exists to be an INDEPENDENT second read of the same
+        // ground, and two channels that cannot be shown to share a symbol table
+        // are not a cross-check: when they disagree there is no way to tell a
+        // real divergence from two different alphabets. `map-dump` already
+        // publishes `channel.alphabet = "baseviz-catalog/1"` and names THIS
+        // string in its own `distinct_from`, so the counterpart is not invented
+        // here — it is the identity map-dump already asserts about us
+        // (MapDumpVerbs.cs, the `channel` block). Same field, same format, one
+        // convention.
+        //
+        // THE TRAILING NUMBER IS THE SYMBOL TABLE'S VERSION, and it is the whole
+        // point: a consumer holding a stale table must be able to DETECT that
+        // rather than silently misread. Bump it — and map-dump's
+        // `distinct_from` with it — on any change to the glyph policy: the
+        // reserved band above, the layer priority in Cell(), or the derivation
+        // that turns a def into a char. Adding a legend ENTRY is not a change to
+        // the table; changing what a char means is.
+        public const string AlphabetId = "map-view/ascii-1";
+
         public static readonly IReadOnlyList<string> DefaultLayers = new[] { "terrain", "things", "zones", "pawns" };
 
         public static Dictionary<string, object> Render(Map map, CellRect rect, ICollection<string> layers)
@@ -177,6 +198,24 @@ namespace AutoRimmer
 
             return new Dictionary<string, object>
             {
+                // The channel's identity, in the same field and format map-dump
+                // uses, so the ASCII and PNG reads of one rect can be keyed
+                // against each other by comparing this alone. The LEGEND says
+                // what the glyphs in THIS response mean; the ALPHABET says which
+                // symbol system produced them, which is what a second channel
+                // has to match. Travels with every crop echo too — the identity
+                // belongs to the grid, not to the verb that asked for it.
+                ["channel"] = new Dictionary<string, object>
+                {
+                    ["name"] = "map-view",
+                    ["alphabet"] = AlphabetId,
+                    ["distinct_from"] = "baseviz-catalog/1",
+                    ["note"] = "one single-char ASCII glyph per cell over the collapsed "
+                             + "priority FOG > pawns > designations > things > zones > roof "
+                             + "> terrain, with \"?@$!&^;\" reserved for pawns and fog; this "
+                             + "is NOT map-dump's per-layer def-catalog alphabet and the two "
+                             + "are not comparable cell-for-cell",
+                },
                 ["origin"] = new List<object> { (double)rect.minX, (double)rect.minZ },
                 ["w"] = rect.Width,
                 ["h"] = rect.Height,
