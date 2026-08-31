@@ -137,6 +137,16 @@ namespace AutoRimmer
             // The checkbox runs FIRST, so `work-priorities {manual:true, set:[…
             // priority 1 …]}` is one call: the refusal below is judged against
             // the value this call just installed, not the one it replaced.
+            //
+            // THE COST OF THAT ORDER, stated rather than discovered: everything
+            // after this point can still throw bad-args (an unknown pawn id, a
+            // misspelled work type, a priority out of range), and the flip has
+            // ALREADY landed and been journaled by then. So an `ok:false` from
+            // this verb does NOT imply the colony is unchanged — check
+            // `use_priorities`, or the `manual-priorities` journal step, before
+            // assuming a rejected call was inert. Removing that would mean
+            // resolving every `set` block before the flip and re-checking the
+            // refusal after it; it is not free and it is not this branch's.
             Dictionary<string, object> manual = null;
             if (a.Has("manual"))
             {
@@ -149,14 +159,13 @@ namespace AutoRimmer
             // matrix may well be somebody else's next call.
             if (manual != null && !a.Has("set") && !a.Has("copy_from"))
             {
-                long manualSeq = manual["journal_seq"] is long ms ? ms : 0L;
                 return new Dictionary<string, object>
                 {
                     ["verb"] = V,
                     ["mode"] = "manual",
                     ["manual"] = manual,
                     ["use_priorities"] = usePriorities,
-                    ["action"] = (bool)manual["changed"] ? Stamp(manualSeq) : NoStamp(),
+                    ["action"] = ManualFallbackStamp(manual),
                     ["note"] = (string)manual["note"],
                 };
             }
@@ -217,6 +226,9 @@ namespace AutoRimmer
                           + "Pass manual:true in the same call to copy the stored numbers instead",
                 });
                 if (manual != null) copyResult["manual"] = manual;
+                // A copy that accepted nobody still mutated if the `manual`
+                // flip in the same call took. See ManualFallbackStamp.
+                if (outcome.Count == 0) copyResult["action"] = ManualFallbackStamp(manual);
                 return copyResult;
             }
 
@@ -312,7 +324,31 @@ namespace AutoRimmer
             };
             result["accepted"] = changes;
             if (manual != null) result["manual"] = manual;
+            // THE PROVENANCE STAMP HAS TO COUNT THE SAME UNIT `counts` DOES.
+            // Outcome.Result stamps `action` off Accepted.Count, and this path
+            // never calls Outcome.Ok — it fills `changes` instead, because its
+            // unit is matrix CELLS, not pawns. So Accepted.Count was always 0
+            // and every successful matrix write returned
+            // `action:{journal_seq:null, provenance:"…nothing was mutated"}`
+            // over a call that had just written journal line `seq`. That is a
+            // false negative on the one field the journal join key lives in,
+            // and 3.4's own acceptance asserts against it (4.7e,
+            // `action.journal_seq >= 1`) — a check that never ran until this
+            // branch's step 0.5 made priority 1 reachable at all.
+            result["action"] = changes.Count > 0 ? Stamp(seq) : ManualFallbackStamp(manual);
             return result;
+        }
+
+        // `action` for a call whose matrix/copy half wrote nothing but whose
+        // `manual` flip DID land: the flip is a mutation and it has a journal
+        // line, so "not applicable — nothing was mutated" would be untrue.
+        // Falls through to NoStamp() when there was no flip, or none that
+        // changed anything, which is what Outcome.Result would have said.
+        private static Dictionary<string, object> ManualFallbackStamp(Dictionary<string, object> manual)
+        {
+            if (manual != null && manual["changed"] is bool changed && changed)
+                return Stamp(manual["journal_seq"] is long s ? s : 0L);
+            return NoStamp();
         }
 
         // ------------------- the Work tab's manual-priorities checkbox -------

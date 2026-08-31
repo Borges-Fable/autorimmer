@@ -16,7 +16,7 @@ The worker never launched the bench. Everything below is unverified in-game.
 
 ## Running it
 
-Nineteen envelopes, in order — eighteen if 0d is not needed — and each depends
+Twenty-one envelopes, in order — twenty if 0d is not needed — and each depends
 on the one before. On this box:
 
 ```bash
@@ -34,7 +34,9 @@ so the fixture starts from the shipped default.
 
 **State left behind:** manual priorities **ON**, and pawn **A**'s `Doctor`
 priority at **2**. That is deliberate — it is the state 3.4's acceptance now
-wants (`accept/3.4-pawn-orders.md` step 0.5 sets it itself).
+wants (`accept/3.4-pawn-orders.md` step 0.5 sets it itself). Step 16 turns the
+lever back off as a side effect of the call it expects to fail, so **re-run
+step 9 after it** to leave the fixture in that state.
 
 ---
 
@@ -66,7 +68,7 @@ cosmetic one: it means the flip is inert until something else dirties the cache.
 
 | # | envelope | expected |
 |---|---|---|
-| 4 | `{"op":"work-priorities","args":{"set":[{"pawn":A,"work":"Doctor","priority":1}]}}` | `ok:true` · `data.cells:1` · `data.changes[0].after:1` · `data.use_priorities:true` · **no `data.manual` key** (it was not requested — the block is a write echo, not a status field). *This is 3.4 check 4.7, which could not pass before* |
+| 4 | `{"op":"work-priorities","args":{"set":[{"pawn":A,"work":"Doctor","priority":1}]}}` | `ok:true` · `data.cells:1` · `data.changes[0].after:1` · `data.use_priorities:true` · **`data.action.journal_seq` ≥ 1** (NOT `null`) · **no `data.manual` key** (it was not requested — the block is a write echo, not a status field). *This is 3.4 check 4.7, and 4.7e is the `journal_seq` clause: the matrix path stamped `action` off `Outcome.Accepted`, which it never fills, so every successful matrix write claimed "nothing was mutated". Fixed on this branch* |
 | 5 | `{"op":"pawn","args":{"id":A,"sections":["work"]}}` | the `Doctor` entry of `data.work.row` has **`priority:1`**. Before this issue the same read returned `3` no matter what was stored |
 
 ### Turning it off: what `GetPriority` reports then
@@ -100,6 +102,18 @@ cosmetic one: it means the flip is inert until something else dirties the cache.
 | 15 | `{"op":"journal","args":{"since_seq":seq0,"types":["red_error"],"limit":50}}` | **`data.count:0`** — the standing invariant. The fan-out walks every player pawn including any without work settings; `Notify_UseWorkPrioritiesChanged` does not route through `ConfirmInitializedDebug`, so none of them should have produced *"did not have work settings initialized"* |
 
 ---
+
+### Known, and deliberate: an `ok:false` here does not mean nothing happened
+
+| # | envelope | expected |
+|---|---|---|
+| 16 | `{"op":"work-priorities","args":{"manual":false,"set":[{"pawn":A,"work":"NoSuchWorkType","priority":3}]}}` | **`ok:false`**, `error.code:"bad-args"` naming the work type — **and then** `{"op":"pawn","args":{"id":A,"sections":["work"]}}` reads `use_priorities:**false**`. The flip ran before the args that failed, by design (that ordering is what makes `{manual:true, set:[…priority 1…]}` one call), so a rejected call can still have moved the lever. Re-running step 14 after this would show a sixth `manual-priorities` row written by a call that returned `ok:false`. Re-run step 9 afterwards to leave the fixture ON |
+
+This step exists to make the behaviour a documented result rather than a
+surprise. If the orchestrator would rather the verb be atomic, the fix is to
+resolve every `set` block before the flip and re-check the refusal after it —
+that is a restructure of the matrix loop, not a line, and it is filed on
+`e8f2c32` rather than done here.
 
 ## What a human should also eyeball
 
