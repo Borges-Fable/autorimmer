@@ -1445,3 +1445,128 @@ dispatched and is the input to the next decision.
 `autostart.rws` intact at tick 89426 and NOT overwritten with the post-raid
 wreck. Four colonists, marine armour, needs topped, Doctor and Hauling checked
 for all — start here.
+
+## Session 8 — BORGES, 2026-08-31. `32b9e01` acceptance: the fix is real, and so was the fixture
+
+First orchestrator session on BORGES rather than dorian's box, and the first
+shipped DLL built here. Work picked per session 7's handover: acceptance on
+`orders-makingfor` before the audit, because its claim is a RUNTIME side effect
+that no amount of re-reading the source can measure.
+
+**`32b9e01` CLOSED. 18 of 25.** Merged `24e5f7a`, DLL `8d4ff00`, acceptance
+driver `1bf2913`. One new issue filed: `0d9cbd7`.
+
+### What was proved, in one line each
+
+| phase | build | result |
+|---|---|---|
+| R | repro | one `orders` call moved a bill by **594** then **555** ticks on two fresh fixtures, clock stopped |
+| M | main vs branch | `blocked_total` **0 -> 1**; the branch returns `DoBillsButcherFlesh` blocked, reason `"Missing 1x corpses"` |
+| F | branch | the field is untouched, and stays untouched across a repeated call. 0 red errors |
+| D | **both** | one `orders` call flips a bill's SCRIBED `paused` flag false -> true |
+
+Two fresh fixtures giving two DIFFERENT deltas inside `IntRange(500,600)` is the
+RNG-burn evidence — the draw is `Rand.RangeInclusive` off the shared stream, and
+there is no verb that reports `Rand`'s position.
+
+Final run against the SHIPPED binary after the merge and the `Build:` commit:
+19 checks, 0 failures. The committed DLL is the one that was verified.
+
+### The comparability problem, and the fix for it
+
+`-quicktest` generates a NEW random map every boot, so main's baseline and the
+branch's run would have been different colonies — a before/after across two
+different worlds is not a before/after. Staged a clean fixture map and saved it
+with `dev:starter-kit {save_as:"autostart"}` at tick 607; both builds then booted
+the identical colony with no UI. **`autostart.rws` is now ARMED on BORGES**
+(it was not before) and every future bench launch loads it instead of honouring
+`-quicktest`. Deliberate; delete it to go back.
+
+### Four fixture requirements the acceptance .md does not state
+
+Every one of them produced a run that would otherwise have passed for the wrong
+reason. The .md's own fixture table names four such ways; these are four more.
+
+1. **`world-fixture {steps:["bench","bill"]}` DOES NOT CHAIN** — filed as
+   `0d9cbd7`. `FindBench` with no `bench` arg returns the first `TableButcher`
+   in the lister, not the one the `bench` step just spawned. Observed live:
+   `bench.id 23492` / `bill.bench_id 23491`, four bills stacked on the old
+   bench, none on the new one, `orders` scanning an empty bench, `total:0`, M1
+   vacuously green. The verb's own error string already claims the chaining it
+   does not do.
+2. **F4 is a RADIUS test, not map-wide.** `TryFindBestBillIngredients` searches
+   within `bill.ingredientSearchRadius` of the giver. My first guard refused
+   map-wide and sent the run off to destroy a corpse 53 cells out of play.
+3. **`total=0` on main is the CORRECT baseline.** `StartOrResumeBillJob`'s two
+   arms are mutually exclusive: `if (makingFor != pawn) { write } else if (flag)
+   { JobFailReason.Is(...) }`. main takes the write arm, sets no reason, and
+   `ScanWorkGivers`' `!HaveReason` continue drops the giver. `ShouldSkip` does
+   NOT gate it away — it returns false as soon as any bill giver has
+   `AnyShouldDoNow`. So the giver is reached on both builds and the runs are one
+   `if` apart. An earlier draft of my driver demanded `total>0` and stopped a
+   correct run.
+4. **Phase D needs a warm `resourceCounter`, and the right recipe.** Three
+   compounding traps: `CountProducts` reads `map.resourceCounter`, which counts
+   STOCKPILED things only; that counter rebuilds on a TICK, so with the game
+   paused for the run it never refreshes and `current_count` stays 0 whatever is
+   spawned; and `ButcherCorpseFlesh` and `Make_StoneBlocksAny` have no fixed
+   product, so their counter is 0 forever regardless. A stove's
+   `CookMealSimple` has one. **Order matters: warm the counter, THEN add the
+   bill** — a bill that exists while the clock runs gets its flag flipped by an
+   ordinary work-giver think tick, leaving `orders` nothing to prove.
+
+### The acceptance driver found two of its own bugs, and that is the point
+
+`accept/32b9e01-orders-makingfor.ps1` reported **M2 and F.5 as FAILURES when the
+branch was right**:
+
+- the giver defName is `DoBillsButcherFlesh`, not the `DoBillsButcherTable` I
+  guessed from the building's def;
+- a `/Read-only/` search is case-insensitive in PowerShell and matched the NEW
+  note's own phrase "asking is **not** read-only". A negative assertion has to
+  name the sentence it bans, not a word that survives into the replacement.
+
+Both were caught by reading the raw envelopes in `.accept-evidence/` rather than
+the runner's summary — which is exactly the orchestration rule "re-derive
+headline numbers from raw artifacts rather than trusting a summary table",
+earning its keep against my own script. The driver now copies every result
+envelope per run.
+
+### Notes for whoever is next
+
+- **BORGES has no python**, confirmed again (Store stub only). Every acceptance
+  written here speaks the raw file protocol in PowerShell. `rwa` cannot run.
+- **`dev:destroy {mode:"killfinalize"}` on a pawn leaves NO corpse.** It
+  destroys rather than kills. There is no verb that kills a pawn, so an
+  animal-corpse fixture currently has no clean route — I worked around it by not
+  needing one. Worth knowing before someone plans a butchering fixture.
+- **Butcher bills exclude HUMAN corpses by default**, so a human corpse next to
+  the bench does not un-starve the bill. This cost a round: I built a "positive
+  control" on one and read its failure as evidence the giver never ran.
+- The build is `dotnet build -c Release` **from `Source/AutoRimmer/`**, not the
+  repo root — there is no solution file at the top.
+- The embedded pdb path in the shipped DLL is now this box's. main's previous
+  DLL carried dorian's Linux path; same in-repo relative shape, different root.
+
+### Next, in order
+
+1. **Audit + merge the other three branches** — `auto-arm-lever` (already merged
+   with main, clean), `stable-pawn-order`, `manual-work-priorities`. Only
+   `DESIGN.md` overlaps, additively, and this session's merge already resolved
+   one such conflict by keeping both entries; `stable-pawn-order` and
+   `manual-work-priorities` also both edit `accept/3.4-pawn-orders.{md,py,ps1}`.
+   `manual-work-priorities` unblocks 8 of 3.4's checks.
+2. **`2f2796e`** — verify the remaining backlog diagnoses before building to them.
+3. **1.9** (placement exact-or-refuse) — p1, blocks 3.3.
+4. **3.5** (M1-critical) and **3.6**.
+5. Orchestrator debt still owed and NOT paid this session: factor the four
+   private `Act` emitters (AreaVerbs, DesignationVerbs, ZoneVerbs from 3.2;
+   PawnActs from 3.4) into one helper, and fold `Pawn_ReadingTracker` into
+   `PawnSafe.Policies`.
+
+### Bench state
+
+`autostart.rws` at tick 607 — quicktest map, 3 healthy colonists (Yun #215,
+Foxy #218, Slick #221), no corpses, no butcher tables, clean. Every phase stages
+its own fixture on top and the leftovers are not saved back. Zero red errors in
+every run this session. `Prefs.xml` is 3072x1875 windowed, devMode on.
