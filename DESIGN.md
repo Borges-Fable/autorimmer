@@ -527,3 +527,37 @@ queue by default (an agent flailing mid-experiment must not page triage).
   publishes `next_ingredient_search_tick` for the same reason — a bill can read
   `active` and be worked by nobody, and that field is the only observable proof
   that something ran a failing ingredient search on it.
+- 2026-08-31 — **A mod-aware bridge answers `null` for "we could not look", never
+  the mod's own falsy value** (git-bug 1a072fa, `Source/AutoRimmer/FswaBridge.cs`).
+  `IsAutoArm` answers `false` for a pawn that is merely not opted in, so
+  `catch { return false; }` on a reflection throw would make a broken bridge
+  indistinguishable from a working one reporting "off" — wrong in the worst way,
+  because it reads as data. Three rules, and they generalise to every third-party
+  bridge this repo grows: **bind by signature** (parameter-type array AND return
+  type AND a typed delegate, so drift fails at load rather than at invoke);
+  **journal the fabrication instead of committing it** (`Journal.EmitWarning`,
+  with pawn-free text, because EmitWarning dedupes by exact string and a per-pawn
+  message burns the distinct-text cap); and **read the write back**, since a
+  `void` setter that bails silently makes "the invoke did not throw" no evidence
+  at all. An absent optional mod is refused BY NAME on its own lever while every
+  other lever in the same call still applies — absence is not an error.
+  Multiplayer, checked: `MpSync` registers `SetAutoArm` ITSELF as the synced
+  method, so the direct call is the only route and the correct one — but MP's
+  prefix fires only in interface context and AutoRimmer's verbs run from
+  `GameComponentUpdate`, so under MP the write would stay local. Out of scope
+  for a single-player bench, recorded so nobody rediscovers it.
+- 2026-08-31 — **A modded column belongs on the verb that owns its tab, and its
+  gate is the UNION of every widget that reaches the setter** (git-bug
+  1a072fa). FindSuitableWeaponAndAmmo injects an auto-arm checkbox into the
+  Assign tab, so it is a lever on `assign` rather than a verb of its own — the
+  column strip is the verb's whole shape and a modded column is still a column.
+  Two widgets reach `AutoArmTracker.SetAutoArm`, and the spec cited only one of
+  them: `PawnColumnWorker_AutoArm.HasCheckbox` (`IsColonist && !WorkTagIsDisabled
+  (Violent)`) and the pawn gizmo (`IsColonistPlayerControlled ||
+  MechUtility.IsWeaponUsableMech`, which SKIPS the Violent check for mechs and
+  is a player mech's only route, since no column cell is drawn for one).
+  Enforcing just the column would have fabricated a restriction the player does
+  not have, so the verb honours both and cites both. A third gate is not a
+  widget at all and is the easiest to miss: the setter itself returns SILENTLY
+  unless `MpSync.Configurable(pawn)` holds, so a dead pawn would otherwise be
+  reported applied against a write that never happened.

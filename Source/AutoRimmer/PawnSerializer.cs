@@ -915,7 +915,7 @@ namespace AutoRimmer
         {
             var ps = pawn.playerSettings;
             if (ps == null) return null;
-            return new Dictionary<string, object>
+            var d = new Dictionary<string, object>
             {
                 // The Restrict tab's own words, via the NULL-GUARDED area getter
                 // (Verse/AreaUtility.cs -> AreaRestrictionInPawnCurrentMap). The
@@ -930,6 +930,18 @@ namespace AutoRimmer
                 ["join_tick"] = ps.joinTick,
                 ["master"] = Safe(() => ps.Master != null ? (object)ps.Master.thingIDNumber : null),
             };
+            // FindSuitableWeaponAndAmmo's auto-arm checkbox is injected into
+            // THIS tab (FSWA/PawnColumnWorker_AutoArm.cs), so it is published
+            // with the rest of the strip rather than given a section of its own.
+            // The read is a HashSet lookup on a GameComponent — no lazy init,
+            // no write to scribed state, nothing rebuilt on read (Verse/Game.cs
+            // GetComponent<T> is a plain scan over `components` and creates
+            // nothing) — which is the whole reason an observer is allowed to
+            // make it. Absent mod, a failed read, or FSWA loaded with its
+            // tracker missing all give `auto_arm: null` plus
+            // `auto_arm_unknown`, never a fabricated `false` (git-bug 1a072fa).
+            Fswa.PublishAutoArm(pawn, d);
+            return d;
         }
 
         // --------------------------- relations -----------------------------
