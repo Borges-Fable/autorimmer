@@ -1015,3 +1015,163 @@ worktrees and auto-branch pointers were removed at the same time.
 - **Next session picks:** 3.2 + 3.4 (redispatch; dispatch comments current),
   then 3.5 (fable, M1-critical), 3.3 (fable, M2), 3.6, 1.6. Machine-bound:
   2.5 (dorian's box), 1.4's rwa Windows check (python).
+
+## Session 6 — 2026-08-31 (BORGES)
+
+Opus orchestrator on Evan's Windows laptop. **3.2 closed (14 of 23).** 3.4 built
+and pushed but NOT verified; 1.8 filed, part-built and pushed; 1.9 filed. Session
+ended at Evan's call at the usage line — **work continues on dorian's Linux box.**
+
+The session's centre of gravity was not spec throughput. It was two design
+challenges from Evan that both landed, and three hazard classes found in vanilla.
+
+### Issues
+
+| issue | model | wall time | outcome |
+|---|---|---|---|
+| 3.2 Designation + zone verbs (57ab92a) | opus | ~33 min worker + ~70 min verify | merged 3-way ccb8d67; **closed** |
+| 3.4 Pawn orders + policies (39c9db7) | opus | ~53 min worker | branch pushed, **unverified**, state:next |
+| 1.8 advance drives the game clock (b8785e8) | opus | ~20 min, stopped | 1 real commit + WIP accept, pushed, state:next |
+| 3.5 / 3.6 recon | fable x2 | ~12 + ~11 min | reports written, findings on both issues |
+
+### Evan's two challenges, both of which changed the build
+
+**1. "You unpause the game to play — why on earth are we not doing that?"**
+
+He was right and my first two answers were bad. I defended the budgeted
+`DoSingleTick` loop with (a) TimeSlower immunity, (b) the thermal governor,
+(c) exact tick counts. He dismantled all three: raids triple per-tick cost so
+immunity buys nothing exactly when claimed; thermals are hardware's job and are
+INERT on BORGES anyway; nobody needs exact ticks. The original justification —
+frame starvation at 1–2 fps — had been fixed separately by `render_unfocused`
+and nobody re-examined the loop. **Filed as 1.8** with the honest history in the
+body so it is not re-litigated. The genuinely good argument turned out to be for
+HIS side: today's loop DEFEATS vanilla's own force-pause (TimeDriver's comment
+says so outright), which is the entire reason 1.7 needed a per-TICK modal guard.
+The worker's one commit confirms it — `TickManager.Paused` includes
+`WindowStack.WindowsForcePause`, so unpaused, vanilla stops itself and
+`OpenAutomaticLetters` is no longer starved by construction.
+
+**2. "Things can just slide over? That's no good."**
+
+Asked whether a blocked placement is reported or silently built over. Checked
+rather than answered: outright failure IS reported well (`failed[]` with the
+blocker and its `removal`, loop breaks, `requested` vs `placed`). But
+`ThingPlaceMode.Near` **slides to a neighbouring cell and returns unqualified
+success** — reproduced twice live (a bed onto a bed, [112,108] -> [113,108];
+steel onto an occupied cell, [100,113] -> [101,113]), both `ok:true, placed:N`,
+no flag. The data is there (`data.at` vs `spawned[].at`) but nothing compares
+them. **Filed as 1.9, p1, and it BLOCKS 3.3** — `place-layout` that nudges
+blueprints builds a house that is not the one asked for, and the agent keeps
+building against a floor plan that no longer describes the world. 3.3 raised to
+p1 alongside it.
+
+### Three vanilla hazard classes found, all recorded in DESIGN
+
+1. **A tutorial modal is a force-pause, and it wedges the run.** 3.2's worker
+   found `FlickUtility.UpdateFlickDesignation` ending in
+   `TutorUtility.DoModalDialogIfNotKnown` -> `Dialog_MessageBox(forcePause)`.
+   **The counterfactual is measured, not argued:** `Knowledge.xml` on this bench
+   has `SwitchFlickingDesignation` at 0 and no concept above 0, so vanilla WOULD
+   have fired it on the colony's first power switch. Verified live that 3.2's
+   re-implementation does not.
+2. **My grep for it was too narrow, and 3.4's worker corrected me.** I searched
+   `DoModalDialogIfNotKnown`; the hazard is any helper reaching
+   `new Dialog_MessageBox`. Sixth site:
+   `HealthCardUtility.CreateSurgeryBill(sendMessages: true)` — and true is the
+   DEFAULT — from the ordinary surgery-bill path. DESIGN now records the sharper
+   two-shape taxonomy: behind a FloatMenuOption's action closure is safe while we
+   never invoke delegates; on a utility's own execution path is dangerous.
+   `ITab_Bills` reaches the same helper, so **3.6 inherits it.**
+3. **Write-on-SAVE, a class this project had not seen.** `Bill.ExposeData`
+   narrows the live `ingredientFilter` of every bill whose recipe has a
+   `fixedIngredientFilter`, during the SAVING pass. Recorded in DESIGN rather
+   than a code comment because it invalidates a METHOD: "save the game and read
+   the Scribe XML" was sessions 2.2/2.4's independent second reader, and for that
+   surface it perturbs what it measures.
+
+Plus two new write-on-read hazards from 3.5's recon, both verified end to end and
+neither touched by shipped code: `LetterStack.BundleLetter`'s getter burns a
+scribed letter ID, and `Settlement_TraderTracker.StockListForReading` destroys
+and regenerates an entire trader inventory through an RNG ThingSetMaker — the
+most severe instance of the class found so far, though world-map settlements are
+a v1 non-goal.
+
+### 3.2 — what landed and how it was verified
+
+Six verbs (designate/26 types, forbid, unforbid, flick, zone, area), 4 new files,
+no existing file touched. All three acceptance bullets driven live:
+
+- **Chop**: 25 mature trees from ONE envelope over 520 cells; after 60000 ticks,
+  wood 700 -> 1077 (11 -> 21 stacks) and designations 25 -> 14. Two independent
+  readings that pawns took the jobs.
+- **Zones**: rice sown 25/25, `wrong_plant` 0, growth 17%; `plant_source
+  "backing-field"` proving WorldSafe's guard held. The stockpile was proven with
+  **vanilla hauling as the independent actor** — my first attempt sited it on the
+  starting loot pile and I threw that away, because reading a zone I had
+  contaminated proves nothing. Re-sited on empty ground: all 50 medicine on the
+  map converged in, and not one unit of 75 steel 13 cells away came with it.
+- **Rejects**: the game's own Keyed strings verbatim. Fog verified as OUR uniform
+  gate (`Designator_Mine.CanDesignateCell` accepts fogged cells) — same
+  `fogged / unexplored` shape from two different verbs.
+- **`claim`**, the one type whose shape differs (immediate `SetFaction`, no
+  designation): staged an abandoned bed via `faction:"none"` and drove it. The
+  verb self-discloses the difference in a `note`, reports `designations_*` as
+  null rather than a misleading 0, and claiming again is refused — the faction
+  flip observed rather than assumed.
+- 0 red errors; 7 `action` journal lines, one per mutating call, none carrying a
+  cheat stamp; dry-runs and refusals wrote none.
+
+**Orchestrator fix during acceptance (037c5df):** `zone add --rect … --filter
+meds` — the spec's own bullet 2 — was impossible, because the shared resolver
+consumed `filter` as a target selector. The committed acceptance script could not
+run as written. Fixed with `filterSelectsTargets:false`, re-verified, and
+regression-checked that `forbid --filter` still resolves group:Medicine.
+
+**Process slip against myself:** I committed a DESIGN edit onto the 3.2 spec
+branch instead of main. Caught immediately and moved with `reset --mixed` (not
+`--hard`, which would have reverted the built DLL the bench was running). Docs
+belong on main; a spec branch carries its spec.
+
+### 3.4 — built, pushed, NOT verified
+
+35 verbs across 8 new files; clean Release build; 78-envelope acceptance script
+committed. **No part of it has run in the game.** The worker found and fixed a
+real bug on self-review (`int.MaxValue * 2` wrapped negative, aborting the
+work-giver scan before its first giver — `prioritize` would have failed every
+call). It also flagged that **acceptance bullet 3's mechanism does not exist**:
+`dev:weather` cannot drive a re-dress because `neededWarmth` comes from the
+tile's SEASONAL average (`JobGiver_OptimizeApparel` -> `CalculateNeededWarmth
+(pawn, tile, GenLocalDate.Twelfth)`) — verified. The clothes loop is
+filter-driven and season-independent, so the bullet's intent is testable but its
+stated method is stale.
+
+**Orchestrator debt at merge:** fold the worker's `Pawn_ReadingTracker` guarded
+route into `PawnSafe.Policies` (reading policies postdate 2.2, field name
+`reading`), and dedupe the two private `action` emitters against 3.2's.
+
+### State at session end
+
+- **Done:** 0.1, 1.1–1.5, 1.7, 2.1–2.4, 2.6, 3.1, 3.2 — **14 of 25** (two new
+  issues filed this session).
+- **In flight:** none running. `spec/3.4-pawn-orders` (10 commits) and
+  `spec/1.8-game-clock-advance` (1 commit + WIP accept) are pushed and unmerged.
+  Both worktrees remain on this box; the branches are on GitHub.
+- **Bench:** healthy across 3 boots, 0 red errors in every session. `autostart.rws`
+  IS STILL ARMED from kit-accept.rws — delete it or the next launch loads a
+  fixture. Scratch state on the bench: a claimed bed, a standing lamp, two
+  stockpiles, a rice zone.
+- **Machine-bound:** 2.5 (dorian's box), 1.4's rwa Windows check (no python here).
+
+### Next picks, in order, for dorian's box
+
+1. **3.4 verification** — the branch is done and pushed; it needs a bench. Its
+   own script is 78 envelopes; bullet 3's method is stale (see above).
+2. **1.9** (placement exact-or-refuse) — p1, blocks 3.3, and 3.3 is M2.
+3. **1.8** — resume from `fa11564`; the core commit is sound, the acceptance
+   script is unverified draft. Re-run 1.3's and 1.7's acceptance after.
+4. **3.5** (M1-critical) and **3.6** — both now carry verified recon comments
+   with exact signatures, gates and hazards. 3.5's load-bearing answer: a trade
+   CAN be transacted with no window, but `TradeDeal.TryExecute` has an unguarded
+   NRE on that exact path (`Find.WindowStack.WindowOfType<Dialog_Trade>()
+   .FlashSilver()`) — make the branch unreachable, do not try/catch it.

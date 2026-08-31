@@ -379,3 +379,66 @@ queue by default (an agent flailing mid-experiment must not page triage).
   arrange-act-read lesson) instead. The known write-on-read accessors are
   catalogued in `WorldSafe.cs`; this one is a different class and the file's
   header should not be read as covering it.
+- 2026-08-31 — **A vanilla helper can end in a tutorial modal, and a tutorial
+  modal is a force-pause — so it wedges the run.** Found by 3.2's worker in
+  `FlickUtility.UpdateFlickDesignation`, which unconditionally ends with
+  `TutorUtility.DoModalDialogIfNotKnown(ConceptDefOf.SwitchFlickingDesignation)`.
+  That helper does `Find.WindowStack.Add(new Dialog_MessageBox(msg))` whenever
+  the concept has not been demonstrated (`RimWorld/TutorUtility.cs`), and
+  `Dialog_MessageBox` sets `forcePause = true` (`Verse/Dialog_MessageBox.cs`).
+  `PlayerKnowledgeDatabase.IsComplete` is a bare knowledge-lookup with **no
+  tutor-enabled short-circuit**, so it fires on any save where the concept is
+  fresh, whatever the tutorial settings say. Per 1.7 a force-pausing window
+  halts every later `advance` at 0 ticks, and nothing clears it until 3.5's
+  routing ships — so **one call to an innocuous-looking utility permanently
+  wedges an unattended run.** A colony's first power switch would have done it.
+  There are exactly five call sites in the 1.6 tree, and three are in specs we
+  are still building: `FlickUtility` (3.2), `FloatMenuOptionProvider_Arrest`
+  (3.4), `TradeShip.TradeGoodsMustBeNearBeacon` (3.5); `Settlement` is
+  world-map (a v1 non-goal) and `Dialog_Options` is the settings UI. **The rule:
+  a player verb reproduces the helper's gate and its effect, and drops the
+  tutorial line** — never calls the wrapper. This is the same shape as the
+  gate-lives-in-the-widget invariant seen from the other side: there the UI held
+  a check the model lacked, here a "model" helper drags UI in with it. Treat any
+  vanilla utility reaching `Dialog_MessageBox` as UI code wearing a
+  model-shaped name.
+- 2026-08-31 — **Amendment to the entry above: the modal hazard is wider than
+  the tutorial helper, and it has two distinct shapes.** 3.4's worker found a
+  sixth site my grep missed, because I searched for
+  `DoModalDialogIfNotKnown` rather than for what actually hurts:
+  `new Dialog_MessageBox`. The two shapes are not equally dangerous, and
+  telling them apart is what keeps this rule cheap to follow:
+
+  * **Behind an option delegate — safe if you never invoke one.**
+    `FloatMenuOptionProvider_Equip`, `Building_OutfitStand`,
+    `FloatMenuOptionProvider_Arrest` and friends build the modal INSIDE the
+    `FloatMenuOption`'s action closure. Reproducing a provider's GATE and then
+    taking the job yourself never runs that closure. This is already our
+    practice and it is why arrest and equip were never exposed.
+  * **On a utility's own execution path — dangerous.** The method raises the
+    window as a side effect of doing its job, with no delegate in between:
+    `FlickUtility.UpdateFlickDesignation` (tutorial modal), and
+    `HealthCardUtility.CreateSurgeryBill(…, sendMessages: true)` ->
+    `Bill.CreateNoPawnsWithSkillDialog` -> `new Dialog_MessageBox`, which fires
+    from the ORDINARY surgery-bill path whenever no colonist meets the recipe's
+    skill floor. **`sendMessages` defaults to true.** The same helper is reached
+    from `ITab_Bills`, so 3.6's add-bill path inherits it.
+
+  Vanilla itself shows the escape hatch — `Pawn_GuestTracker` calls
+  `CreateSurgeryBill(…, sendMessages: false)` for its non-UI path. Prefer the
+  game's own suppression flag where one exists; re-implement and drop the line
+  where one does not; and re-derive whatever the suppressed message would have
+  said as RESULT FIELDS, so the agent still learns what a player would have
+  been told. The grep to run before any new verb spec is
+  `new Dialog_MessageBox`, not the tutorial helper's name.
+- 2026-08-31 — **The flick trap was live on the bench, and the counterfactual is
+  measured rather than argued.** `Knowledge.xml` on `_RimWorld-Agent` has
+  `SwitchFlickingDesignation` at **0**, and no concept in that file is above 0 —
+  nothing has ever been demonstrated on this save. `PlayerKnowledgeDatabase
+  .IsComplete` is `value > 0.999f`, so vanilla's `FlickUtility
+  .UpdateFlickDesignation` WOULD have stacked a force-pausing `Dialog_MessageBox`
+  on the colony's first power switch, wedging every later `advance`. 3.2's
+  re-implementation was verified live on that exact save: `flick` designated the
+  lamp and `interactions` reported `force_pause {count:0}` afterwards. Recorded
+  because "we avoided a trap" is worth much less than "the trap was armed, here
+  is the reading, and it did not fire."
