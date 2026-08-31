@@ -27,6 +27,13 @@ Files first (what the colony has learned), then reads (what the colony is):
    If the previous session ended in a loss: run `postmortem.md` (repo root)
    BEFORE acting on the new colony — its outputs are for the next colony, and
    acting first means acting unlearned.
+10. `RUNS/<colony>.colony.md` — the colony notes: intents, half-done
+    projects, landmark rationale, decisions deferred. Found via the newest
+    `RUNS/<run>/summary.md`, which names it (and carries position 9's
+    `<last known>` seq); absent on a fresh colony — created at first
+    session end. State and intent only, never lessons
+    (`playbook/PLAY-LOOP.md` §Artifacts). *(Added by 4.2 — the loop's
+    between-session state.)*
 
 `RUNS/<run>/checklist.ndjson` is APPENDED from the first evaluation on —
 position 2's trip-wires can fire on the very first digest.

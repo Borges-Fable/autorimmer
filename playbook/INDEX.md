@@ -36,3 +36,5 @@ The rest of the learning system:
 - `templates/` — layout starters with their lessons baked in as annotations
 - `postmortem.md` (repo root) — the procedure that grows all of the above
 - `SESSION-START.md` — what 4.2's loop loads, in order
+- `PLAY-LOOP.md` — the loop itself (4.2): the turn, halts, emergency
+  posture, cadence, artifacts, escalation — the file a play session runs
