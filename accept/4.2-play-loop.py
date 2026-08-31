@@ -188,6 +188,15 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
                 problems.append(f"{name}: cap exceeded ({args})")
             if args.get("halt_on_error") is False:
                 problems.append(f"{name}: halt_on_error disabled")
+            # The declared args are not the whole story: TimeDriver.Start
+            # (Source/AutoRimmer/TimeDriver.cs) defaults timeout_ticks to
+            # 600000 whenever `until` is set and timeout_ticks is omitted —
+            # 10x this policy's own cap. An advance that actually ran past
+            # the cap is a real violation even when the declared args look
+            # clean, so check what happened, not just what was asked for.
+            elapsed = data.get("ticks_elapsed", 0)
+            if isinstance(elapsed, (int, float)) and elapsed > MAX_ADVANCE_TICKS:
+                problems.append(f"{name}: ticks_elapsed {elapsed} exceeded cap ({args})")
         zeros = [d.get("ticks_elapsed", None) == 0 for _, _, d in advances]
         if any(a and b for a, b in zip(zeros, zeros[1:])):
             problems.append("two consecutive 0-tick advances (wedge rule violated)")
