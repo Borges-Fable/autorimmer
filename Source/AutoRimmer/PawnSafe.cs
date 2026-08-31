@@ -44,6 +44,26 @@ namespace AutoRimmer
     //    scribed. It also routes through Pawn.DevelopmentalStage (Class C).
     //    => not read at all. Ideo name and role are reported; certainty is not.
     //
+    //  * Pawn_PlayerSettings.displayOrder — RimWorld/Pawn_PlayerSettings.cs.
+    //    THE WRITER IS THE UI, NOT THE FIELD. `displayOrder` is a plain int
+    //    that defaults to the sentinel `UnsetDisplayOrder` (-9999999) and is
+    //    scribed (`Scribe_Values.Look(ref displayOrder, "displayOrder", 0)`),
+    //    so reading it is harmless; what makes it Class A is that the only
+    //    thing which ever ASSIGNS it is a draw pass.
+    //    `ColonistBar.CheckRecacheEntries` (RimWorld/ColonistBar.cs) walks the
+    //    bar's pawns and, for any still holding the sentinel, writes
+    //    `Mathf.Max(tmpPawns.MaxBy(displayOrder).displayOrder, 0) + 1` into
+    //    that scribed field — so the numbers exist only once the colonist bar
+    //    has drawn, and on a parked or headless bench every colonist shares
+    //    the sentinel. `PlayerPawnsDisplayOrderUtility.Sort/InOrder` is what
+    //    the bar and the Assign/Work tables order by.
+    //    => NOT READ, and not sorted by. It is the obvious reach for "the
+    //       order the player sees" and it is a trap twice over: the value is
+    //       a UI side effect on scribed state, and it is uniform (therefore
+    //       useless as a key) exactly on the benches we run. `pawns` emits by
+    //       `thingIDNumber`, a plain field on Verse/Thing that no getter
+    //       touches. See git-bug 1eb2262 and the DESIGN decisions-log entry.
+    //
     // ------------------- CLASS B: WRITES + RED ERROR ------------------------
     //
     //  * Pawn_WorkSettings.GetPriority / WorkIsActive / Disable — RimWorld/

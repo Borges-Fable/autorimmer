@@ -257,14 +257,76 @@ def phase0():
         "0.3b", "at least two visible colonists", len(roster) >= 2,
         "the roster has %d; 3.4's acceptance needs an actor and a patient. "
         "Stage with dev:starter-kit or load a bigger save." % len(roster))
+
+    # The roster order is now stable - `pawns` emits by thingIDNumber ascending
+    # and says so in `data.order` (git-bug 1eb2262) - so an index is at least
+    # REPRODUCIBLE. It is still the wrong way to pick A. A is not "some
+    # colonist", it is "a colonist who can haul and can doctor": bullet 2 orders
+    # a haul and bullet 4 needs an operator, and a pawn with either work type
+    # disabled fails six checks (2.3b, 2.4a/c/d/e, 2.5b) whose only clue is a
+    # NOTE about a disabled work type. Stability makes an index reproducible; it
+    # does not make it meaningful. So: SELECT BY PREDICATE, and let the stable
+    # order decide only which of the qualifying colonists we take.
+    eq("0.3c", "the roster order is the documented stable one", e, "data.order", "id-asc")
+    eq("0.3d", "and the cap still selects by attention", e, "data.selected_by", "attention-desc")
+
     if ARGS.dry_run:
         S.update(A=1001, Aname="<A>", B=1002, Bname="<B>", seq0=0)
-    else:
-        S["A"], S["Aname"] = roster[0]["id"], roster[0].get("name")
-        S["B"], S["Bname"] = roster[1]["id"], roster[1].get("name")
-    print("          actor  A = %s (%s)" % (S["A"], S["Aname"]))
-    print("          target B = %s (%s)" % (S["B"], S["Bname"]))
+        print("          actor  A = %s (%s)" % (S["A"], S["Aname"]))
+        print("          target B = %s (%s)" % (S["B"], S["Bname"]))
+        print("          (live: one `pawn {sections:[\"work\"]}` per colonist "
+              "picks the first with Hauling AND Doctor enabled)")
+        phase0_journal()
+        return
 
+    ids = [int(r["id"]) for r in roster]
+    if ids != sorted(ids):
+        note("0.3e", "roster ids are NOT ascending (%s) - the loaded assembly "
+                     "predates git-bug 1eb2262; A/B below are not reproducible" % ids)
+
+    # One `pawn {sections:["work"]}` per colonist. Cheap (~600 bytes) and it is
+    # the only place the Work tab's disabled set is published.
+    WANT = ("Hauling", "Doctor")
+    able, why_not = [], []
+    for r in roster:
+        w = send("pawn", {"id": r["id"], "sections": ["work"]})
+        row = dig(w, "data.work") or {}
+        if not row.get("initialized"):
+            why_not.append("%s: no work settings" % r.get("name"))
+            continue
+        off = [k for k in WANT if k in as_list(row.get("disabled"))]
+        if off:
+            why_not.append("%s: %s disabled" % (r.get("name"), "+".join(off)))
+            continue
+        able.append(r)
+
+    precondition(
+        "0.3f", "a colonist with Hauling AND Doctor enabled (the actor A)",
+        len(able) >= 1,
+        "no visible colonist can do both. Rejected: %s. This is the fixture gap "
+        "that cost four runs on 2026-08-31 - see the fixture table in "
+        "accept/3.4-pawn-orders.md." % ("; ".join(why_not) or "none"))
+
+    S["A"], S["Aname"] = able[0]["id"], able[0].get("name")
+    # B is the patient and only has to be somebody else - 4.9 needs the DOCTOR
+    # (A) to be a different pawn from the patient, which this guarantees by
+    # construction. Taken in the stable id order so the pick is reproducible.
+    others = [r for r in roster if r["id"] != S["A"]]
+    precondition(
+        "0.3g", "a second colonist to be the patient B", len(others) >= 1,
+        "every visible colonist is the actor; 3.4 needs a distinct patient.")
+    S["B"], S["Bname"] = others[0]["id"], others[0].get("name")
+
+    print("          actor  A = %s (%s) - selected by predicate, "
+          "%d of %d colonists qualified" % (S["A"], S["Aname"], len(able), len(roster)))
+    print("          target B = %s (%s)" % (S["B"], S["Bname"]))
+    if why_not:
+        note("0.3h", "not eligible as actor: %s" % "; ".join(why_not))
+
+    phase0_journal()
+
+
+def phase0_journal():
     e = send("journal", {"limit": 1})
     S["seq0"] = int(dig(e, "data.last_seq", 0) or 0)
     eq("0.4", "journal readable (watermark recorded)", e, "ok", True)

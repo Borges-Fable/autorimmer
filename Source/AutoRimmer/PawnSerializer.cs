@@ -139,7 +139,15 @@ namespace AutoRimmer
 
         // What the reader would most regret not seeing, in the digest's additive
         // shape so a downed AND bleeding pawn outranks one that is only downed.
-        // Deterministic: score, then name — so the truncation is assertable.
+        //
+        // A SELECTION key, not an identity key (git-bug 1eb2262). The mood term
+        // is `100 - mood_pct`, so this score moves on any tick that moves a
+        // mood, and the 400-1000 point flags flip on injury and recovery — two
+        // reads seconds apart legitimately rank the same colony differently.
+        // The caller decides the tie-break (`pawns` uses thingIDNumber; the
+        // digest keeps its own private copy of this method and ties on name),
+        // and `pawns` no longer EMITS in this order by default because a
+        // consumer cannot hold an index into a list ordered by a live value.
         public static int Attention(Pawn pawn)
         {
             int score = 0;
