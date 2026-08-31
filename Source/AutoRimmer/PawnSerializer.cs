@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using RimWorld;
 using UnityEngine;
 using Verse;
+using Verse.AI;
 
 namespace AutoRimmer
 {
@@ -86,6 +87,7 @@ namespace AutoRimmer
         public const int RelationCap = 16;
         public const int OpinionCap = 12;
         public const int JobClip = 64;
+        public const int JobQueueCap = 8;
 
         // ------------------------------------------------------------------
         // The brief line: `pawns`. HOT PATH — no stat calls, no room analysis,
@@ -335,8 +337,78 @@ namespace AutoRimmer
                 ["job"] = Journal.Truncate(job, 160),
                 ["job_def"] = pawn.CurJobDef?.defName,
             };
+            // WHO ordered the running job — job_id, player_forced, job_giver,
+            // work_giver, job_start_tick and the `ordered` triple. Same
+            // implementation the verbs' own job line uses (PawnActs.JobFacts),
+            // deliberately, so an echo and an observation stay one vocabulary
+            // rather than drifting into two. 4087644.
+            Job cur = null;
+            try { cur = pawn?.jobs?.curJob; } catch { }
+            foreach (var kv in PawnActs.JobFacts(cur)) d[kv.Key] = kv.Value;
+            d["job_queue"] = QueuedJobs(pawn);
             if (jobError != null) d["job_error"] = jobError;
             return d;
+        }
+
+        // --------------------------- the job queue ---------------------------
+        // The ORDERED-BUT-NOT-YET-RUNNING half of the job tracker, which nothing
+        // in this mod published before 4087644. It matters because with
+        // `queue:true` Pawn_JobTracker.TryTakeOrderedJob enqueues and leaves
+        // curJob alone — so `job_def` above names the PREVIOUS job and the order
+        // the agent just gave was invisible.
+        //
+        // READ THIS BEFORE TAKING AN EMPTY QUEUE AS PROOF AN ORDER WAS REFUSED.
+        // It is not. TryTakeOrderedJob's `JobIsSameAs` early-out fires BEFORE
+        // requestQueueing is ever read, so a queued order that collided with the
+        // running job enqueued nothing and still returned true — there is no
+        // entry here to publish because none was ever made. The verb's
+        // `already-doing-it` gate is what reports that case; this field cannot,
+        // and neither can any amount of queue publication.
+        //
+        // Pawn_JobTracker.AllJobs() is deliberately NOT used: it yields curJob
+        // first and then the queue, and curJob is already published above —
+        // repeating it here would read as a pending order. jobQueue is a plain
+        // List<QueuedJob> behind an indexer (Verse.AI/JobQueue.cs), so indexing
+        // by position avoids the iterator allocation and takes the snapshot the
+        // shared-list rule wants (PawnSafe Class E) rather than enumerating a
+        // live collection.
+        private static Dictionary<string, object> QueuedJobs(Pawn pawn)
+        {
+            var q = pawn?.jobs?.jobQueue;
+            if (q == null) return null;
+            int total;
+            try { total = q.Count; }
+            catch { return null; }
+            var rows = new List<object>();
+            for (int i = 0; i < total && i < JobQueueCap; i++)
+            {
+                QueuedJob qj = null;
+                try { qj = q[i]; }
+                catch { break; }
+                if (qj?.job == null) continue;
+                var row = new Dictionary<string, object>
+                {
+                    ["at"] = i,
+                    ["job_def"] = Safe(() => qj.job.def?.defName),
+                    ["tag"] = qj.tag?.ToString(),
+                };
+                foreach (var kv in PawnActs.JobFacts(qj.job)) row[kv.Key] = kv.Value;
+                rows.Add(row);
+            }
+            return new Dictionary<string, object>
+            {
+                ["list"] = rows,
+                ["total"] = total,
+                ["more"] = Math.Max(0, total - rows.Count),
+                // Job.startTick is assigned only in Pawn_JobTracker.StartJob, so
+                // every row here has job_start_tick:null by construction — a
+                // queued job has not started. That is a fact about the queue,
+                // not a failed read.
+                ["note"] = "jobs ORDERED and waiting, nearest first; the running job is `job_def` above, "
+                    + "not a queue entry. An empty queue does NOT mean an order was refused: a queued "
+                    + "order that collided with the running job enqueued nothing and still reported "
+                    + "success before 4087644 — the verb's `already-doing-it` gate is what reports it.",
+            };
         }
 
         // ------------------------------ needs ------------------------------
@@ -664,6 +736,38 @@ namespace AutoRimmer
             // reached through GetStatValue is arbitrary code running mid-loop —
             // the same shape as the digest's live Collection-was-modified bug.
             var worn = new List<Apparel>(tracker.WornApparel);
+            // FORCED: the durable completion receipt, and the reason 4087644
+            // singled this section out. RimWorld/JobDriver_Wear.cs's final toil
+            // does
+            //     if (pawn.outfits != null && job.playerForced)
+            //         pawn.outfits.forcedHandler.SetForced(apparel, forced: true);
+            // so `forced:true` means THIS PIECE IS WORN BECAUSE IT WAS FORCED.
+            // It is the one per-item, save-surviving trace any of the job verbs
+            // leaves (OutfitForcedHandler.ExposeData scribes forcedAps by
+            // reference), and it is what separates "the agent's `wear` dressed
+            // this pawn" from "the pawn's own apparel policy did" — the exact
+            // question that could not be answered when marine armour was forced
+            // onto four pawns whose policy independently wanted it.
+            //
+            // HAZARD: READ THE LIST, NEVER IsForced(ap).
+            // RimWorld/OutfitForcedHandler.cs:
+            //     public bool IsForced(Apparel ap)
+            //     {
+            //         if (ap.Destroyed)
+            //         {
+            //             Log.Error("Apparel was forced while Destroyed: " + ap);
+            //             if (forcedAps.Contains(ap)) { forcedAps.Remove(ap); }
+            //             return false;
+            //         }
+            //         ...
+            // — a RED ERROR and a MUTATION of scribed state, out of something
+            // spelled as a predicate. `ForcedApparel` is `=> forcedAps`, an
+            // expression-bodied getter straight onto a field initialised at its
+            // declaration: never null, no lazy init, no allocation. So .Contains
+            // is the clean route. The list handed back is LIVE — read it, never
+            // touch it.
+            List<Apparel> forcedList = null;
+            try { forcedList = pawn.outfits?.forcedHandler?.ForcedApparel; } catch { }
             var rows = new List<object>();
             float insCold = 0f, insHeat = 0f;
             float worstRatio = 999f;
@@ -720,6 +824,10 @@ namespace AutoRimmer
                     ["layers"] = layers,
                     ["locked"] = locked,
                     ["cares_if_damaged"] = cares,
+                    // null, not false, when the pawn has no outfit tracker (an
+                    // animal): "no forced-apparel state exists here" is not the
+                    // same claim as "this was not forced".
+                    ["forced"] = forcedList != null ? (object)forcedList.Contains(a) : null,
                 });
             }
             return new Dictionary<string, object>
@@ -739,6 +847,7 @@ namespace AutoRimmer
                 ["worst_wear"] = worstRatio < 999f
                     ? (worstRatio < 0.2f ? "tattered" : (worstRatio < 0.5f ? "frayed" : "good"))
                     : null,
+                ["forced_count"] = forcedList?.Count,
             };
         }
 
