@@ -1570,3 +1570,121 @@ envelope per run.
 Foxy #218, Slick #221), no corpses, no butcher tables, clean. Every phase stages
 its own fixture on top and the leftovers are not saved back. Zero red errors in
 every run this session. `Prefs.xml` is 3072x1875 windowed, devMode on.
+
+## Session 8, round 2 — three branches audited in parallel, all three merged
+
+Evan's call: one opus auditor per branch, three at once, each in its own git
+worktree. **21 of 25.** `1a072fa`, `1eb2262`, `e8f2c32` all CLOSED. Merges
+`5074a5b`, `fda8e74`, `99a54e3`; DLL `09a4ace`.
+
+Workers audited only — the orchestrator ran every in-game check personally, per
+the standing rule. Each committed its own fixes to its own branch: `addd6d3`,
+`60a4226`, `d31ed19`.
+
+### The headline: 3.4 now passes 82 of 82
+
+`pwsh accept\3.4-pawn-orders.ps1 -Phase 4,5` on the merged DLL, one clean run.
+The eight checks that were unreachable at 3.4's close (4.7a-e, 5.1a-c) all pass.
+Zero red errors across the entire session, no modal left behind.
+
+Phase 0 now reads: *"actor A = 218 (Foxy) - selected by predicate, 2 of 3
+colonists qualified"* / *"not eligible as actor: Yun: Hauling disabled"*. Under
+the old `roster[0]` rule the actor would have BEEN Yun, who fails six checks for
+exactly that reason. That is `stable-pawn-order` paying for itself in another
+spec's acceptance on its first run.
+
+### What each audit actually caught
+
+**`1a072fa` auto-arm** — the auditor decompiled the bench's own
+`FindSuitableWeaponAndAmmo.dll` with `ilspycmd` rather than trusting the issue.
+Two real defects: `IsAutoArm` is `Get?.optedIn.Contains(pawn) ?? false`, so a
+missing tracker answers the LEGAL value `false` and **no `catch` can see it** —
+the observer would publish "auto-arm is off" for a game whose tracker was gone;
+and two OPTIONAL probes sat inside a `catch` that nulls the lever, so a throw in
+code that only produces the EXPLANATION would have disabled the feature. Plus
+two acceptance-doc errors, one of them backwards: an ordered drop lands
+**FORBIDDEN** (`TryDropEquipment(…, bool forbid = true)`, and
+`JobDriver_DropEquipment` passes three args), FSWA skips forbidden things, so the
+`unforbid` step is load-bearing rather than belt-and-braces.
+
+**`1eb2262` stable order** — the once-corrected diagnosis survived AND got
+stronger: `PawnVerbs` at the branch point already sorted attention-desc with an
+id tie-break, which makes the original "a spawn reordered the roster" story
+*impossible*, not merely unproven. Confirmed live: a spawn APPENDS
+(`215,218,221` -> `215,218,221,27032`). The audit's real find is a limit on the
+promise — **`id-asc` stabilises the SEQUENCE, not the MEMBERSHIP**, because the
+cap still cuts by attention, so above the cap the surviving set moves with mood.
+True only while `more == 0`, now said in code, DESIGN and the acceptance.
+Demonstrated at `cap:2`, which dropped 218 out of the set entirely.
+
+**`e8f2c32` manual priorities** — the diagnosis confirmed at the strongest
+available level: `Notify_UseWorkPrioritiesChanged` is `workGiversDirty = true`
+and grepping it over the whole 1.6 tree returns exactly TWO hits, its declaration
+and its one call site. So a bare field write really is inert. The defect found:
+`work-priorities`' matrix path never calls `outcome.Ok`, so `Outcome.Result`
+stamped every successful write `journal_seq: null, "nothing was mutated"` over a
+call that had just journaled — and 3.4's `4.7e` asserts `journal_seq >= 1`. The
+branch would have failed one of the eight checks it exists to deliver.
+
+### Two pre-existing defects on main, found sideways and fixed
+
+1. **The red-error watermark has been near-zero all along.**
+   `accept/3.4-pawn-orders.{ps1,py}` took it with `journal {limit:1}`, but
+   `JournalVerbs.Read` updates `last_seq` BEFORE the `since_seq` skip and breaks
+   on `events.Count >= limit` BEFORE the append — so that call reports the
+   **second** line's seq. 3.4's red-error check was scanning the whole journal
+   and could charge a stale error to a clean run. Now
+   `{since_seq: 999999999, limit: 1}`, the idiom
+   `accept/1.8-game-clock-advance.sh:165` already documents. Verified live:
+   `seq0 = 14` on a fresh load, not 2.
+2. **3.4 check 4.5d asked whether `Dig` returned something, not whether the key
+   was there** (`0a62fbf`). `SurgeryWarnings` returns an EMPTY list when nothing
+   is wrong, and `Dig` cannot represent that — PowerShell unrolls an empty array
+   on `return`, so the caller reads `$null` and "no warnings" is
+   indistinguishable from "no warnings FIELD". It went RED against a correct mod
+   on the first fixture clean enough to raise zero warnings. 3.4 closed green
+   only because its old fixture happened to trip one.
+
+**And a warning to my future self, recorded because I did it today:** the
+tempting fix is `return ,$cur` in `Dig`. Do not. Every other caller relies on
+`Dig` unrolling arrays and re-collecting with `@(...)`, so wrapping made a
+3-colonist roster read as 1 and turned the 35-verb registry check red. I ran it,
+saw both failures, and reverted. The narrow fix at the one call site is correct.
+
+### Fixture facts learned this round
+
+- **`autostart.rws` has NO violence-capable colonist.** All three roll
+  Violence-disabled, so `auto_arm` was REFUSED on every one of them — which
+  proved the gate and its citation (*"the Assign-tab checkbox is not drawn
+  (PawnColumnWorker_AutoArm.HasCheckbox) and the gizmo is disabled with
+  FSWA_CannotViolent"*) but blocked the accept path. Stage one with
+  `dev:spawn-pawn {violence_capable:true}`. Not in any fixture table.
+- **Phase 4 wears its fixture out.** Re-running it applies `dev:damage` again and
+  the patient goes down, failing 4.3b. Reload `autostart.rws` between runs
+  rather than re-running in place.
+
+### Next, in order
+
+1. **`2f2796e`** — verify the remaining backlog diagnoses. Three-for-three of the
+   diagnoses audited today survived, but two of five checked in session 7 did
+   not, and the remaining filed-from-play issues have not been through this.
+2. **`4087644`** (p1) — job verbs report success for orders that did nothing.
+   This is the one that matters for 4.2/4.3: it lands squarely on the play
+   loop's act -> read -> think cadence, and a false positive there would make
+   4.3's ten-day demo lie.
+3. **1.9** (p1, blocks 3.3), then **3.5** (M1-critical), then **3.6**.
+4. **4.1 then 4.2** are now the only things between here and the play loop —
+   both prose, no C#. 4.2's other three deps (1.3, 1.4, 2.1) are closed.
+5. Orchestrator debt STILL owed, untouched for a third session: factor the four
+   private `Act` emitters (AreaVerbs, DesignationVerbs, ZoneVerbs, PawnActs) into
+   one helper, and fold `Pawn_ReadingTracker` into `PawnSafe.Policies`.
+6. Open and unaddressed from today: `0d9cbd7` (world-fixture steps do not chain)
+   and `70ac258` (`things` has `pawns`' bug, and the fix now ports mechanically).
+
+### Bench
+
+`autostart.rws` unchanged at tick 607 — 3 colonists, none violence-capable, no
+corpses, no benches. Every phase stages its own fixture on top; nothing was saved
+back. Four worktrees still on disk under `.claude/worktrees/` (three from this
+round's auditors, one stale from session 5) — `git worktree prune` when the
+branches are no longer wanted.
