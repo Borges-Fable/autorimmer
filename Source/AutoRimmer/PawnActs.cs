@@ -681,6 +681,64 @@ namespace AutoRimmer
         // shifts the key. On a 38-mod bench that is a live possibility, which is
         // why these fields are EVIDENCE for a reader to weigh and never a
         // control-flow input.
+        //
+        // ---------------- `ordered` IS NARROW ON PURPOSE, AND `order_kind`
+        // ---------------- IS THE FIELD THAT ANSWERS "DID I CAUSE THIS".
+        //
+        // git-bug ac407f1: `ordered` reads FALSE after a `wear` we issued this
+        // tick, which is the least useful possible answer to the question the
+        // name invites. It is not a bug — the triple is doing exactly what it
+        // says — but the name promises more than the value delivers, so the
+        // value gets a companion rather than a redefinition. `ordered` keeps
+        // its meaning (accept/4087644-order-honesty.py 2.2b/2.2c assert it and
+        // DESIGN's merged prose agrees); `order_kind` splits the ordered space
+        // in two:
+        //
+        //     order_kind == "work"    queuedNode && workGiver != null && forced
+        //                             — identical to `ordered`. A prioritized
+        //                             WORK order: `prioritize`, or a right-click
+        //                             work option (FloatMenuOptionProvider_
+        //                             WorkGivers stamps workGiverDef, and
+        //                             Pawn_JobTracker.TryTakeOrderedJob-
+        //                             PrioritizedWork stamps it again).
+        //     order_kind == "direct"  queuedNode && workGiver == null && forced
+        //                             — a direct order: wear, equip, move-to,
+        //                             tend, carry… No WorkGiver exists for any
+        //                             of them, which is why the triple cannot
+        //                             see them.
+        //     order_kind == null      no evidence of an order. Includes the
+        //                             unresolvable-jobGiver case below: null is
+        //                             "we cannot tell", never "the agent did
+        //                             not order it".
+        //
+        // SOURCE CORRECTION, and it matters because ac407f1 gets it backwards.
+        // The issue says the `workGiverDef` clause is what excludes
+        // JobGiver_Work's autonomous `playerForced`. VERIFIED AGAINST
+        // RimWorld/JobGiver_Work.cs: it is not. That branch reaches
+        // GiverTryGiveJobPrioritized, which sets `job2.workGiverDef = giver.def`
+        // (and `job3.workGiverDef` on the scanCells side) BEFORE
+        // TryIssueJobPackage sets `job.playerForced = true` and returns
+        // `new ThinkResult(job, this, tag)`. So that job carries BOTH
+        // playerForced and a workGiverDef; the only clause that rejects it is
+        // `jobGiver is ThinkNode_QueuedJob`, because `this` is the JobGiver_Work
+        // node and Pawn_JobTracker.StartJob assigns `curJob.jobGiver = jobGiver`
+        // from the ThinkResult's SourceNode.
+        //
+        // That is WHY splitting on workGiverDef is safe: the autonomous case is
+        // already gone by the time either kind is decided, so "direct" cannot
+        // capture it. It is also why `ordered` must NOT be widened by simply
+        // dropping the clause — not because the clause guards anything, but
+        // because `ordered`'s published meaning is prioritized-WORK and two
+        // shipped acceptance checks assert it.
+        //
+        // The queuedNode clause is load-bearing for a second reason. Verse.AI/
+        // JobQueue is enqueued by four non-player sites — JobDriver_AttackStatic
+        // and JobDriver_AttackMelee (EnqueueFirst on a follow-up attack),
+        // JobInBedUtility (LayDown), and Pawn_JobTracker's own
+        // resumeCurJobAfterwards path — so ThinkNode_QueuedJob alone does not
+        // mean "the player asked". Every one of those enqueues a job with
+        // playerForced FALSE, so the PAIR (queuedNode && forced) is the real
+        // discriminator and the workGiver split is a refinement on top of it.
         internal static Dictionary<string, object> JobFacts(Job job)
         {
             if (job == null)
@@ -692,6 +750,7 @@ namespace AutoRimmer
                     ["work_giver"] = null,
                     ["job_start_tick"] = null,
                     ["ordered"] = null,
+                    ["order_kind"] = null,
                 };
             string giver = null;
             bool queuedNode = false;
@@ -721,6 +780,14 @@ namespace AutoRimmer
                 // unknown — read a false as "no evidence", never as "proof the
                 // agent did not order it".
                 ["ordered"] = queuedNode && workGiver != null && forced,
+                // The companion field. `ordered == (order_kind == "work")` by
+                // construction, deliberately: one value, two names, so a reader
+                // who wants "did I cause this at all" asks `order_kind != null`
+                // and a reader who wants "is this prioritized work" asks
+                // `ordered`. Neither has to know the triple.
+                ["order_kind"] = queuedNode && forced
+                    ? (workGiver != null ? "work" : "direct")
+                    : null,
             };
         }
 

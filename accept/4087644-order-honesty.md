@@ -140,14 +140,16 @@ from. Comment #1 supersedes — confirmed with the orchestrator before building.
 
 | # | call | expect |
 |---|---|---|
-| 2.1a–f | `pawn {id:A, sections:["state"]}` | keys present: `job_id`, `player_forced`, `job_giver`, `work_giver`, `job_start_tick`, `ordered` |
+| 2.1a–g | `pawn {id:A, sections:["state"]}` | keys present: `job_id`, `player_forced`, `job_giver`, `work_giver`, `job_start_tick`, `ordered`, `order_kind` |
 | 2.2a | `wear {pawn:A, thing:AP}` then state | `job_giver == "ThinkNode_QueuedJob"` |
 | 2.2b | ″ | `work_giver == null` — a `wear` order has no WorkGiver |
 | 2.2c | ″ | `ordered == false`, **because** the triple requires a WorkGiver |
+| 2.2d | ″ | `order_kind == "direct"` — the field that *does* answer "did I cause this" |
 | 2.3 | ″ | `player_forced == true` |
 | 2.4 | ″ | `job_start_tick >= 0` |
 | 2.5 | ″ | `job_id >= 0` |
-| 2.6 | `advance {ticks:2500}` then state | a think-tree job reads `ordered == false` |
+| 2.6a | `advance {ticks:2500}` then state | a think-tree job reads `ordered == false` |
+| 2.6b | ″ | and `order_kind` present and **null** — neither work nor direct |
 
 `player_forced` **alone is not the discriminator** and 2.6 is what proves the
 suite knows that: `RimWorld/JobGiver_Work.cs` `TryIssueJobPackage` sets
@@ -173,19 +175,48 @@ stamps `job.workGiverDef = scanner.def`, and `TryTakeOrderedJobPrioritizedWork`
 stamps it again). Not driven here because phase 2's fixture is an apparel
 order.
 
-**The field name invites the misreading the script made, and renaming it is
-out of scope** (3.4's acceptance asserts on `ordered` by name). A `wear` order
-*was* ordered by the player and `ordered` says false; its honest meaning is
-"this is a prioritized-WORK order", not "the player caused this". Anything
-answering "did my order take?" must read `player_forced` **and**
-`job_giver == "ThinkNode_QueuedJob"`, or the verb's own `action.journal_seq`,
-never `ordered` alone. The recommendation on record instead of a rename: keep
-the field, and publish the pair it is derived from — which
-`PawnActs.JobFacts` already does, `player_forced` and `work_giver` sitting
-beside it on every job line — plus a one-line `note` naming what `ordered`
-means, so a reader who reaches for the wrong field is corrected in the same
-envelope. A rename belongs in whichever spec next revises `pawn`'s state
-section, with 3.4's script amended in the same commit.
+### `order_kind` — 2.2d, added by git-bug ac407f1
+
+The paragraph that used to sit here recommended keeping `ordered` and letting
+readers assemble the answer themselves from `player_forced` + `job_giver`.
+That recommendation is now implemented as a field rather than left as advice.
+`PawnActs.JobFacts` publishes **`order_kind`** beside `ordered`:
+
+| `order_kind` | means | who produces it |
+|---|---|---|
+| `"work"` | the triple — `queuedNode && workGiver != null && playerForced` | `prioritize`, or a right-click work option |
+| `"direct"` | `queuedNode && playerForced`, no WorkGiver | `wear`, `equip`, `move-to`, `tend`, `carry`, … |
+| `null` | no evidence of an order | a think-tree job, **and** the unresolvable-`jobGiver` case |
+
+`ordered == (order_kind == "work")` by construction. `ordered` is *not*
+redefined — 3.4 and 2.2b/2.2c assert it by name and the meaning they assert is
+correct — it simply gains a companion that answers the question the name
+invites. A rename is now unnecessary rather than merely out of scope.
+
+**A source correction the issue got backwards, and it is load-bearing for the
+split.** ac407f1 says the `workGiverDef` clause is what excludes
+`JobGiver_Work`'s autonomous `playerForced`. It is not.
+`RimWorld/JobGiver_Work.cs` `TryIssueJobPackage`'s emergency-prioritized branch
+calls `GiverTryGiveJobPrioritized`, which **sets `workGiverDef` on the job**
+before the branch sets `playerForced = true` and returns
+`new ThinkResult(job, this, tag)`. So that job carries *both* a `workGiverDef`
+and `playerForced`; the only clause that rejects it is
+`jobGiver is ThinkNode_QueuedJob`, because `this` is the `JobGiver_Work` node
+and `Pawn_JobTracker.StartJob` assigns `curJob.jobGiver = jobGiver` from the
+`ThinkResult`'s source node. That is precisely why splitting on `workGiverDef`
+is safe: by the time either kind is decided, the autonomous case is already
+gone, so `"direct"` cannot capture it. **Check 2.6b is the guard**: if
+`order_kind` is ever widened to read off `playerForced` alone, 2.6b is what
+fails.
+
+The `queuedNode` clause carries a second load. `Verse.AI/JobQueue` is enqueued
+by four *non-player* sites — `JobDriver_AttackStatic` and
+`JobDriver_AttackMelee` (a follow-up attack), `JobInBedUtility` (`LayDown`),
+and `Pawn_JobTracker`'s own `resumeCurJobAfterwards` path — so
+`ThinkNode_QueuedJob` alone does not mean "the player asked". Every one of
+those enqueues a job with `playerForced` **false**, so the *pair*
+(`queuedNode && playerForced`) is the discriminator and the WorkGiver split is
+a refinement on top of it.
 
 2.2 degrades to a NOTE rather than a FAIL when `job_giver` is null. That is
 honest, not lenient: `Job.jobGiver` is scribed as an int key resolved against

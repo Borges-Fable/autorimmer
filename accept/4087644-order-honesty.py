@@ -58,7 +58,7 @@ S = {}
 SEQ = 0
 
 ATTRIBUTION = ["job_id", "player_forced", "job_giver", "work_giver",
-               "job_start_tick", "ordered"]
+               "job_start_tick", "ordered", "order_kind"]
 
 # Staged only when the colony has no loose apparel. Vanilla core def, so it
 # exists on any bench; the suite says out loud that it staged one.
@@ -465,7 +465,7 @@ def phase2():
 
     e = state_of(S["A"])
     for i, f in enumerate(ATTRIBUTION):
-        shape("2.1%s" % "abcdef"[i], "pawn", e, "data.state." + f)
+        shape("2.1%s" % "abcdefg"[i], "pawn", e, "data.state." + f)
 
     # A fresh ordered job, on A rather than B. B would need its own apparel
     # item: A is already holding S["ap"] under an order from phase 1, and two
@@ -498,6 +498,17 @@ def phase2():
         eq("2.2c", "so the triple reads NOT ordered - `ordered` means "
                    "prioritized-WORK order, not 'the player caused this'",
            e, "data.state.ordered", False)
+        # 2.2d ADDED by git-bug ac407f1. `ordered` reading False on a job we
+        #      issued this tick is honest but useless as an answer to "did I
+        #      cause this", so PawnActs.JobFacts publishes `order_kind`
+        #      ALONGSIDE it rather than redefining it: "work" is the triple,
+        #      "direct" is queuedNode + playerForced with no WorkGiver (wear,
+        #      equip, move-to, tend...), null is no evidence. 2.1g already
+        #      proved the key EXISTS, so this eq is asserting a value and not
+        #      passing on an absent path.
+        eq("2.2d", "and `order_kind` names it a DIRECT order - the field that "
+                   "does answer 'did I cause this' when there is no WorkGiver",
+           e, "data.state.order_kind", "direct")
     eq("2.3", "player_forced is true on an order we gave", e,
        "data.state.player_forced", True)
     ge("2.4", "a RUNNING job has a real start tick", e,
@@ -513,8 +524,20 @@ def phase2():
         note("2.6", "A is still on a queued job after the advance; the "
                     "autonomous-job discriminator was not exercised")
     else:
-        eq("2.6", "a think-tree job does NOT read as ordered", e,
+        eq("2.6a", "a think-tree job does NOT read as ordered", e,
            "data.state.ordered", False)
+        # The other half of the discriminator, and the one that would catch a
+        # widening of order_kind. RimWorld/JobGiver_Work.TryIssueJobPackage sets
+        # playerForced=true AND stamps workGiverDef on its emergency-prioritized
+        # branch, so `player_forced` and `work_giver` are both useless here; the
+        # only thing that rejects that job is jobGiver being JobGiver_Work
+        # rather than ThinkNode_QueuedJob. If order_kind ever starts reading
+        # off playerForced alone, this is the check that fails.
+        check("2.6b", "and order_kind is null for it - neither work nor direct "
+                      "(data.state.order_kind)",
+              has_key(e, "data.state.order_kind")
+              and dig(e, "data.state.order_kind") is None,
+              "the key present AND null", dig(e, "data.state.order_kind"))
 
 
 # ------------------------------------------------------------------- phase 3 --
