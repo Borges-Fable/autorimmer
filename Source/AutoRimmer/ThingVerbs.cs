@@ -23,6 +23,60 @@ namespace AutoRimmer
     // the cap must never hide the problem behind the inventory. `total`/`more`
     // are published, as everywhere.
     //
+    // ================= ORDER IS A CONTRACT (git-bug 70ac258) ================
+    // The DETAIL list (`detail:true`) and the FIRE list are ADDRESSABLE — every
+    // line carries a `thingIDNumber` a caller can and will hold — so each
+    // publishes TWO order facts, because they are two different questions:
+    //
+    //   `selected_by` — WHICH entries survive the cap. Not negotiable and not
+    //                   changed here: that is 2.6's rule. A cap that cut in
+    //                   list order would hide the forbidden stack behind the
+    //                   steel, and the fire outside the home area behind the
+    //                   one that already has an alert.
+    //   `order`       — the order the survivors are EMITTED in. Caller's
+    //                   choice via `order:` (`id`|`attention`), default
+    //                   `id-asc`.
+    //
+    // The default is `id-asc` because both selection scores MOVE AT READ TIME,
+    // with nothing having happened that the caller did:
+    //   * `ThingAttention` = 100000*forbidden + max(0, 100-hp_pct)*100 +
+    //     min(stackCount, 1000). Deterioration ticks hit points down on
+    //     anything unroofed, so two stacks a percentage point apart trade
+    //     places; and a hauler merging or splitting a stack moves `stackCount`
+    //     with no player action at all.
+    //   * a fire's rank is `fireSize + (outside home ? 10 : 0)`, and
+    //     `RimWorld/Fire.cs` `DoComplexCalcs` runs
+    //     `fireSize += 0.00055f * flammabilityMax * 150f * (1f - vacuum)`
+    //     until it saturates at 1.75 — it moves FASTER than hit points or mood.
+    // Under those orders the lists are valid rankings and worthless handles:
+    // `list[0]` names a different thing on consecutive reads with nothing
+    // wrong. That is what cost `pawns` six of spec 3.4's acceptance checks
+    // (git-bug 1eb2262); this is the same defect in the same shape and takes
+    // the same fix. `thingIDNumber` is the key because it is stable for the
+    // thing's lifetime and is already the id these lines publish.
+    //
+    // Urgency is not lost by reordering: every line carries `attention_rank`,
+    // the 0-based position it held under the SELECTION ranking, computed BEFORE
+    // the cut. For fires that ranking is not attention at all, which is why
+    // `selected_by` there states its real rule, `outside-home-then-size-desc`,
+    // and why the `order` it publishes for the ranked view says the same words
+    // — one sequence must not be given two names.
+    //
+    // `rollups` is deliberately NOT changed (git-bug 70ac258 ruling): it is
+    // keyed by `def`, which is already a stable key, it has no `thingIDNumber`
+    // to sort by, and its position IS the message.
+    //
+    // THE LIMIT OF THE PROMISE, stated because a half-true contract is worse
+    // than none: `order:"id"` stabilises the SEQUENCE, not the MEMBERSHIP. The
+    // cap still cuts by the live score — it must, that is 2.6 — so on a list
+    // longer than `detail_cap` (or than the 12 fires) the surviving SET moves
+    // as the score moves, and `list[0]` can still name a different thing
+    // between reads. `things_more` / `more` is the flag for exactly that: when
+    // it is non-zero, position is reproducible only among the survivors, and a
+    // caller wanting a durable handle raises the cap past the total or holds
+    // the `id` it read rather than the index it read it at. When it is zero the
+    // sequence is a register.
+    //
     // ========================= FIELD DOCS ==================================
     //
     // `forbidden` / `forbidden_stacks` exist because of the session-4 amendment
@@ -67,6 +121,15 @@ namespace AutoRimmer
         // stirred map. The walk stops there and says so rather than spending a
         // frame budget inside a verb that is documented as cheap.
         public const int ExamineCap = 40000;
+
+        // The `order:` vocabulary, identical to PawnVerbs' by design — a caller
+        // that learned it on `pawns` must not have to learn it again here. Note
+        // that the ARGUMENT words (`id`, `attention`) and the PUBLISHED values
+        // (`id-asc`, `attention-desc`) deliberately differ: the argument names
+        // the key, the published value names the whole ordering.
+        private const string OrderById = "id";
+        private const string OrderByAttention = "attention";
+        private const string OrderWords = "id|attention";
 
         // The taxonomy (open question 1). Twelve of these fourteen words are a
         // ThingRequestGroup — the game's OWN membership test, already
@@ -140,6 +203,16 @@ namespace AutoRimmer
             if (cap < 1 || cap > 200) throw new VerbArgsException("cap must be 1..200");
             int detailCap = ctx.Args.Int("detail_cap", DetailCap);
             if (detailCap < 1 || detailCap > 300) throw new VerbArgsException("detail_cap must be 1..300");
+            // Governs the EMIT order of both addressable lists this verb
+            // returns — the detail list and the always-present fire list — so
+            // it is meaningful even with `detail:false`. Unknown order is a
+            // bad-args, not a silent fallback: a typo that quietly returns the
+            // OTHER order is the worst outcome, since the caller asked
+            // precisely because it cares which one it gets (PawnVerbs, same
+            // words). `rollups` is unaffected; see the class comment.
+            string order = ctx.Args.Str("order", OrderById);
+            if (order != OrderById && order != OrderByAttention)
+                throw new VerbArgsException($"unknown order '{order}' ({OrderWords})");
 
             List<Thing> pool;
             string source;
@@ -202,9 +275,9 @@ namespace AutoRimmer
                 }
                 data["by_location"] = new Dictionary<string, object>
                 {
-                    ["stockpiled"] = Rollups(map, stockpiled, cap, detail, detailCap),
-                    ["worn"] = Rollups(map, WornPool(map, WornMatch(defName, category)), cap, detail, detailCap),
-                    ["loose"] = Rollups(map, loose, cap, detail, detailCap),
+                    ["stockpiled"] = Rollups(map, stockpiled, cap, detail, detailCap, order),
+                    ["worn"] = Rollups(map, WornPool(map, WornMatch(defName, category)), cap, detail, detailCap, order),
+                    ["loose"] = Rollups(map, loose, cap, detail, detailCap, order),
                     ["note"] = "stockpiled = in a slot group; loose = on the ground outside one; "
                         + "worn = on a colonist's back (never in the thing lister)",
                 };
@@ -236,7 +309,7 @@ namespace AutoRimmer
                         kept.Add(t);
                     }
                 }
-                var roll = Rollups(map, kept, cap, detail, detailCap);
+                var roll = Rollups(map, kept, cap, detail, detailCap, order);
                 foreach (var kv in roll) data[kv.Key] = kv.Value;
                 data["skipped"] = new Dictionary<string, object>
                 {
@@ -257,21 +330,36 @@ namespace AutoRimmer
             // fire on unclaimed ground is a total blind spot in the alert
             // readout the digest passes through verbatim. Any `things` call
             // closes it; `fires` answers it on its own for a cheap poll.
-            data["fire"] = FireScan(map);
+            data["fire"] = FireScan(map, order);
             return data;
         }
 
         // The map-level fire scan, independent of the alert readout.
+        //
+        // fires {order?} — the SECOND route into FireScan. The fix for the
+        // addressable-list-ordered-by-a-live-score defect has to land on both
+        // of them or the same list answers to two different contracts
+        // depending on which verb asked (git-bug 70ac258 ruling, point 1).
         [Verb("fires")]
         public static object Fires(VerbContext ctx)
         {
             var map = WorldSafe.CurrentMap();
-            return FireScan(map);
+            string order = ctx.Args.Str("order", OrderById);
+            if (order != OrderById && order != OrderByAttention)
+                throw new VerbArgsException($"unknown order '{order}' ({OrderWords})");
+            return FireScan(map, order);
         }
 
         private const int FireCap = 12;
 
-        private static Dictionary<string, object> FireScan(Map map)
+        // The fires' selection rule, published verbatim as `selected_by` — and
+        // as `order` too when the caller asks for that view, because the same
+        // sequence must not be given two names. It is NOT "attention": no
+        // ThingAttention is computed here, and calling it that would be a lie
+        // that reads as data.
+        private const string FireRank = "outside-home-then-size-desc";
+
+        private static Dictionary<string, object> FireScan(Map map, string order)
         {
             var list = new List<object>();
             int total = 0, inHome = 0, outsideHome = 0, fogged = 0;
@@ -318,12 +406,30 @@ namespace AutoRimmer
                             ["attached_to"] = WorldSafe.Safe(() => (t as AttachableThing)?.parent?.LabelShort),
                         }));
                 }
+                // SELECTION. Ranked before the cut, tie-broken on id so the
+                // ranking itself is deterministic between reads that share a
+                // score.
                 scored.Sort((a, b) =>
                 {
                     int c = b.Key.CompareTo(a.Key);
                     return c != 0 ? c : ((int)a.Value["id"]).CompareTo((int)b.Value["id"]);
                 });
-                for (int i = 0; i < scored.Count && i < FireCap; i++) list.Add(scored[i].Value);
+                var kept = new List<Dictionary<string, object>>();
+                for (int i = 0; i < scored.Count && i < FireCap; i++)
+                {
+                    // The urgency the id order no longer encodes, carried on
+                    // the line. 0 is the fire to send someone to first.
+                    scored[i].Value["attention_rank"] = i;
+                    kept.Add(scored[i].Value);
+                }
+
+                // PRESENTATION. Survivors only — re-sorting before the cut
+                // would make the cap keep the twelve LOWEST-ID fires and drop
+                // the one raging outside the home area, which is precisely the
+                // failure 2.6 forbids.
+                if (order == OrderById)
+                    kept.Sort((a, b) => ((int)a["id"]).CompareTo((int)b["id"]));
+                for (int i = 0; i < kept.Count; i++) list.Add(kept[i]);
             }
             catch (Exception e)
             {
@@ -338,7 +444,13 @@ namespace AutoRimmer
                 ["biggest_size"] = WorldSafe.R(biggest, 2),
                 ["list"] = list,
                 ["more"] = Math.Max(0, (total - fogged) - list.Count),
-                ["order"] = "outside-home-then-size-desc",
+                // Two facts, not one (git-bug 70ac258). `order` is what
+                // position means; `selected_by` is what the cap kept. A
+                // consumer that conflates them reads a register as a ranking.
+                // `more > 0` is the flag that even the emitted SET is moving:
+                // above the cap, membership follows fireSize by design.
+                ["order"] = order == OrderById ? "id-asc" : FireRank,
+                ["selected_by"] = FireRank,
                 // Say what this is NOT, because the digest's alert section is a
                 // verbatim readout passthrough and looks like it covers this.
                 ["note"] = "map-wide scan, independent of Alert_FireInHomeArea "
@@ -437,8 +549,14 @@ namespace AutoRimmer
             public Dictionary<string, int> Stuffs;
         }
 
+        // `order` governs the DETAIL list only — `rollups` is def-keyed and
+        // deliberately untouched (class comment, git-bug 70ac258 ruling). It is
+        // optional so the one caller that asks for no detail at all
+        // (PlaceVerbs' room `contains`) does not have to name an order that
+        // could not apply to anything it receives.
         internal static Dictionary<string, object> Rollups(
-            Map map, List<Thing> things, int cap, bool detail, int detailCap)
+            Map map, List<Thing> things, int cap, bool detail, int detailCap,
+            string order = OrderById)
         {
             var hp = new WorldSafe.MaxHpMemo();
             var det = new WorldSafe.DeteriorateMemo();
@@ -542,17 +660,47 @@ namespace AutoRimmer
 
             if (detail)
             {
-                var lines = new List<object>();
-                var ordered = new List<Thing>(things);
-                ordered.Sort((a, b) =>
+                // SELECTION. Scored ONCE per thing rather than inside the
+                // comparator: ThingAttention reaches IsForbidden and the hp
+                // memo, so recomputing it O(n log n) times is both wasteful and
+                // a comparator that could disagree with itself. `pawns` scores
+                // into this same shape for the same reason. Null-def entries
+                // are dropped here rather than inside the cut loop, where they
+                // used to consume a cap slot and emit nothing.
+                var scored = new List<KeyValuePair<int, Thing>>();
+                for (int i = 0; i < things.Count; i++)
                 {
-                    int c = ThingAttention(b, hp, det).CompareTo(ThingAttention(a, hp, det));
-                    return c != 0 ? c : a.thingIDNumber.CompareTo(b.thingIDNumber);
-                });
-                for (int i = 0; i < ordered.Count && i < detailCap; i++)
-                {
-                    var t = ordered[i];
+                    var t = things[i];
                     if (t?.def == null) continue;
+                    scored.Add(new KeyValuePair<int, Thing>(ThingAttention(t, hp, det), t));
+                }
+                // Attention before the cut — 2.6's rule, untouched: a cap that
+                // cut by id would hide the forbidden stack behind whatever
+                // happens to have been spawned first. Tie-break on id so the
+                // ranking is itself reproducible.
+                scored.Sort((a, b) =>
+                {
+                    int c = b.Key.CompareTo(a.Key);
+                    return c != 0 ? c : a.Value.thingIDNumber.CompareTo(b.Value.thingIDNumber);
+                });
+
+                var rank = new Dictionary<Thing, int>();
+                var keptThings = new List<Thing>();
+                for (int i = 0; i < scored.Count && i < detailCap; i++)
+                {
+                    rank[scored[i].Value] = i;
+                    keptThings.Add(scored[i].Value);
+                }
+
+                // PRESENTATION. The survivors only — never the candidate set,
+                // or the cap would start cutting by id and 2.6's rule dies.
+                if (order == OrderById)
+                    keptThings.Sort((a, b) => a.thingIDNumber.CompareTo(b.thingIDNumber));
+
+                var lines = new List<object>();
+                for (int i = 0; i < keptThings.Count; i++)
+                {
+                    var t = keptThings[i];
                     object hpPct = null;
                     if (t.def.useHitPoints)
                     {
@@ -575,12 +723,23 @@ namespace AutoRimmer
                         ["roofed"] = WorldSafe.SafeObj(() => (object)(t.Spawned && t.Position.Roofed(map))) ?? false,
                         ["at"] = t.Spawned ? Positions.Out(t.Position) : null,
                         ["held_by"] = t.Spawned ? null : WorldSafe.Safe(() => (t.ParentHolder as Thing)?.LabelShort),
+                        // The urgency the id order no longer encodes, carried
+                        // per line so a caller reading a stable list still
+                        // knows what to look at first. 0 is the most
+                        // attention-worthy thing RETURNED.
+                        ["attention_rank"] = rank[t],
                     });
                 }
                 d["things"] = lines;
-                d["things_total"] = things.Count;
-                d["things_more"] = Math.Max(0, things.Count - lines.Count);
-                d["things_order"] = "attention-desc";
+                // Keyed on the scored candidates rather than the raw pool, so
+                // total, `more` and the ranks all count the same population.
+                d["things_total"] = scored.Count;
+                d["things_more"] = Math.Max(0, scored.Count - lines.Count);
+                // Two facts, not one (git-bug 70ac258), prefixed because the
+                // bare `order` above belongs to `rollups`, which is a different
+                // list with a different contract.
+                d["things_order"] = order == OrderById ? "id-asc" : "attention-desc";
+                d["things_selected_by"] = "attention-desc";
             }
             return d;
         }

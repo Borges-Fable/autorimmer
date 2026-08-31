@@ -66,16 +66,32 @@ namespace AutoRimmer
             var fires = new List<Fire>();
             try { fires.AddRange(at.GetFiresNearCell(map)); } catch { }
 
+            var ids = new List<object>();
+
+            // 4087644 REMAINDER — RULING: THIS IS A REFUSAL, AND IT JOURNALS.
+            // The acceptance-run comment asked whether this early return is
+            // "nothing to attempt" rather than a refusal. It is a refusal: the
+            // burning test is the provider's OWN gate
+            // (FloatMenuOptionProvider_ExtinguishFires.GetSingleOption returns
+            // null when !TargetInfo.IsBurning), the arguments resolved cleanly,
+            // and the order is wasted — which is precisely the class comment #1
+            // says must be visible in the ledger. The distinction that DOES
+            // hold is between a refusal and a call that never reached a target
+            // at all (a bad argument, an empty pawn list); this reached one.
             if (!burning)
-                return outcome.Result(V, 0, new Dictionary<string, object>
+            {
+                outcome.NoAt(at, "not-burning",
+                    "nothing is burning at or adjacent to that cell (TargetInfo.IsBurning); "
+                    + "the game offers no extinguish option there");
+                return outcome.Result(V, ExtinguishRow(outcome, V, at, 0, ids), new Dictionary<string, object>
                 {
                     ["at"] = Positions.Out(at),
                     ["fires"] = 0,
                     ["error"] = "nothing is burning at or adjacent to that cell "
                         + "(TargetInfo.IsBurning); the game offers no extinguish option there",
                 });
+            }
 
-            var ids = new List<object>();
             foreach (var p in pawns)
             {
                 if (!ProviderGate(p, drafted: true, undrafted: true,
@@ -102,13 +118,7 @@ namespace AutoRimmer
                 outcome.Ok(p, JobLine(p));
             }
 
-            long seq = ActOn(outcome, V, "extinguish", $"({at.x},{at.z}) x{fires.Count}",
-                      new Dictionary<string, object>
-                      {
-                          ["ids"] = ids,
-                          ["at"] = Positions.Out(at),
-                          ["fires"] = fires.Count,
-                      });
+            long seq = ExtinguishRow(outcome, V, at, fires.Count, ids);
 
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
@@ -118,6 +128,19 @@ namespace AutoRimmer
                     + "one ExtinguishFiresNearby job) — this is the cluster form, not a per-fire order",
             });
         }
+
+        // `extinguish`'s `action` row, shared by its target-level refusal exit
+        // and its normal exit so a refused order journals the same way an
+        // accepted one does (4087644 comment #1). ActOn decides whether a row
+        // is owed at all — an empty Outcome still writes nothing.
+        private static long ExtinguishRow(Outcome outcome, string verb, IntVec3 at, int fires, List<object> ids)
+            => ActOn(outcome, verb, "extinguish", $"({at.x},{at.z}) x{fires}",
+                new Dictionary<string, object>
+                {
+                    ["ids"] = ids ?? new List<object>(),
+                    ["at"] = Positions.Out(at),
+                    ["fires"] = fires,
+                });
 
         // RimWorld/FloatMenuOptionProvider_ExtinguishFires.cs PawnCanExtinguish.
         private static bool CanExtinguish(Pawn p, IntVec3 cell, out string gate, out string reason)
@@ -176,14 +199,26 @@ namespace AutoRimmer
             Thing fire = null;
             try { fire = target.GetAttachment(ThingDefOf.Fire); } catch { }
 
+            var ids = new List<object>();
+
+            // 4087644 REMAINDER — RULING: REFUSAL, JOURNALS. Same shape as
+            // extinguish's: the provider's own gate
+            // (FloatMenuOptionProvider_PutOutFireOnPawn requires a live Fire
+            // ATTACHMENT on the clicked pawn), a resolved target, and a wasted
+            // order. Recorded against the TARGET rather than per doer, because
+            // the gate is a fact about the target and one wasted order should
+            // be one row in `verdict.by_gate`.
             if (!onFire || fire == null)
-                return outcome.Result(V, 0, new Dictionary<string, object>
+            {
+                outcome.NoThing(target, "not-burning",
+                    "that pawn is not burning (no Fire attachment); the game offers no beat-fire option");
+                return outcome.Result(V, BeatFireRow(outcome, V, target, ids), new Dictionary<string, object>
                 {
                     ["target"] = target.thingIDNumber,
                     ["error"] = "that pawn is not burning (no Fire attachment); the game offers no beat-fire option",
                 });
+            }
 
-            var ids = new List<object>();
             foreach (var p in pawns)
             {
                 if (!ProviderGate(p, drafted: true, undrafted: true,
@@ -212,14 +247,23 @@ namespace AutoRimmer
                 outcome.Ok(p, JobLine(p));
             }
 
-            long seq = ActOn(outcome, V, "beat-fire", PawnSafe.Name(target),
-                new Dictionary<string, object> { ["ids"] = ids, ["target"] = target.thingIDNumber });
+            long seq = BeatFireRow(outcome, V, target, ids);
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
                 ["target"] = target.thingIDNumber,
                 ["target_name"] = PawnSafe.Name(target),
             });
         }
+
+        // `beat-fire`'s `action` row, shared by its refusal exit and its normal
+        // exit (4087644 comment #1).
+        private static long BeatFireRow(Outcome outcome, string verb, Pawn target, List<object> ids)
+            => ActOn(outcome, verb, "beat-fire", PawnSafe.Name(target),
+                new Dictionary<string, object>
+                {
+                    ["ids"] = ids ?? new List<object>(),
+                    ["target"] = target.thingIDNumber,
+                });
 
         // --------------------------------------------------------------------
         // tend {pawn, target:<pawn id>, medicine?:bool=true}
@@ -263,8 +307,16 @@ namespace AutoRimmer
             if (!self && !ProviderGate(doctor, drafted: true, undrafted: false,
                     mechanoidCanDo: true, requiresManipulation: true, out string gate, out string reason))
             {
+                // 4087644 REMAINDER — THE PROVEN ONE. This exit recorded the
+                // rejection in the RESULT and then returned a hardcoded 0 for
+                // the journal seq, bypassing ActOn: the orchestrator's
+                // acceptance run drove `undraft` + `tend` and found
+                // action.journal_seq 0 with no `"verb":"tend"` row anywhere in
+                // the session's journal file (5.1b). `tend`'s every OTHER exit
+                // already routed through TendRow; only the first gate did not.
                 outcome.No(doctor, gate, reason);
-                return outcome.Result(V, 0, new Dictionary<string, object> { ["target"] = patient.thingIDNumber });
+                return outcome.Result(V, TendRow(outcome, V, doctor, patient, null),
+                    new Dictionary<string, object> { ["target"] = patient.thingIDNumber });
             }
 
             string g = null, r = null;
@@ -459,15 +511,25 @@ namespace AutoRimmer
             var thing = ThingArg(map, ctx.Args, "thing");
             var outcome = new Outcome();
 
+            var ids = new List<object>();
+
             var comp = (thing as ThingWithComps)?.GetComp<CompMannable>();
+            // 4087644 REMAINDER — RULING: REFUSAL, JOURNALS. The comp test IS
+            // the widget gate: RimWorld/CompMannable.cs CompFloatMenuOptions is
+            // reached through FloatMenuOptionProvider_FromThing, so a thing with
+            // no CompMannable is offered no man option at all. A resolved
+            // target, a named gate, a wasted order.
             if (comp == null)
-                return outcome.Result(V, 0, new Dictionary<string, object>
+            {
+                outcome.NoThing(thing, "not-mannable",
+                    "this thing has no CompMannable; the game offers no man option");
+                return outcome.Result(V, ManRow(outcome, V, thing, ids), new Dictionary<string, object>
                 {
                     ["thing"] = thing.thingIDNumber,
                     ["error"] = "this thing has no CompMannable; the game offers no man option",
                 });
+            }
 
-            var ids = new List<object>();
             foreach (var p in pawns)
             {
                 string g = null, r = null;
@@ -501,8 +563,7 @@ namespace AutoRimmer
                 outcome.Ok(p, JobLine(p));
             }
 
-            long seq = ActOn(outcome, V, "man", Safe(() => thing.LabelShortCap.ToString()) ?? thing.def?.defName,
-                new Dictionary<string, object> { ["ids"] = ids, ["thing"] = thing.thingIDNumber });
+            long seq = ManRow(outcome, V, thing, ids);
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
                 ["thing"] = thing.thingIDNumber,
@@ -511,6 +572,16 @@ namespace AutoRimmer
                     + "there (ManForATick), so it is false in this result by construction — advance and read it",
             });
         }
+
+        // `man-turret`'s `action` row, shared by its refusal exit and its
+        // normal exit (4087644 comment #1).
+        private static long ManRow(Outcome outcome, string verb, Thing thing, List<object> ids)
+            => ActOn(outcome, verb, "man", Safe(() => thing.LabelShortCap.ToString()) ?? thing.def?.defName,
+                new Dictionary<string, object>
+                {
+                    ["ids"] = ids ?? new List<object>(),
+                    ["thing"] = thing.thingIDNumber,
+                });
 
         // --------------------------------------------------------------------
         // rest-until-healed {pawns:[…], bed?:<id>}
@@ -578,13 +649,13 @@ namespace AutoRimmer
                 bool inPlace = false;
                 try { inPlace = p.CurJobDef == JobDefOf.LayDown && p.CurJob.GetTarget(TargetIndex.A).Thing == bed; }
                 catch { }
+                bool queued = ctx.Args.Bool("queue", false);
                 if (inPlace)
                 {
                     p.CurJob.restUntilHealed = true;
                 }
                 else
                 {
-                    bool queued = ctx.Args.Bool("queue", false);
                     var job = JobMaker.MakeJob(JobDefOf.LayDown, bed);
                     job.restUntilHealed = true;
                     // 4087644 — PawnActs.AlreadyDoing, on the ELSE branch only.
@@ -606,6 +677,14 @@ namespace AutoRimmer
                 var line = JobLine(p);
                 line["bed"] = bed.thingIDNumber;
                 line["already_in_bed"] = inPlace;
+                // bc2250b's queue audit: `queue` reaches TryTakeOrderedJob on
+                // the job branch only. The in-place branch takes NO job — it
+                // flips restUntilHealed on the running one, which is the
+                // provider's own branch — so there is nothing to queue and
+                // saying `queue:true` there would be the same silent drop the
+                // audit was looking for. Published rather than assumed.
+                line["queue"] = queued;
+                line["queue_applied"] = !inPlace && queued;
                 outcome.Ok(p, line);
             }
 

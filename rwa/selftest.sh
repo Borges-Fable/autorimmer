@@ -323,8 +323,12 @@ has '"file": "catalog.json"'
 run 0 "…and it is really there" -- test -f "$RWA_ROOT/catalog.json"
 
 run 0 "render a rect off the bench" -- \
-    "$RWA" render --rect 100,100,24,24 --out "$PNG-a.png" --scale 16 --save-dump "$TMP/dump.json" --json
-has '"rooms": 2'
+    "$RWA" render --rect 100,100,48,36 --out "$PNG-a.png" --scale 16 --save-dump "$TMP/dump.json" --json
+# 5, not 11: the fixture has six doors and a door cell is its own single-cell
+# Room, so a naive count of the rooms palette says 11. Reporting the doorways
+# as rooms is exactly what made the first live render answer the acceptance's
+# first question wrongly and confidently.
+has '"rooms": 5'
 has '"alphabet": "baseviz-catalog/1"'
 hasre '"catalog": "[^"]*catalog\.json"'
 run 0 "the file is a PNG, not an empty file or an error page" -- \
@@ -332,7 +336,7 @@ run 0 "the file is a PNG, not an empty file or an error page" -- \
 has "89504e470d0a1a0a"
 
 run 0 "render the same rect again" -- \
-    "$RWA" render --rect 100,100,24,24 --out "$PNG-b.png" --scale 16 --json
+    "$RWA" render --rect 100,100,48,36 --out "$PNG-b.png" --scale 16 --json
 run 0 "SAME DUMP, SAME BYTES — the acceptance's determinism claim" -- \
     cmp "$PNG-a.png" "$PNG-b.png"
 
@@ -348,6 +352,37 @@ run 0 "…but an offline render still works with the bench down" -- \
 run 0 "…and that is the whole point: same bytes, no game anywhere" -- \
     sh -c '"$RWA" render --dump "$1" --out "$2" --scale 16 --json >/dev/null && cmp "$3" "$2"' \
     _ "$TMP/dump.json" "$PNG-f.png" "$PNG-a.png"
+
+# The two invariants the first live acceptance broke, asserted directly against
+# the library rather than inferred from the image. Both were "obviously fine"
+# on the old two-room fixture and both were wrong on a real colony.
+run 0 "door pockets are not rooms, and every code on the map is unique and keyed" -- \
+    python3 -c '
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from baseviz.render import proper_rooms, assign_codes
+from baseviz.catalog import Catalog
+d = json.load(open(sys.argv[2]))
+cat = Catalog.load(sys.argv[3])
+pal = d["palettes"]
+rooms_all = [e for e in pal["rooms"] if e]
+proper = proper_rooms(pal)
+doorways = [e for e in rooms_all if e.get("doorway")]
+assert doorways, "fixture must contain doorway rooms or it cannot catch the bug"
+assert len(proper) == 5, f"expected 5 enclosed rooms, got {len(proper)}"
+assert len(rooms_all) > len(proper), "doorways were not excluded"
+codes, types = assign_codes(pal["things"], cat)
+seen = [t["code"] for t in types]
+assert len(seen) == len(set(seen)), f"duplicate codes: {seen}"
+labelled = {t["label"] for t in types}
+assert len(labelled) == len(types), "types were not merged by label"
+for i, e in enumerate(pal["things"]):
+    if i and e and not e.get("impassable"):
+        assert i in codes, f"palette index {i} has no code"
+print(f"rooms {len(rooms_all)} palette / {len(proper)} enclosed / {len(doorways)} doorways; "
+      f"{len(types)} types, {len(set(seen))} unique codes")
+' "$HERE/.." "$TMP/dump.json" "$RWA_ROOT/catalog.json"
+has "5 enclosed"
 
 run 2 "--out is required" -- "$RWA" render --rect 100,100,4,4
 run 2 "a malformed rect is refused, not guessed at" -- \

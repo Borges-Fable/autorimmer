@@ -255,6 +255,25 @@ namespace AutoRimmer
                 });
             }
 
+            // The CELL-level sibling of NoThing, for a verb whose target is a
+            // position rather than a thing (`extinguish {at:…}`, `move-to
+            // {to:…}`). Added by 4087644's remainder: those verbs refused a
+            // whole call with a bare `error` string and no Rejected row, so
+            // `Outcome.Reached` was false and ActOn wrote no `action` line —
+            // the wasted order was invisible to the ledger, which is the exact
+            // defect comment #1 names. ONE row per wasted ORDER rather than one
+            // per doer: the gate is a fact about the cell, not about any pawn,
+            // and `verdict.by_gate` should count the order that did nothing.
+            public void NoAt(IntVec3 cell, string gate, string reason)
+            {
+                Rejected.Add(new Dictionary<string, object>
+                {
+                    ["at"] = Positions.Out(cell),
+                    ["gate"] = gate,
+                    ["reason"] = reason,
+                });
+            }
+
             private static Dictionary<string, object> Line(Pawn p)
                 => new Dictionary<string, object>
                 {
