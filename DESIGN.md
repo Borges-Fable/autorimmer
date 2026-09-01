@@ -2499,3 +2499,48 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `casualties[0]`, which this suite's fixture makes the standing bleeder; they
   now select the row by `downed` and 6.4b2 asserts the standing half by name.
   `40ed42f`.
+
+- 2026-09-01 (session 21) — **A field that states a false reason is the same
+  defect as a read that hides the truth, and three of them shipped in one
+  envelope.** `work_coverage.order` said `"under-first, then
+  natural-priority-desc"` while `WorkCoverage.Section` made ONE pass and
+  appended under-rows inline (`9b179ef`); a dry run's `coverage_after` reported
+  the coverage BEFORE the repair, under a name that promises the coverage after
+  it, while `repaired` in the same envelope named the promotion that fixes it
+  (`58794e4`); and a clean dry run's `Stamp(0)` said "the journal writer is
+  closed … treat anything done in this session as unprovenanced" about an open
+  writer and a call that mutated nothing (`6fc75e3`). **That is the class this
+  whole session is about, one size down.** `61794cd` exists because a health
+  read hid `BloodLoss` behind a truncation policy; `7382bdd` because a dropped
+  argument reported success; `40ed42f` because a colony's only doctor was its
+  own first patient and nothing said so. A field that describes itself falsely
+  is worse than an absent field, because prose shipped INSIDE the envelope reads
+  as authoritative and invites exactly the shortcut it breaks.
+  **The fixes, and each is the data moving rather than the words:**
+  `Section` now emits under-covered rows in a first pass and covered rows in a
+  second, so the string it always published is true — sorted rather than
+  reworded, because under-first is the more useful order for this block's reader
+  and the cap already promises never to drop an under-covered row, so a caller
+  walking `rows` gets the right answer without consulting `under`. `work-cover`'s
+  dry-run arm calls a new `Section(map, projected)` that applies the planned
+  promotions to a fresh snapshot, so `coverage_after` answers "would this fix
+  it" — the question a dry run is asked — instead of "is it fixed", which in a
+  dry run is always no by construction; `still_under`'s `enabled` and `available`
+  move to post-call to stop contradicting the `have` beside them, which was
+  already `r.Have + did`. And `action` is chosen by the emit GUARD rather than
+  by the returned seq: **0 was a sentinel doing double duty** as "nothing was
+  owed" and "something was owed and the write failed", which is the
+  absent-vs-null trap of the `enabled_but_incapable` entry above wearing
+  different clothes. `Journal.Emit` really can return 0, so that case keeps
+  `Stamp(0)`'s warning and the no-line case gets `NoStamp()`.
+  **Two-under-types could not be staged and is not a fixture oversight:** every
+  floor but Doctor's is on CAPABILITY (`!WorkTypeIsDisabled`), which is backstory
+  and trait driven and no shipped verb sets it. The suite gets the same
+  discrimination from two reads of ONE type (5.6a–5.6c: Doctor sits at its
+  natural index when covered and at index 0 when under, so it was moved past a
+  covered row of higher natural priority) and proves the multi-row case offline
+  against its own comparator (9.3d–9.3h). The suite asserts the AGREEMENT
+  between `order` and `rows` rather than either ordering, so the check survives
+  the reword the issue offered as the alternative fix, and 9.6f/9.6v/9.6w keep
+  the pre-fix banked envelopes as the filed evidence rather than rewriting them.
+  `9b179ef`, `58794e4`, `6fc75e3`, `40ed42f`.

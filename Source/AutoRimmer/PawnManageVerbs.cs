@@ -1387,8 +1387,12 @@ namespace AutoRimmer
                 ["use_priorities"] = usePriorities,
                 ["priority_set"] = priority,
                 ["coverage_after"] = after,
-                ["action"] = Stamp(seq),
-                ["note"] = "`ok` is whether every targeted floor is now met. A `still_under` row "
+                ["action"] = owedJournalLine ? Stamp(seq) : NoStamp(),
+                ["note"] = "`coverage_after` is the coverage the promotions in `repaired` "
+                         + "produce: re-read from the map on a real run, PROJECTED onto a "
+                         + "fresh snapshot on a dry run, so it answers 'would this fix it' "
+                         + "either way. `ok` is whether every targeted floor is now met. A "
+                         + "`still_under` row "
                          + "is a fact about the roster — read its `gate`: `no-candidate` means "
                          + "recruit or heal, `too-few-candidates` means the colony is simply too "
                          + "small, and a NON-EMPTY `enabled_but_incapable` list means the fix "

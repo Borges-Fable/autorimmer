@@ -1617,22 +1617,55 @@ def phase5():
     dr = doctor_row(e2) or {}
     eq_val("5.2a", "the colony still has one available doctor after the dry run",
            dr.get("available") if not ARGS.dry_run else 1, 1)
+    # THE SHARPEST FORM OF 58794e4, because it separates PROJECTED from WRITTEN
+    # in one comparison: the verb says the floor would be met, and the world
+    # says it is not.
+    if not ARGS.dry_run:
+        check("5.2a2", "…so the dry run PROJECTED without MUTATING: its own "
+                       "`coverage_after` says the floor is met while an "
+                       "independent digest still names Doctor under. A field "
+                       "that reported the map would have had to disagree with "
+                       "`repaired` in its own envelope instead",
+              DOCTOR in as_list(dig(e2, "data.work_coverage.under")),
+              "Doctor still under in the INDEPENDENT digest",
+              dig(e2, "data.work_coverage.under"))
     e3 = journal_since(seq_before, types=["action"])
     acts = [a for a in as_list(dig(e3, "data.events"))
             if isinstance(a, dict) and dig(a, "payload.verb") == "work-cover"]
     check("5.2b", "…and wrote NO `action` row: a plan is not an act",
           ARGS.dry_run or len(acts) == 0,
           "no work-cover action row since seq %s" % seq_before, acts)
-    if not ARGS.dry_run and dig(e, "data.action.journal_seq") == 0:
-        finding("5.2c", "a clean dry run's `action.journal_seq` is 0 and carries "
-                        "Stamp(0)'s provenance sentence, 'NOT WRITTEN — the "
-                        "journal writer is closed, so this mutation has no "
-                        "journal line'. The writer is not closed and there was no "
-                        "mutation: the emit guard is "
-                        "`(repaired>0 && !dryRun) || stillUnder>0`, so a dry run "
-                        "that plans a clean repair legitimately emits nothing and "
-                        "then reports it in the words of a failure. NoStamp() is "
-                        "the shape this case wants. Filed on 40ed42f.")
+    # ---- git-bug 6fc75e3, was FINDING 5.2c ---------------------------------
+    # A clean dry run owes no journal line and used to say so in the words of a
+    # FAILURE: `journal_seq:0` plus Stamp(0)'s "NOT WRITTEN — the journal writer
+    # is closed … treat anything done in this session as unprovenanced." Neither
+    # clause was true, and 0 was a sentinel doing double duty as "nothing was
+    # owed" and "something was owed and did not get written" — the same
+    # absent-vs-null trap as 7.2h in different clothes. The verb now keys on the
+    # emit GUARD, not on the seq, so `Journal.Emit` genuinely returning 0 keeps
+    # its warning.
+    clean_dry = (not ARGS.dry_run and as_list(dig(e, "data.repaired"))
+                 and not as_list(dig(e, "data.still_under")))
+    if clean_dry:
+        shape("5.2c", "work-cover", e, "data.action.journal_seq")
+        eq("5.2c2", "…and a dry run that owed NO journal line says so with a "
+                    "null seq, not with 0 — 0 is what a FAILED emit returns and "
+                    "the two must not share a value", e,
+           "data.action.journal_seq", None)
+        prov = (dig(e, "data.action.provenance") or "").lower()
+        check("5.2c3", "…and the sentence beside it does not claim the journal "
+                       "writer is closed, because it is open and nothing was "
+                       "mutated",
+              "writer is closed" not in prov and "unprovenanced" not in prov,
+              "a provenance sentence that does not report a journal failure",
+              dig(e, "data.action.provenance"))
+    else:
+        note("5.2c", "the dry run did not plan a CLEAN repair (repaired=%s, "
+                     "still_under=%s), so the no-journal-line case was not "
+                     "staged here. 7.2p8 asserts the other side of the same "
+                     "guard: a dry run that falls short DOES owe a line."
+             % (len(as_list(dig(e, "data.repaired"))),
+                len(as_list(dig(e, "data.still_under")))))
 
     # ---- (b) THE REAL PROMOTION, and it reaches the JOURNAL ------------------
     e = send("work-cover", {"work": DOCTOR})
@@ -3037,6 +3070,23 @@ def phase9():
               "the assignment present and not guarded by "
               "`if (r.Impaired.Count > 0)`",
               "guard still present" if guard else "assignment missing")
+        # git-bug 58794e4: the two arms of the `coverage_after` ternary were
+        # once IDENTICAL, which is how the defect survived review. They are not
+        # allowed to be again.
+        check("9.11b", "…and the dry-run arm of `coverage_after` PROJECTS while "
+                       "the real arm re-reads — the two arms of that ternary "
+                       "used to be the same expression",
+              "WorkCoverage.Section(map, planned)" in src
+              and "dryRun ? WorkCoverage.Section(map)" not in src,
+              "Section(map, planned) on the dry-run arm", None)
+        # git-bug 6fc75e3: the provenance keys on the emit GUARD, never on the
+        # seq — the sentinel that was doing double duty.
+        check("9.11c", "…and `action` is chosen by the emit GUARD, not by the "
+                       "returned seq: Journal.Emit really can return 0, and that "
+                       "case must keep Stamp(0)'s warning",
+              "owedJournalLine ? Stamp(seq) : NoStamp()" in src
+              and "bool owedJournalLine =" in src,
+              "the stamp selected by owedJournalLine", None)
 
     src = _src("JournalHooks.cs")
     if src is None:
