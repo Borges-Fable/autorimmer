@@ -1037,3 +1037,52 @@ queue by default (an agent flailing mid-experiment must not page triage).
   counter, and prefer passing `null` to a worker that will ignore it.** DESIGN
   already records the `nextJobID` burn `orders` pays; that one is unavoidable
   because the job must exist. This one was entirely avoidable.
+- 2026-08-31 — **A fixture verb inherits the FICTION of the thing it models, and
+  the fiction decides the default — so `dev:starter-kit` forbids and
+  `dev:spawn-thing` does not.** (git-bug 091e3f0.) The kit models a colony
+  ARRIVAL. `RimWorld/ScenPart_PlayerPawnsArriveMethod.DoDropPods` ends in
+  `DropPodUtility.DropThingGroupsNear(..., forbid: true, ...)`, and
+  `Data/Core/Defs/Tutor/Instructions.xml` puts `UnforbidStartingResources`
+  immediately after the stockpile steps (`MakeStockpile` ->
+  `EndStockpileDesignating` -> `UnforbidStartingResources`, with
+  `BuildRoomWalls` waiting on its `InstructionDeactivated-` tag), and the
+  tutorial does not advance until the player does it: un-forbidding the
+  starting pile is a step every player takes on every colony. A kit that skipped it handed the
+  agent an affordance no player has — the same argument this log already makes
+  about fog — and left M1 unable to rehearse `unforbid` against a real
+  obstacle, which is how a live run once found a forbidden rifle, revolver,
+  knife and flak set sitting unused while `FSWA_MapComponent`'s three
+  `!thing.IsForbidden(Faction.OfPlayer)` checks stepped over all four.
+  `dev:spawn-thing` does NOT follow, and the reason is not taste: its
+  provenance is `Verse/DebugThingPlaceHelper.DebugSpawn`, which contains no
+  forbidding at all. A bare spawn models a thing APPEARING. It takes an opt-in
+  `forbid` arg — which is how the kit gets the behaviour without reimplementing
+  placement — and keeps `false`. The rest of staging has nothing to forbid:
+  pawns, research and fog carry no `CompForbiddable` between them.
+
+  Two findings the implementation had to absorb. **(a) The flag is not
+  universal, and its absence is silent by design.**
+  `RimWorld/ForbidUtility.SetForbidden` needs a `ThingWithComps` carrying a
+  `CompForbiddable`; the comp is declared per def, `ResourceBase` has it (so
+  resources, food, medicine, weapons, apparel and `MinifiedThing` do) and
+  `BuildingBase` does not — `Bed`, which the kit's own `medical` preset spawns,
+  has no comp anywhere in its BedWithQualityBase -> BedBase -> FurnitureBase ->
+  BuildingBase chain, and no pawn has one either. `warnOnFail: true` makes that
+  a `Log.Error`, i.e. a red_error the journal records and the bench's
+  zero-red-errors rule will not have; `warnOnFail: false` makes it a no-op
+  after which `IsForbidden(Thing, Faction)` answers false forever. The game
+  RELIES on the silence — `DoDropPods` puts the arriving pawn in the same group
+  and forbids it too. We take the game's `warnOnFail: false` and then REPORT
+  every miss with its reason, because a silent no-op inside a fixture is the
+  failure mode this codebase keeps paying for. **(b) The fixture and the remedy
+  must be the same set.** `DropThingGroupsNear` forbids blind; `Dev.Forbid`
+  asks `RimWorld/Designator_Forbid.CanDesignateThing` first (`category == Item`
+  AND a `CompForbiddable`) because that same category test also gates
+  `Designator_Unforbid.CanDesignateThing`, which the shipped `unforbid` verb
+  drives. Forbidding a Building-with-comp — a door, a shelf — would leave the
+  agent a lock with no key, an obstacle no player verb in this mod can clear.
+  The ordering deviates too: the game forbids BEFORE placing, we forbid the
+  placed result, because `CompForbiddable` overrides neither `AllowStackWith`
+  nor `PreAbsorbStack` and a forbidden stack absorbed into an unforbidden one
+  loses the flag entirely — tolerable when a pod lands on open ground, not when
+  a kit aims at a stockpile.
