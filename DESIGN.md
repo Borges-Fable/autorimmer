@@ -1364,3 +1364,41 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `CanPlaceBlueprintAt`'s own answer published verbatim beside the rows rather
   than re-derived from them. Said out loud in the code because a reader
   comparing the two will notice the difference. `c718e4a`.
+- 2026-09-01 (session 15) — **`find-rect {def}` is a second verb behind one
+  name, and the size path is untouched by construction.** `c718e4a`'s acceptance
+  demands `find-rect {w,h}` output be what it always was, byte for byte, and the
+  cheapest proof of that is a diff with zero deletions: `def` branches at the
+  top into its own routine and nothing below it moved. Six resolutions came out
+  of writing it. (1) **One candidate per cell — the first rotation in
+  `def.defaultPlacingRot`-first order that the gate accepts, not the cross
+  product.** Four rotations of one cell are one site as far as "where can this
+  go" is concerned, and the cross product spends `max` four times on the same
+  ground; a caller that wants a specific facing pins `rot`, and `rot_order` is
+  published so the choice is legible. (2) **`center` is DROPPED in def mode
+  rather than relabelled.** `CellRect.CenterCell` is not the placement centre of
+  an even-sized rect, and a field that looks like the value to pass and is off by
+  one exactly where it matters is the bench failure this verb was fixed for.
+  `pos` is the argument; `at`/`w`/`h` are the identity. (3) **`dist` is measured
+  to `pos`, which is also the key the ring walk terminates on.** 2.6 blocker 1
+  was terminating on one key and sorting by another, which selects the wrong set
+  rather than merely ordering it badly; def mode keeps the two identical and says
+  so where the break is. The rotation rank is the tie-break, never a sort key.
+  (4) **`require` narrows the def gate and never replaces it.** `buildable` and
+  `walkable` are REFUSED as subsumed — refusing beats accepting-and-ignoring,
+  which is `7382bdd`'s whole failure mode — while `roofed`/`unroofed` are honest
+  extra filters. And **`reachable-from:P` changes meaning, which is the fix for
+  `c718e4a`'s third complaint**: in size mode it tests the rect's CENTRE cell,
+  which for a workbench is a cell no pawn ever stands on; with a def in hand it
+  tests the INTERACTION cells, falling back to touching the footprint for a def
+  that has none. The echoed `require` block says which question was answered.
+  (5) **`Designator_Build.Visible` is asked ONCE, before the walk**, because it
+  is def-level; an unselectable def returns no candidates anywhere and saying so
+  in a `selectable` block is a different fact from "no room". It also saves
+  thousands of `CanPlaceBlueprintAt` calls, which is why the def path's examine
+  cap is 2000 against the size path's 6000 and why `gate_calls` is published.
+  (6) **No per-cell blocker tally in def mode.** The refusing cell of a rejected
+  candidate is frequently not the cell that was walked — `8b4839f` is exactly
+  that mistake once — and describing the walked cell for thousands of rejects is
+  that defect at scale. `rejected` tallies the game's own sentences, `refusals`
+  carries a few worked examples, and one `site-survey` on a chosen candidate
+  names the cells for real. `c718e4a`, `8b4839f`.

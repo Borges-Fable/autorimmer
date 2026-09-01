@@ -85,6 +85,15 @@ namespace AutoRimmer
         [Verb("find-rect")]
         public static object FindRect(VerbContext ctx)
         {
+            // `def` SWITCHES THE VERB, and the size path below is untouched.
+            // Two reasons for the hard branch rather than one merged walk
+            // (git-bug c718e4a): the def path asks the real placement gate
+            // where the size path asks three cheap cell predicates, and the
+            // acceptance requires `find-rect {w,h}` output to be what it always
+            // was, byte for byte. A shared body is how that quietly stops being
+            // true.
+            if (ctx.Args.Has("def")) return FindRectForDef(ctx);
+
             var map = Map();
             int w = ctx.Args.IntReq("w");
             int h = ctx.Args.IntReq("h");
@@ -179,6 +188,337 @@ namespace AutoRimmer
                 ["blockers"] = TopBlockers(blockers, BlockerCap, out int blockersMore),
                 ["blockers_more"] = blockersMore,
             };
+        }
+
+        // ------------------------------------------- find-rect {def} -------
+        // The same search, gated by the REAL thing (git-bug c718e4a).
+        //
+        // `find-rect {w,h}` answers "is this box clear", and on bench
+        // 20260901T121508 that was the wrong question: it approved a 3x2 box
+        // that the game then refused for granite on the interaction cell one row
+        // SOUTH of it. `CheckRect` walks the rect's own cells and takes no def,
+        // so it cannot know a def has an interaction cell at all. With `def` in
+        // hand every candidate goes through `SiteGate` — the identical routine
+        // `site-survey` publishes — so an approved candidate is one the game
+        // will accept, and a caller can prove it with one `site-survey` on the
+        // candidate it picked.
+        //
+        // ROTATION IS PART OF THE ANSWER, not an assumption. An interaction cell
+        // moves with rotation, so a bench that will not fit facing north
+        // routinely fits facing east, and rotation is usually the cheapest thing
+        // an agent can change about a rejected site. A search that silently
+        // fixed `rot` would report "no room" for ground that has room. Omitted
+        // `rot` searches all four in `def.defaultPlacingRot`-first order, which
+        // is the game's own preference (`Designator_Build` opens there); a given
+        // `rot` pins the search to it and the refusals are tallied so "does not
+        // fit facing north" is a readable answer rather than an empty list.
+        //
+        // ONE CANDIDATE PER CELL — the first rotation in preference order that
+        // the gate accepts, and NOT the cross product. Resolved rather than left
+        // open: four rotations of one cell are one site as far as "where can
+        // this go" is concerned, `max` would otherwise be spent four times over
+        // on the same ground, and a caller that wants a specific facing pins
+        // `rot`. `rot_order` is published so the choice is legible.
+        private static object FindRectForDef(VerbContext ctx)
+        {
+            var map = Map();
+            var a = ctx.Args;
+            if (a.Has("w") || a.Has("h"))
+                throw new VerbArgsException(
+                    "w/h are forbidden alongside def — the def sizes the rect, with the "
+                    + "horizontal axis swap applied per rotation, and a caller-supplied size "
+                    + "could disagree with it");
+            // `require` NARROWS the def gate; it does not replace it, and the
+            // two cell predicates the gate already subsumes are refused rather
+            // than silently accepted and ignored (git-bug 7382bdd's failure
+            // mode: an argument that reads as honoured and is not).
+            //
+            // `reachable-from:P` changes meaning here, and the change is the
+            // point of c718e4a's third complaint: in size mode it tests the
+            // rect's CENTRE cell, which for a workbench is a cell no pawn ever
+            // stands on. With a def in hand it tests the INTERACTION cells —
+            // the cells a pawn must reach to use the thing — and falls back to
+            // the footprint for a def that has none.
+            var reachFrom = IntVec3.Invalid;
+            bool wantRoofed = false, wantUnroofed = false;
+            if (a.Has("require"))
+                foreach (var req in a.StrList("require"))
+                {
+                    if (req.StartsWith("reachable-from:", StringComparison.Ordinal))
+                        reachFrom = Positions.Resolve(map, req.Substring("reachable-from:".Length));
+                    else if (req == "roofed") wantRoofed = true;
+                    else if (req == "unroofed") wantUnroofed = true;
+                    else if (req == "buildable" || req == "walkable")
+                        throw new VerbArgsException(
+                            $"require '{req}' is meaningless alongside def: the gate is "
+                            + "GenConstruct.CanPlaceBlueprintAt plus Designator_Build.Visible, "
+                            + "which subsumes it and is strictly stricter. Drop it rather than "
+                            + "have it silently ignored");
+                    else
+                        throw new VerbArgsException(
+                            $"unknown requirement '{req}' in def mode "
+                            + "(roofed|unroofed|reachable-from:P)");
+                }
+            if (wantRoofed && wantUnroofed)
+                throw new VerbArgsException("require cannot ask for both roofed and unroofed");
+
+            var def = SiteGate.Named(a.StrReq("def"));
+            var stuff = SiteVerbs.ResolveStuff(def, a.Str("stuff"));
+            var near = a.Has("near") ? Positions.Resolve(map, a.Raw("near")) : map.Center;
+            int max = Math.Min(20, a.Int("max", 5));
+            if (max < 1) throw new VerbArgsException("max must be >= 1");
+
+            bool rotGiven = a.Has("rot");
+            var order = rotGiven
+                ? new List<Rot4> { Rotations.Arg(a, "rot", def.defaultPlacingRot) }
+                : RotationOrder(def);
+
+            // Designator_Build.Visible is DEF-level, not cell-level, so it is
+            // asked once. A def that is not on the architect menu has no
+            // candidates anywhere, and walking six thousand cells to discover
+            // that is six thousand calls into CanPlaceBlueprintAt for nothing.
+            bool selectable = SiteGate.Selectable(map, def, out string clause, out string detail);
+
+            var found = new List<DefCandidate>();
+            var rejected = new Dictionary<string, int>();
+            var refusals = new List<object>();
+            int examined = 0, gateCalls = 0;
+            int searchedRadius = -1;
+            bool capped = false;
+            // Lower than the size path's 6000 on purpose: each examine here can
+            // cost four CanPlaceBlueprintAt calls, and that member walks the
+            // occupied rect, every occupant's thing list and the def's
+            // PlaceWorkers. Published, so an empty answer is never mistaken for
+            // a proof.
+            const int ExamineCap = 2000;
+            const int RefusalCap = 8;
+            const int MaxRing = 60;
+
+            int ring = 0;
+            if (selectable)
+            for (; ring <= MaxRing; ring++)
+            {
+                if (found.Count >= max)
+                {
+                    Sort(found);
+                    if (found.Count > max) found.RemoveRange(max, found.Count - max);
+                    // Every cell on this ring is at Euclidean distance >= ring
+                    // from `near`, and `Dist` is measured to the placement
+                    // centre we walked — the same key we sort by, which is the
+                    // whole of 2.6 blocker 1's lesson: terminating on one key
+                    // and sorting by another selects the wrong set.
+                    if (ring > found[max - 1].Dist) break;
+                }
+                if (examined >= ExamineCap) { capped = true; break; }
+
+                foreach (var pos in RingCells(near, ring))
+                {
+                    if (++examined > ExamineCap) { capped = true; break; }
+                    if (!pos.InBounds(map)) { Tally(rejected, "out-of-bounds"); continue; }
+
+                    bool placed = false;
+                    for (int i = 0; i < order.Count && !placed; i++)
+                    {
+                        var rot = order[i];
+                        var rect = GenAdj.OccupiedRect(pos, rot, def.Size);
+                        if (rect.minX < 0 || rect.minZ < 0
+                            || rect.maxX >= map.Size.x || rect.maxZ >= map.Size.z)
+                        {
+                            Tally(rejected, "out-of-bounds");
+                            continue;
+                        }
+                        // Fog first and cheaply. The game's own gate tests only
+                        // the CENTRE cell (GenConstruct.CanPlaceBlueprintAt,
+                        // `center.Fogged(map)`), while this file's standing rule
+                        // is that the whole player-facing surface hides
+                        // undiscovered cells — and it short-circuits most of the
+                        // expensive calls in unexplored ground.
+                        bool fogged = false;
+                        foreach (var c in rect) if (c.Fogged(map)) { fogged = true; break; }
+                        if (fogged) { Tally(rejected, "fogged"); continue; }
+
+                        if (wantRoofed || wantUnroofed)
+                        {
+                            bool anyOpen = false, anyRoof = false;
+                            foreach (var c in rect)
+                                if (c.Roofed(map)) anyRoof = true; else anyOpen = true;
+                            if (wantRoofed && anyOpen) { Tally(rejected, "unroofed"); continue; }
+                            if (wantUnroofed && anyRoof) { Tally(rejected, "roofed"); continue; }
+                        }
+
+                        gateCalls++;
+                        var v = SiteGate.Check(map, def, pos, rot, stuff);
+                        if (v.PlaceOk && reachFrom.IsValid && !Reaches(map, def, pos, rot, reachFrom))
+                        {
+                            Tally(rejected, "unreachable");
+                            continue;
+                        }
+                        if (v.PlaceOk)
+                        {
+                            found.Add(new DefCandidate
+                            {
+                                Pos = pos,
+                                Rot = rot,
+                                RotRank = i,
+                                Rect = v.Rect,
+                                Dist = near.DistanceTo(pos),
+                            });
+                            placed = true;
+                            break;
+                        }
+                        // The game's own sentence is the tally key, so
+                        // `rejected` reads as the reasons a player would see.
+                        Tally(rejected, v.PlaceReason ?? "refused");
+                        if (refusals.Count < RefusalCap)
+                            refusals.Add(new Dictionary<string, object>
+                            {
+                                ["pos"] = Positions.Out(pos),
+                                ["rot"] = rot.ToStringWord(),
+                                ["footprint"] = Footprint.Block(v.Rect),
+                                ["reason"] = v.PlaceReason,
+                            });
+                    }
+                }
+                searchedRadius = ring;
+                if (capped) break;
+            }
+            if (ring > MaxRing) capped = true;
+
+            Sort(found);
+            if (found.Count > max) found.RemoveRange(max, found.Count - max);
+            var candidates = new List<object>();
+            foreach (var c in found)
+                candidates.Add(new Dictionary<string, object>
+                {
+                    // The CORNER is the candidate's identity — stable across
+                    // rotations in a way a centre is not. `pos` is the argument
+                    // to pass to build / dev:spawn-thing / site-survey, computed
+                    // the game's way. `center` is deliberately ABSENT in this
+                    // mode: CellRect.CenterCell is not the placement centre for
+                    // an even-sized rect, and a field that looks like the value
+                    // to pass and is off by one exactly where it matters is the
+                    // bench failure this verb was fixed for.
+                    ["at"] = Positions.Out(new IntVec3(c.Rect.minX, 0, c.Rect.minZ)),
+                    ["w"] = c.Rect.Width,
+                    ["h"] = c.Rect.Height,
+                    ["rot"] = c.Rot.ToStringWord(),
+                    ["pos"] = Positions.Out(c.Pos),
+                    ["dist"] = Math.Round(c.Dist, 1),
+                });
+
+            var rotOrder = new List<object>();
+            for (int i = 0; i < order.Count; i++) rotOrder.Add(order[i].ToStringWord());
+
+            return new Dictionary<string, object>
+            {
+                // Present only in def mode, and it is what tells a consumer
+                // which shape it is holding: this mode publishes `pos` and
+                // `refusals`, the size mode publishes `center` and `blockers`.
+                ["mode"] = "def",
+                ["def"] = def.defName,
+                ["stuff"] = stuff?.defName,
+                ["gate"] = SiteGate.GateId,
+                ["rot_given"] = rotGiven,
+                ["rot_order"] = rotOrder,
+                // What `require` was understood to mean, echoed because in def
+                // mode reachable-from tests the INTERACTION cells and not the
+                // rect's centre — a caller must be able to see which question
+                // was answered.
+                ["require"] = new Dictionary<string, object>
+                {
+                    ["reachable_from"] = reachFrom.IsValid ? Positions.Out(reachFrom) : null,
+                    ["reach_target"] = "interaction cells, else the footprint (Touch)",
+                    ["roofed"] = wantRoofed,
+                    ["unroofed"] = wantUnroofed,
+                },
+                // The def-level half of the gate, asked once. `ok:false` here
+                // means the def is not on the architect menu at all, which is
+                // why `candidates` is empty — a different fact from "no room".
+                ["selectable"] = new Dictionary<string, object>
+                {
+                    ["ok"] = selectable,
+                    ["source"] = "Designator_Build.Visible",
+                    ["clause"] = clause,
+                    ["detail"] = detail,
+                },
+                ["candidates"] = candidates,
+                ["examined"] = examined,
+                ["gate_calls"] = gateCalls,
+                ["searched_radius"] = searchedRadius,
+                ["capped"] = capped,
+                ["rejected"] = ToTree(rejected),
+                // A few worked refusals rather than a tally of obstacles. There
+                // is deliberately no per-cell blocker read here: the refusing
+                // cell of a rejected candidate is frequently NOT the cell we
+                // walked (git-bug 8b4839f — a bench refused for granite one row
+                // south reported a wood log on the target), and describing the
+                // walked cell instead is that defect at scale. One `site-survey`
+                // on a candidate gives all three tiers with the right cells.
+                ["refusals"] = refusals,
+                ["refusals_note"] = "per-cell obstacles are site-survey's job — its tiers "
+                                  + "name the cell that actually refused",
+            };
+        }
+
+        // Whether a pawn could get to the cells that USING this thing needs —
+        // its interaction cells, and the footprint itself only for a def that
+        // has none (a wall, a floor, a battery). PassDoors matches CheckRect's
+        // own reachable-from so both modes answer the same question about the
+        // same traversal rules.
+        private static bool Reaches(Map map, BuildableDef def, IntVec3 pos, Rot4 rot, IntVec3 from)
+        {
+            try
+            {
+                var parms = TraverseParms.For(TraverseMode.PassDoors);
+                var cells = SiteVerbs.InteractionCells(def, pos, rot, map);
+                if (cells.Count > 0)
+                {
+                    for (int i = 0; i < cells.Count; i++)
+                        if (!map.reachability.CanReach(from, cells[i], PathEndMode.OnCell, parms))
+                            return false;
+                    return true;
+                }
+                // No interaction cell: "can a pawn get to it at all", which for
+                // a wall or a floor is a question about touching the rect. There
+                // is no CellRect overload of Reachability.CanReach — only
+                // LocalTargetInfo — so the rect is walked and any touchable cell
+                // is enough, which is what PathEndMode.Touch means for the
+                // construction jobs that will build the thing.
+                foreach (var c in GenAdj.OccupiedRect(pos, rot, def.Size))
+                    if (map.reachability.CanReach(from, c, PathEndMode.Touch, parms)) return true;
+                return false;
+            }
+            catch { return false; }
+        }
+
+        private sealed class DefCandidate
+        {
+            public IntVec3 Pos;
+            public Rot4 Rot;
+            public int RotRank;
+            public CellRect Rect;
+            public float Dist;
+        }
+
+        // Nearest first; at equal distance, def.defaultPlacingRot first. The
+        // rotation rank is the tie-break rather than a sort key of its own, so a
+        // caller that does not care gets the game's own preference and a caller
+        // that does reads `rot` off each candidate.
+        private static void Sort(List<DefCandidate> found)
+            => found.Sort((x, y) =>
+            {
+                int c = x.Dist.CompareTo(y.Dist);
+                return c != 0 ? c : x.RotRank.CompareTo(y.RotRank);
+            });
+
+        // def.defaultPlacingRot, then the remaining three in Rot4 order.
+        private static List<Rot4> RotationOrder(BuildableDef def)
+        {
+            var first = def.defaultPlacingRot;
+            var order = new List<Rot4> { first };
+            for (int i = 0; i < Rotations.All.Length; i++)
+                if (Rotations.All[i] != first) order.Add(Rotations.All[i]);
+            return order;
         }
 
         private sealed class Candidate
