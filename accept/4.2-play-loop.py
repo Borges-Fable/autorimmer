@@ -30,8 +30,16 @@ Checks (PASS/FAIL/WARN per check, exit 0 iff no FAIL):
                       any blind-advance refusal FAILs, advancing with zero
                       `journal` ops FAILs (m1-20260831's 27-to-0 shape),
                       re-advancing straight off a casualty halt FAILs, and
-                      every escape (`unread_ok` / `through_casualties`) is
-                      surfaced with its reason for the human gate
+                      every escape (`unread_ok` / `through_casualties` /
+                      `through_news`) is surfaced with its reason for the
+                      human gate
+  advance-wakes       git-bug 280fb78. What the run was WOKEN for — a letter
+                      halt, an alert halt — reported beside the halt tally, plus
+                      a WARN for every `alert_on` a standing `alert-mute`
+                      swallowed. Being woken is the system working, so these are
+                      facts and not failures; the four halt tokens
+                      (letter/alert/casualty/ticks) are what make the tally a
+                      discriminator
   transcript-journal  every journal action/dev verb appears among transcript ops,
                       with journal count <= transcript count per op — minus the
                       lines a composite verb declares via caused_seqs, which are
@@ -157,6 +165,10 @@ def advance_discipline(tr):
     kinds = {}
     problems = []
     escapes = []
+    # git-bug 280fb78: what the run was WOKEN for, and what its standing mutes
+    # swallowed. Reported rather than judged — see the wake block below.
+    wakes = []
+    swallowed = []
     journal_ops = sum(1 for _, op, _, _ in steps if op == "journal")
     n_adv = 0
 
@@ -169,7 +181,11 @@ def advance_discipline(tr):
         # args alone misses an envelope replayed from elsewhere, data alone
         # misses an advance whose result never came back.
         data = (res or {}).get("data") or {}
-        for key in ("unread_ok", "through_casualties"):
+        # git-bug 280fb78 adds `through_news` — the third escape, and the one a
+        # run is most tempted to leave on, because the wake is the noisiest
+        # guard. It is surfaced the same way as the other two: a WARN carrying
+        # the reason, so an opt-out nobody can see in the audit is not spellable.
+        for key in ("unread_ok", "through_casualties", "through_news"):
             why = args.get(key) or data.get(key)
             if why:
                 escapes.append(f"{name}: {key}={why!r}")
@@ -192,6 +208,37 @@ def advance_discipline(tr):
 
         reason = data.get("reason")
         kinds[f"halt:{reason}"] = kinds.get(f"halt:{reason}", 0) + 1
+
+        # ---------------------------------------------- git-bug 280fb78 ------
+        #
+        # THE WAKE, and the tally above is what tells it apart from everything
+        # else: `halt:letter`, `halt:alert`, `halt:casualty` and `halt:ticks`
+        # are four distinct tokens, which is the acceptance bullet this file
+        # carries. What was woken FOR is named here, because "the run woke 14
+        # times today" is a different fact from "the run woke 14 times for the
+        # same muted alert" and only one of them is a problem.
+        #
+        # NOT a FAIL when the next command is another advance, deliberately, and
+        # the restraint is the point: a letter or an alert is a journal event,
+        # so the very next advance is REFUSED `unread-journal` unless the loop
+        # reads or escapes — 722c951's mechanism already forces the response,
+        # and a second FAIL here would double-charge one mistake. What is worth
+        # saying is WHAT woke it, so a post-mortem can see whether the wakes
+        # were worth having.
+        if reason in ("letter", "alert"):
+            halted = data.get("halted_on") or {}
+            what = halted.get("def") or halted.get("id") or "?"
+            armed = halted.get("armed_by")
+            wakes.append(f"{name}: {reason} {what}"
+                         + (f" (asked for: until:{{{reason}}})" if armed == "until" else ""))
+        muted = data.get("muted_alerts") or {}
+        if muted.get("count"):
+            swallowed.append(f"{name}: {muted['count']} alert_on swallowed by "
+                             f"`alert-mute` — {[e.get('id') for e in (muted.get('events') or [])]}")
+        rode = data.get("news_rode_past") or {}
+        if rode.get("count"):
+            escapes.append(f"{name}: through_news rode past {rode['count']} wake(s)")
+
         if reason != "casualty":
             continue
         halted = data.get("halted_on") or {}
@@ -217,6 +264,15 @@ def advance_discipline(tr):
 
     for e in escapes:
         report("WARN", "advance-discipline", "escape used — " + e)
+    # git-bug 280fb78. Not WARNs: being woken is the system working, and a run
+    # that woke ten times in a day and acted on each is the good outcome. These
+    # are the facts a post-mortem wants next to the halt tally.
+    for w in wakes[:20]:
+        report("INFO", "advance-wakes", w)
+    if len(wakes) > 20:
+        report("INFO", "advance-wakes", f"…and {len(wakes) - 20} more wakes")
+    for m in swallowed[:10]:
+        report("WARN", "advance-wakes", "a standing `alert-mute` swallowed a wake — " + m)
 
     tally = ", ".join(f"{k} {v}" for k, v in sorted(kinds.items())) or "none"
     if problems:
@@ -652,6 +708,34 @@ def bleedout_fixture(tr):
         encoding="utf-8")
 
 
+def wake_fixture(tr):
+    """git-bug 280fb78. One advance carrying all three of the new facts: it was
+    WOKEN by an alert, a standing `alert-mute` swallowed two other wakes, and
+    the call declared `through_news`.
+
+    None of the three is a FAIL. Being woken is the system working; a mute is a
+    recorded decision; the escape is legal per call. What is NOT allowed is any
+    of them passing in SILENCE — a run cannot be audited for "did you sleep
+    through the raid" if the audit cannot see what woke it, what it had decided
+    to ignore, and where it turned the wake off."""
+    why = "burning 3 days unattended to reach the caravan window"
+    (tr / "005-advance" / "cmd.json").write_text(json.dumps(
+        {"id": "c5", "op": "advance",
+         "args": {"ticks": 60000, "through_news": why}}), encoding="utf-8")
+    (tr / "005-advance" / "result.json").write_text(json.dumps(
+        {"id": "c5", "op": "advance", "ok": True,
+         "data": {"reason": "alert", "ticks_elapsed": 4120,
+                  "through_news": why,
+                  "halted_on": {"kind": "alert", "armed_by": "default",
+                                "id": "Alert_LowFood", "label": "Low food",
+                                "priority": "High"},
+                  "news_rode_past": {"count": 3, "shown": 3, "events": []},
+                  "muted_alerts": {"count": 2, "shown": 2,
+                                   "events": [{"id": "Alert_NeedWarmClothes"}]}}}),
+        encoding="utf-8")
+    return why
+
+
 def selftest(repo):
     global results
     failures = []
@@ -779,6 +863,46 @@ def selftest(repo):
             if "advance-discipline" in fails:
                 failures.append(f"'{label}' FAILed advance-discipline; it is legal, not a defect")
             print(f"-- '{label}' -> WARN naming {needle!r}: {'ok' if hit else 'MISSED'}\n")
+
+        # ---- git-bug 280fb78: the wake, the mute and the third escape -------
+        #
+        # Same discipline one level out: a wake must be NAMED, a mute that
+        # swallowed a wake must be WARNed, and `through_news` must surface like
+        # the other two escapes. None of them may FAIL the run.
+        print("== selftest: wakes, mutes and through_news must SURFACE ==")
+        for p in (root / "RUNS", root / "transcripts"):
+            if p.exists():
+                import shutil
+                shutil.rmtree(p)
+        run, journal, tr = build_fixture(root, repo)
+        wake_fixture(tr)
+        results = []
+        audit(run, repo, journal, tr)
+        lines = [(s_, c_, d_) for s_, c_, d_ in results]
+        for label, want_status, want_check, needle in [
+            ("the alert that woke the run is NAMED", "INFO", "advance-wakes",
+             "Alert_LowFood"),
+            ("…and the halt reason rides the tally, which is what makes "
+             "letter/alert/casualty/ticks a discriminator", "PASS",
+             "advance-discipline", "halt:alert"),
+            ("a mute that swallowed a wake is WARNed", "WARN", "advance-wakes",
+             "Alert_NeedWarmClothes"),
+            ("`through_news` surfaces like the other two escapes", "WARN",
+             "advance-discipline", "through_news"),
+        ]:
+            hit = any(s_ == want_status and c_ == want_check and needle in d_
+                      for s_, c_, d_ in lines)
+            if not hit:
+                failures.append(
+                    f"280fb78: {label!r} produced no {want_status} {want_check} "
+                    f"naming {needle!r} (saw: {[l for l in lines if l[1].startswith('advance')]})")
+            print(f"-- {label} -> {want_status} {want_check} naming {needle!r}: "
+                  f"{'ok' if hit else 'MISSED'}")
+        fails = {c_ for s_, c_, _ in lines if s_ == "FAIL"}
+        if fails:
+            failures.append(f"280fb78: a wake/mute/escape fixture FAILed {sorted(fails)}; "
+                            "all three are legal, not defects")
+        print("")
 
     if failures:
         print("SELFTEST FAIL:", *failures, sep="\n  ")

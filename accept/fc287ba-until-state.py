@@ -187,6 +187,15 @@ def advance(args=None, **kw):
     a = dict(args or {})
     a.setdefault("unread_ok", ESCAPE)
     a.setdefault("through_casualties", ESCAPE)
+    # git-bug 280fb78: every letter and every `alert_on` now halts an advance
+    # unconditionally. THIS SUITE IS THE ONE MOST EXPOSED TO THAT and it is not
+    # a defect in either change — phase 4 waits ~3,180 ticks for colonists to
+    # build 22 elements and asserts `reason:"layout"`, so any letter or alert
+    # that fires during the build would come back `reason:"letter"` and fail a
+    # check about something else entirely. The wake is not this suite's subject;
+    # `until:{condition}` and `until:{layout}` are. So it is escaped here, per
+    # call and with a stated reason, exactly like the other two.
+    a.setdefault("through_news", ESCAPE)
     return send("advance", a, **kw)
 
 
