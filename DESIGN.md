@@ -1446,3 +1446,86 @@ queue by default (an agent flailing mid-experiment must not page triage).
   would refuse a CORRECT call, which is a worse bug than the one being fixed —
   and `site-survey` reading both `pos` and `at` legitimately is the live proof
   that such overlaps exist. `7382bdd`.
+- 2026-09-01 (session 16) — **`buildable:true` is EXACT-OR-REFUSE and
+  buildings-only, and the erasure it replaces is now on the record.**
+  `dev:spawn-thing {buildable:true}` calls `SiteGate` and honours both halves,
+  which is what the acceptance's unresearched-def bullet asks for. Two things
+  fell out of wiring it. (1) **`mode:"near"` is REFUSED under
+  `buildable:true`.** `GenPlace.TryPlaceThing`'s radial search gates every
+  candidate on `GenSpawn.CanSpawnAt` and can land the building on a cell the
+  blueprint gate never saw, so the envelope would carry a verdict about one cell
+  and a building on another — `acee526`'s whole subject, reintroduced by the verb
+  that exists to close it. `buildable` implies `mode:"direct"`; passing
+  `mode:"near"` with it is `bad-args`. (2) **`canWipeEdifices` is not "not
+  passed" on the buildable path, it does not EXIST there.** It is a parameter of
+  `GenSpawn.CanSpawnAt`, and the buildable path never calls that member;
+  occupancy is decided per occupant by `GenConstruct.CanPlaceBlueprintOver`,
+  which is the rule a colonist's blueprint is held to. The issue's wording ("does
+  not pass it") reads as a flag being withheld; there is no flag.
+  And `wiped[]` is **PREDICTED, THEN CONFIRMED** (`WipeWatch`): candidates from
+  `GenSpawn.SpawningWipes(newDef, oldDef)` called exactly as
+  `WipeExistingThings` calls it, rows built BEFORE the spawn because
+  `Blockers.Describe` reads `PositionHeld`, and a row published only for a
+  candidate that is `Destroyed` afterwards. Prediction alone would be a second
+  implementation of the game's rule; confirmation alone cannot name what went.
+  It also makes `VanishOrMoveAside`'s first half honest — `CheckMoveItemsAside`
+  RELOCATES items, so a moved item is not reported wiped and one whose
+  relocation failed is. The list is on the RESULT and in the JOURNAL ROW, which
+  is M1 finding A's lesson (the response is thrown away, the row is forever).
+  `3a5ff6c`.
+- 2026-09-01 (session 16) — **`dev:starter-kit` needed one call per building
+  unit, not `mode:"direct"`, and `mode:"direct"` alone would have been a
+  REGRESSION.** `3a5ff6c` item 3 asks the kit to pass `mode:"direct"` for
+  buildings, to fix M1's `placed: 0` research bench (the kit passed no `mode`, so
+  a building took `ThingPlaceMode.Near` and reported nothing when the radial
+  search came back full). Done literally, it breaks the `medical` preset:
+  `count: 2` runs `dev:spawn-thing`'s stack loop twice against ONE target cell,
+  and `GenSpawn.SpawningWipes(Bed, Bed)` is true for two edifices, so the second
+  bed VANISHES the first while the envelope still says `placed: 2`. Near was
+  hiding that by scattering. So the kit issues one `dev:spawn-thing` per unit
+  with its own `pos`, chosen by a ring walk from the anchor that skips any cell
+  an earlier unit's `OccupiedRect` already claimed and asks the SAME gate the
+  caller asked for (`SiteGate` when `buildable:true`, `CanSpawnAt` otherwise —
+  choosing against a different predicate than the spawn will use would make the
+  kit report refusals it had chosen itself). When the walk finds nothing it hands
+  the anchor over anyway and lets the verb refuse it: the game's own sentence,
+  the refusing cell and a journal row beat anything the kit could invent, and a
+  silent `placed: 0` is precisely M1 finding A. Items are untouched — `Near` is
+  right for a stack that merges into storage. `3a5ff6c`.
+- 2026-09-01 (session 16) — **The two fixture spawn routes honour the GROUND half
+  of the gate and REPORT the widget half; `dev:spawn-thing {buildable:true}`
+  honours both.** `3a5ff6c` item 3 says `world-fixture`'s `bench` step and
+  `JournalVerbs.SpawnPlayerBuilding` adopt "the same helper with `buildable:true`
+  semantics". Taken as both halves it deletes a working fixture to enforce a rule
+  about a menu: `journal-selftest`'s `power` step lays `PowerConduit`, which
+  carries a research prerequisite of Electricity, and it runs on FRESH quicktest
+  maps — that grid is what `digest.power` is tested against. So `FixtureSite`
+  refuses on `GenConstruct.CanPlaceBlueprintAt`, which is about the ground and is
+  the hole the issue is actually about (both routes previously had NO validator
+  at all — not even the `CanSpawnAt` `dev:spawn-thing` uses, so the bench step
+  could stage a butcher table whose interaction cell was in a wall), and
+  publishes `Designator_Build.Visible`'s answer as `selectable` on every call
+  without acting on it. The asymmetry is the same one `SiteGate`'s header argues
+  for: "the ground refuses this" and "this is not on the architect menu" are
+  different news, and only the first is a claim about buildability.
+  `dev:spawn-thing {buildable:true}` keeps both halves because its own acceptance
+  names the unresearched-def refusal and because it is a verb an agent calls
+  rather than a fixture's private helper. `3a5ff6c`.
+- 2026-09-01 (session 16) — **`site-audit` reports two numbers because a hit and
+  an unselectable are different findings, and it carries its own disclaimer in
+  the envelope.** `hits` is `CanPlaceBlueprintAt`'s refusals with the building
+  itself passed as BOTH `thingToIgnore` and `thing` — the pair
+  `Designator_Install.CanDesignateCell` passes for a reinstall, and without it
+  every building refuses itself with `IdenticalThingExists`. `unselectable` is
+  the widget half and is NOT a hit: an unresearched or now-forbidden building on
+  a played map is ordinary, and folding it in would make the count useless. Fog
+  is EXEMPT by default because `CanPlaceBlueprintAt`'s second clause is
+  `center.Fogged(map)`, so every unexplored ancient ruin would otherwise be a
+  hit; the flag and the skipped count are both published. `heuristic` rides in
+  the result as a sentence — a real game reaches states the validator now refuses
+  (a roof built over a solar panel later, an item hauled onto an interaction
+  spot) — so a suite cannot quote `hit_count` without it. Frames are dropped by
+  name: `ThingDef.IsBuildingArtificial` is `category == Building || IsFrame`, so
+  `ThingRequestGroup.BuildingArtificial` includes them, and a build in progress
+  belongs to `construction` rather than to an audit of what is standing.
+  `3a5ff6c`.

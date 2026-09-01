@@ -98,14 +98,21 @@ namespace AutoRimmer
             var def = ThingDefOf.TableButcher;
             var anchor = Anchor(map);
             var rect = FindClearRect(map, anchor, Math.Max(1, def.size.x) + 1, Math.Max(1, def.size.z) + 1);
-            var thing = ThingMaker.MakeThing(def, GenStuff.DefaultStuffFor(def));
-            thing.SetFactionDirect(Faction.OfPlayer);
-            var spawned = GenSpawn.Spawn(thing, rect.CenterCell, map, Rot4.North, WipeMode.Vanish);
+            // THE GATE, which this step had none of (git-bug 3a5ff6c item 3).
+            // `FindClearRect` walks cells; a butcher table has a footprint AND an
+            // interaction cell, and neither the rect search nor the bare
+            // GenSpawn.Spawn that followed it knew that. FixtureSite runs
+            // GenConstruct.CanPlaceBlueprintAt and refuses rather than staging a
+            // bench no colonist could have built — see its header for why the
+            // widget half is reported and not honoured here.
+            var spawned = FixtureSite.Spawn(map, def, GenStuff.DefaultStuffFor(def),
+                rect.CenterCell, Rot4.North, "world-fixture bench", out var gate);
             extras["bench"] = new Dictionary<string, object>
             {
                 ["id"] = spawned.thingIDNumber,
                 ["def"] = def.defName,
                 ["at"] = Positions.Out(spawned.Position),
+                ["gate"] = gate,
                 // What `bills` must independently report.
                 ["expect_bills"] = 0,
                 ["expect_slots_free"] = 15,

@@ -155,8 +155,8 @@ namespace AutoRimmer
 
         // --------------------------------------------------------------------
         // dev:starter-kit {preset?, at?, stockpile?, items?, extra_items?,
-        //                  pawns?, research?, unfog?, forbid?, save_as?,
-        //                  dry_run?}
+        //                  pawns?, research?, unfog?, forbid?, buildable?,
+        //                  save_as?, dry_run?}
         // --------------------------------------------------------------------
         [Verb("dev:starter-kit")]
         public static object Kit(VerbContext ctx)
@@ -182,6 +182,14 @@ namespace AutoRimmer
             // is named in the plan either way so a dry run says which fiction is
             // in force.
             bool forbidItems = a.Bool("forbid", true);
+            // Forwarded to every BUILDING this kit stages, and to nothing else
+            // (git-bug 3a5ff6c item 3). Default false, exactly as
+            // `dev:spawn-thing`'s is: the kit is a god-hand and Evan's ruling of
+            // 2026-09-01 keeps it one. The flag exists so a fixture that has to
+            // be defensibly buildable — an M2 rehearsal, anything `site-audit`
+            // will later be pointed at — can ask for the real gate in one word
+            // instead of restaging item by item.
+            bool buildableItems = a.Bool("buildable", false);
 
             // --- resolve the plan BEFORE mutating anything -------------------
             // A kit that spawns four of six items and then fails on a typo has
@@ -218,6 +226,7 @@ namespace AutoRimmer
                 ["at"] = at,
                 ["stockpile"] = stockpile,
                 ["forbid"] = forbidItems,
+                ["buildable"] = buildableItems,
                 ["forbid_note"] = forbidItems
                     ? "items land FORBIDDEN, mimicking ScenPart_PlayerPawnsArriveMethod.DoDropPods' "
                         + "forbid:true — clear them with the `unforbid` verb, as a player would"
@@ -274,23 +283,52 @@ namespace AutoRimmer
                 var placed = new List<object>();
                 foreach (var item in items)
                 {
-                    var args = new Dictionary<string, object>
+                    var itemDef = DefDatabase<ThingDef>.GetNamedSilentFail(item.Def);
+                    // A BUILDING TAKES THE EXACT-CELL PATH, ONE UNIT AT A TIME,
+                    // and this is M1 finding A fixed at its source (git-bug
+                    // 3a5ff6c item 3). The kit passed no `mode`, so a building
+                    // took `dev:spawn-thing`'s default — `ThingPlaceMode.Near`,
+                    // GenPlace's radial search — which gates every candidate on
+                    // GenSpawn.CanSpawnAt and reported `placed: 0` for the M1
+                    // research bench when the whole disc came back refused. A
+                    // building has a footprint and an interaction cell;
+                    // "somewhere near here" is not a placement for one.
+                    //
+                    // ONE CALL PER UNIT, WITH ITS OWN CELL, because `mode:direct`
+                    // alone would be a REGRESSION: `count:2` runs this verb's
+                    // stack loop twice against one target, and
+                    // `GenSpawn.SpawningWipes(Bed, Bed)` is true for two
+                    // edifices, so the second bed of the `medical` preset would
+                    // VANISH the first and the envelope would still say
+                    // `placed: 2`. Near happened to hide that by scattering.
+                    //
+                    // ITEMS ARE UNTOUCHED, deliberately: `Near` is right for a
+                    // stack (it merges into storage, which is the whole reason
+                    // `stockpile` exists) and every shipped suite stages items
+                    // through it.
+                    bool isBuilding = itemDef != null && itemDef.category == ThingCategory.Building;
+                    if (isBuilding)
                     {
-                        ["def"] = item.Def,
-                        ["count"] = (double)item.Count,
-                    };
-                    if (item.Stuff != null) args["stuff"] = item.Stuff;
-                    if (item.Quality != null) args["quality"] = item.Quality;
-                    if (at != null) args["pos"] = at;
-                    if (!(stockpile is bool sb && !sb)) args["stockpile"] = stockpile;
-                    // The arrival flag, applied by the handler that holds the
-                    // Thing reference. dev:* bypasses the player gate by
-                    // design (DESIGN §Action model) — but this particular write
-                    // does NOT bypass it: Dev.Forbid asks
-                    // Designator_Forbid.CanDesignateThing's own predicate first,
-                    // so the shipped `unforbid` verb can always undo it.
-                    if (forbidItems) args["forbid"] = true;
-                    var res = Collect(DevVerbs.SpawnThing(Sub(ctx, args)), seqs);
+                        var sites = BuildingSites(map, itemDef, item, at, buildableItems);
+                        for (int u = 0; u < sites.Count; u++)
+                        {
+                            var args = BaseItemArgs(item, forbidItems);
+                            args["count"] = 1d;
+                            args["pos"] = Positions.Out(sites[u]);
+                            args["mode"] = "direct";
+                            if (buildableItems) args["buildable"] = true;
+                            var one = Collect(DevVerbs.SpawnThing(Sub(ctx, args)), seqs);
+                            tally.Accrue(one);
+                            placed.Add(one);
+                        }
+                        continue;
+                    }
+
+                    var itemArgs = BaseItemArgs(item, forbidItems);
+                    itemArgs["count"] = (double)item.Count;
+                    if (at != null) itemArgs["pos"] = at;
+                    if (!(stockpile is bool sb && !sb)) itemArgs["stockpile"] = stockpile;
+                    var res = Collect(DevVerbs.SpawnThing(Sub(ctx, itemArgs)), seqs);
                     tally.Accrue(res);
                     placed.Add(res);
                 }
@@ -434,6 +472,92 @@ namespace AutoRimmer
                         + "forbiddable — MinifiedThing is an Item and does carry the comp";
                 return d;
             }
+        }
+
+        // The arguments every item shares, whichever placement path it takes.
+        // `forbid` is applied by the handler that holds the Thing reference;
+        // dev:* bypasses the player gate by design (DESIGN §Action model) but
+        // this particular write does NOT — Dev.Forbid asks
+        // Designator_Forbid.CanDesignateThing's own predicate first, so the
+        // shipped `unforbid` verb can always undo it.
+        private static Dictionary<string, object> BaseItemArgs(Item item, bool forbidItems)
+        {
+            var args = new Dictionary<string, object> { ["def"] = item.Def };
+            if (item.Stuff != null) args["stuff"] = item.Stuff;
+            if (item.Quality != null) args["quality"] = item.Quality;
+            if (forbidItems) args["forbid"] = true;
+            return args;
+        }
+
+        // ONE CELL PER BUILDING UNIT, non-overlapping, nearest first.
+        //
+        // A ring walk out from the anchor, taking the first cell whose FOOTPRINT
+        // (GenAdj.OccupiedRect at dev:spawn-thing's own default Rot4.North —
+        // Verse/DebugThingPlaceHelper.DebugSpawn's rotation, and this kit calls
+        // that verb) clears the gate the caller asked for and does not touch a
+        // cell an earlier unit of this same kit already claimed. `count` cells
+        // for `count` units.
+        //
+        // THE GATE IS THE CALLER'S CHOICE and is asked HERE only to CHOOSE; the
+        // spawn that follows asks it again for real, and its answer is the one in
+        // the envelope. Two calls to one predicate is the cost of not
+        // reimplementing placement (this file's REUSE-NOT-REIMPLEMENTATION rule)
+        // — and asking `SiteGate` here rather than `CanSpawnAt` when
+        // `buildable:true` matters, because otherwise the search would hand the
+        // spawn a cell the blueprint gate is about to refuse and the kit would
+        // report a refusal it had chosen itself.
+        //
+        // ALWAYS RETURNS `count` CELLS. When the walk finds nothing it yields the
+        // anchor and lets `dev:spawn-thing` refuse it — with the game's own
+        // sentence, the refusing cell and a journal row, which is a better record
+        // than anything this method could invent, and is what M1 finding A was
+        // about (`placed: 0` with no reason anywhere).
+        private static List<IntVec3> BuildingSites(Map map, ThingDef def, Item item,
+            object at, bool buildable)
+        {
+            var anchor = at != null ? Positions.Resolve(map, at) : Dev.Anchor(map);
+            var rot = Rot4.North;
+            ThingDef stuff = null;
+            if (buildable)
+            {
+                // Same resolution dev:spawn-thing will do, minus its `random`
+                // option: a site chosen against one stuff and spawned with
+                // another is a different terrain-affordance question
+                // (BuildableDef.GetTerrainAffordanceNeed reads stuff).
+                try { stuff = SiteVerbs.ResolveStuff(def, item.Stuff == "random" ? null : item.Stuff); }
+                catch { stuff = null; }
+            }
+            int want = Math.Max(1, item.Count);
+            var sites = new List<IntVec3>();
+            var claimed = new HashSet<IntVec3>();
+            for (int ring = 0; ring < 40 && sites.Count < want; ring++)
+            {
+                for (int dx = -ring; dx <= ring && sites.Count < want; dx++)
+                    for (int dz = -ring; dz <= ring && sites.Count < want; dz++)
+                    {
+                        if (Math.Max(Math.Abs(dx), Math.Abs(dz)) != ring) continue;
+                        var c = new IntVec3(anchor.x + dx, 0, anchor.z + dz);
+                        if (!c.InBounds(map)) continue;
+                        var rect = GenAdj.OccupiedRect(c, rot, def.Size);
+                        if (!rect.InBounds(map)) continue;
+                        bool clash = false;
+                        foreach (var cell in rect) if (claimed.Contains(cell)) { clash = true; break; }
+                        if (clash) continue;
+                        bool ok;
+                        try
+                        {
+                            ok = buildable
+                                ? SiteGate.Check(map, def, c, rot, stuff).Ok
+                                : GenSpawn.CanSpawnAt(def, c, map, rot, canWipeEdifices: true);
+                        }
+                        catch { ok = false; }
+                        if (!ok) continue;
+                        sites.Add(c);
+                        foreach (var cell in rect) claimed.Add(cell);
+                    }
+            }
+            while (sites.Count < want) sites.Add(anchor);
+            return sites;
         }
 
         // A sub-context for a nested verb call. Same command id and args

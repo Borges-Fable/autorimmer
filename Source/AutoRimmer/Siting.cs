@@ -203,7 +203,19 @@ namespace AutoRimmer
         // were asked about. Never throws: a third-party PlaceWorker is
         // arbitrary code and a refusal that says "a PlaceWorker threw" is worth
         // more than an exception envelope with no verdict in it.
-        public static SiteVerdict Check(Map map, BuildableDef def, IntVec3 pos, Rot4 rot, ThingDef stuff)
+        //
+        // `existing` is the thing the caller is asking ABOUT rather than in
+        // addition to, and it reaches BOTH of CanPlaceBlueprintAt's slots:
+        // `thingToIgnore`, which the identical-thing loop, the occupancy scan,
+        // the two interaction rules and CanBuildOnTerrain all skip, and `thing`,
+        // which PlaceWorker.AllowsPlacing receives. Null for a placement (there
+        // is nothing there yet); non-null for `site-audit`, which asks "would
+        // this building be allowed HERE" of a building that is already there and
+        // would otherwise refuse itself with IdenticalThingExists. It is the
+        // same pair Designator_Install passes for a reinstall
+        // (RimWorld/Designator_Install.CanDesignateCell).
+        public static SiteVerdict Check(Map map, BuildableDef def, IntVec3 pos, Rot4 rot, ThingDef stuff,
+            Thing existing = null)
         {
             var v = new SiteVerdict
             {
@@ -224,7 +236,7 @@ namespace AutoRimmer
                 // DevVerbs.WhyNoSpawn — this gate is the blueprint path and
                 // does pass it).
                 var report = GenConstruct.CanPlaceBlueprintAt(def, pos, rot, map,
-                    godMode: false, stuffDef: stuff);
+                    godMode: false, thingToIgnore: existing, thing: existing, stuffDef: stuff);
                 v.PlaceOk = report.Accepted;
                 v.PlaceReason = report.Accepted ? null
                     : (string.IsNullOrEmpty(report.Reason)
@@ -498,6 +510,154 @@ namespace AutoRimmer
             // it is never acted on — see SiteGate.Check.
             if (GodMode) d["god_mode_on"] = true;
             return d;
+        }
+    }
+
+    // ============================================================ WipeWatch ==
+    // WHAT A PLACEMENT IS ABOUT TO ERASE, and then what it actually did.
+    //
+    // WHY IT EXISTS (git-bug 3a5ff6c). Every `WipeMode` other than none ends in
+    // `Verse/GenSpawn.WipeExistingThings`, which is
+    // `item2.Destroy(DestroyMode.Vanish)` over every occupant of the occupied
+    // rect that `GenSpawn.SpawningWipes` names — a player wall, a natural rock
+    // wall, another building — with no refund, no deconstruct job, and until now
+    // nothing anywhere saying what had gone. `dev:spawn-thing --mode direct`
+    // takes that path on purpose (`WipeMode.VanishOrMoveAside`, plus
+    // `canWipeEdifices:true` on the gate that precedes it), so the erasure is
+    // intended; what was missing is the RECORD. On the session-15 bench pass
+    // every spawn reported nothing wiped, because nothing was placed onto an
+    // occupied cell — the path was live and completely unexercised.
+    //
+    // PREDICTED, THEN CONFIRMED, because a prediction on its own would be a
+    // second implementation of the game's rule and would drift from it. The
+    // candidates come from vanilla's own predicate, called the way
+    // `WipeExistingThings` calls it (`SpawningWipes(newDef, oldDef)` with the
+    // default `ignoreDestroyable:false`); a row is published only for a
+    // candidate that is `Destroyed` when the spawn returns. That is also what
+    // keeps `VanishOrMoveAside`'s FIRST half honest: `CheckMoveItemsAside`
+    // RELOCATES items rather than destroying them, so a moved item is not
+    // reported as wiped — and one whose relocation failed (GenPlace found
+    // nowhere, then `Destroy()`) is, which is the case worth seeing.
+    //
+    // The rows are built BEFORE the spawn deliberately: `Blockers.Describe`
+    // reads `Thing.PositionHeld`, which for a moved-aside item is no longer the
+    // cell it was erased from, and for a destroyed thing is not worth reading
+    // at all.
+    public sealed class WipeWatch
+    {
+        // A footprint is at most a few dozen cells and each holds a handful of
+        // things, but a stockpile cell can hold a lot; the cap is here so the
+        // journal row this feeds cannot grow without bound.
+        private const int Cap = 40;
+
+        private readonly List<Thing> candidates = new List<Thing>();
+        private readonly List<Dictionary<string, object>> rows = new List<Dictionary<string, object>>();
+        private int skipped;
+
+        public static WipeWatch Before(Map map, BuildableDef def, IntVec3 pos, Rot4 rot)
+        {
+            var w = new WipeWatch();
+            try
+            {
+                foreach (var c in GenAdj.CellsOccupiedBy(pos, rot, def.Size))
+                {
+                    if (!c.InBounds(map)) continue;
+                    var list = map.thingGrid.ThingsListAtFast(c);
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        var t = list[i];
+                        if (t?.def == null) continue;
+                        if (!GenSpawn.SpawningWipes(def, t.def)) continue;
+                        if (w.candidates.Contains(t)) continue;   // multi-cell occupant
+                        if (w.rows.Count >= Cap) { w.skipped++; continue; }
+                        w.candidates.Add(t);
+                        w.rows.Add(Blockers.Describe(t));
+                    }
+                }
+            }
+            catch { }
+            return w;
+        }
+
+        // The candidates that really went. `removal` on each row is
+        // Blockers.cs's answer to how a PLAYER would have had to clear it, which
+        // is the point: "the god-hand vanished a wall you would have had to
+        // deconstruct" and "it vanished a rock you would have had to mine" are
+        // different facts about the fixture that was just staged.
+        public List<object> Destroyed()
+        {
+            var outRows = new List<object>();
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                bool gone = true;
+                try { gone = candidates[i].Destroyed; } catch { }
+                if (gone) outRows.Add(rows[i]);
+            }
+            return outRows;
+        }
+
+        // Candidates the cap dropped, so an empty-looking list is never mistaken
+        // for a complete one.
+        public int Skipped => skipped;
+    }
+
+    // ========================================================== FixtureSite ==
+    // THE ONE ROUTE THE FIXTURE VERBS SPAWN A PLAYER BUILDING THROUGH.
+    //
+    // `3a5ff6c` item 3: `world-fixture`'s `bench` step and
+    // `JournalVerbs.SpawnPlayerBuilding` both did
+    // `ThingMaker.MakeThing` -> `SetFactionDirect` -> `GenSpawn.Spawn(...,
+    // WipeMode.Vanish)` with NO GATE AT ALL — not even `CanSpawnAt`, which is
+    // the one `dev:spawn-thing` uses. They exist to build player-REALISTIC
+    // fixtures, so a refusal there is a fixture bug worth seeing rather than a
+    // thing to route around, and it is raised as `bad-args` with the game's own
+    // sentence and the refusing cell in it.
+    //
+    // ONE HALF OF THE GATE IS FATAL AND THE OTHER IS A FACT, and that split is a
+    // resolution rather than an omission (session 16, recorded in DESIGN and on
+    // 3a5ff6c). `CanPlaceBlueprintAt` is about THE GROUND, which is what "a
+    // state no colonist could have built" means and what these fixtures were
+    // silently violating, so it refuses. `Designator_Build.Visible` is about the
+    // ARCHITECT MENU, and a fixture whose whole job is to stage a state the
+    // colony reaches LATER legitimately builds things it has not researched —
+    // `journal-selftest`'s `power` step lays PowerConduit on a fresh map, where
+    // Electricity is unresearched, which is exactly the grid `digest.power` is
+    // tested against. Honouring the widget half here would delete that fixture
+    // to enforce a rule about a menu. It is published as `selectable` on every
+    // call so nothing is hidden.
+    //
+    // `dev:spawn-thing {buildable:true}` is NOT this: it honours both halves,
+    // because its acceptance names the unresearched-def refusal explicitly and
+    // because it is the verb an agent calls, not a fixture's private helper.
+    public static class FixtureSite
+    {
+        public static Thing Spawn(Map map, ThingDef def, ThingDef stuff, IntVec3 pos, Rot4 rot,
+            string who, out Dictionary<string, object> gate)
+        {
+            var verdict = SiteGate.Check(map, def, pos, rot, stuff);
+            gate = verdict.Out();
+            if (!verdict.PlaceOk)
+            {
+                var row = SiteVerbs.FirstRefusingRow(map, def, stuff, pos, rot);
+                string where = row != null && row["at"] is List<object> cell && cell.Count == 2
+                    ? " (the cell that refused is " + cell[0] + "," + cell[1] + ")"
+                    : "";
+                throw new VerbArgsException(
+                    who + " cannot place " + def.defName + " at " + pos.x + "," + pos.z
+                    + " facing " + rot.ToStringWord() + ": " + verdict.PlaceReason + where
+                    + ". This is the blueprint gate a colonist would have been held to; the fixture "
+                    + "asked for a site the game refuses.");
+            }
+            var thing = ThingMaker.MakeThing(def, stuff);
+            // BEFORE the spawn, the game's own dev-spawn route: power nets,
+            // BillGiver and Building.DeconstructibleBy all key on the faction,
+            // and a building that is nobody's for one tick is a different fixture.
+            thing.SetFactionDirect(Faction.OfPlayer);
+            var watch = WipeWatch.Before(map, def, pos, rot);
+            var spawned = GenSpawn.Spawn(thing, pos, map, rot, WipeMode.Vanish);
+            gate["wiped"] = watch.Destroyed();
+            if (watch.Skipped > 0) gate["wiped_more"] = watch.Skipped;
+            return spawned;
         }
     }
 }

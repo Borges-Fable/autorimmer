@@ -226,7 +226,236 @@ namespace AutoRimmer
             return data;
         }
 
+        // ========================================================= audit ====
+        // `site-audit {rect?|around?+radius?, faction?, fog_exempt?}` — A READ,
+        // and the answer to "is this base a state a colonist could have built".
+        //
+        // WHY IT EXISTS (git-bug 3a5ff6c). Four routes stage buildings past the
+        // blueprint validator — `dev:spawn-thing` on its god-hand default,
+        // `dev:starter-kit`, `world-fixture`'s bench step and
+        // `JournalVerbs.SpawnPlayerBuilding` — and `Verse/GenSpawn.CanSpawnAt`,
+        // which is the only gate any of them ever consulted, runs NO PlaceWorker
+        // at all. Proven live on the session-15 bench: `site-survey` refused a
+        // second research bench for `InteractionSpotOverlaps` and
+        // `dev:spawn-thing --mode direct` placed it anyway, leaving two benches
+        // fighting over one standing square. So every dev-staged building is an
+        // untested claim about what 3.3's blueprint mode could have produced, and
+        // this verb is how the claim gets tested: re-run `SiteGate` over every
+        // player building in a rect with the building itself ignored, and list
+        // the ones the gate would refuse.
+        //
+        // IT IS A HEURISTIC AND SAYS SO IN ITS OWN RESULT. A real game reaches
+        // states the validator now refuses without anybody cheating: a roof
+        // built over a solar panel later, an item hauled onto an interaction
+        // spot, a wall grown around a door. A hit means CHECK THIS, never
+        // "this is fake" — and `heuristic` carries that sentence in the envelope
+        // so a suite cannot quote the count without it.
+        //
+        // TWO HALVES, KEPT APART, for the reason SiteGate keeps them apart.
+        // `hits` is the PLACEMENT half (`CanPlaceBlueprintAt`), which is about
+        // the ground and is the thing this issue is about. `unselectable` is the
+        // WIDGET half (`Designator_Build.Visible`) and is NOT a hit: a building
+        // whose research is no longer available, or which a difficulty setting
+        // now forbids, is a perfectly ordinary thing to find on a map that has
+        // been played, and folding it into the same count would make the number
+        // useless. Both are published; only one is a finding.
+        [Verb("site-audit")]
+        public static object Audit(VerbContext ctx)
+        {
+            var map = Find.CurrentMap ?? throw new VerbArgsException("no current map");
+            var a = ctx.Args;
+
+            CellRect rect;
+            string rectSource;
+            if (a.Has("rect"))
+            {
+                if (!(a.Raw("rect") is List<object> r) || r.Count != 4
+                    || !(r[0] is double rx) || !(r[1] is double rz)
+                    || !(r[2] is double rw) || !(r[3] is double rh))
+                    throw new VerbArgsException("rect must be [x,z,w,h]");
+                rect = new CellRect((int)rx, (int)rz, Math.Max(1, (int)rw), Math.Max(1, (int)rh));
+                rectSource = "rect";
+            }
+            else if (a.Has("around"))
+            {
+                var around = Positions.Resolve(map, a.Raw("around"));
+                int radius = a.Int("radius", 12);
+                if (radius < 1 || radius > 200) throw new VerbArgsException("radius must be 1..200");
+                rect = CellRect.CenteredOn(around, radius);
+                rectSource = "around";
+            }
+            else
+            {
+                rect = CellRect.WholeMap(map);
+                rectSource = "whole-map";
+            }
+            rect = rect.ClipInsideMap(map);
+
+            // "any" is spelled out rather than left to Dev.FactionArg, whose
+            // vocabulary has no word for "do not filter". The default is the
+            // player because that is what a fixture stages and what 3.3's
+            // instant mode will produce; a mechanoid cluster or an ancient
+            // danger was placed by mapgen and was never claimed to be buildable.
+            string factionArg = a.Str("faction", "player");
+            Faction faction = null;
+            bool anyFaction = factionArg == "any";
+            if (!anyFaction) faction = Dev.FactionArg(factionArg);
+
+            // Fog is EXEMPT by default, and that is not laziness:
+            // CanPlaceBlueprintAt's second clause is `center.Fogged(map)` ->
+            // "CannotPlaceInUndiscovered", so every building the colony has not
+            // explored would be a hit and the list would be mostly ancient
+            // ruins. `fog_exempt:false` includes them and the count of what was
+            // skipped is published either way.
+            bool fogExempt = a.Bool("fog_exempt", true);
+            int cap = a.Int("cap", 400);
+            if (cap < 1 || cap > 5000) throw new VerbArgsException("cap must be 1..5000");
+            int hitsCap = a.Int("hits_cap", 60);
+            if (hitsCap < 1 || hitsCap > 500) throw new VerbArgsException("hits_cap must be 1..500");
+
+            // ThingsInGroup(BuildingArtificial) returns the map's own stored
+            // list, so it is snapshotted rather than iterated: SiteGate reaches
+            // PlaceWorkers, which is arbitrary third-party code for a modded def.
+            var buildings = new List<Thing>();
+            try { buildings.AddRange(map.listerThings.ThingsInGroup(ThingRequestGroup.BuildingArtificial)); }
+            catch { }
+            buildings.Sort((x, y) => x.thingIDNumber.CompareTo(y.thingIDNumber));
+
+            var hits = new List<object>();
+            var unselectable = new List<object>();
+            int scanned = 0, skippedFogged = 0, skippedFaction = 0, skippedOutside = 0;
+            int hitCount = 0, unselectableCount = 0, examinedCapHit = 0;
+
+            for (int i = 0; i < buildings.Count; i++)
+            {
+                var t = buildings[i];
+                if (t?.def == null || !t.Spawned) continue;
+                if (!rect.Contains(t.Position)) { skippedOutside++; continue; }
+                if (!anyFaction && t.Faction != faction) { skippedFaction++; continue; }
+                // A Frame or a Blueprint is not a placed building — it is a
+                // build IN PROGRESS, and `construction` is the verb that reads
+                // those. BuildingArtificial excludes blueprints but INCLUDES
+                // frames (Verse/ThingRequestGroup), so the frame case is dropped
+                // here by name rather than left to look like a clean audit.
+                if (t.def.IsFrame || t.def.IsBlueprint) continue;
+                if (t.Position.Fogged(map))
+                {
+                    skippedFogged++;
+                    if (fogExempt) continue;
+                }
+                if (scanned >= cap) { examinedCapHit++; continue; }
+                scanned++;
+
+                var verdict = SiteGate.Check(map, t.def, t.Position, t.Rotation, t.Stuff, existing: t);
+                if (!verdict.PlaceOk)
+                {
+                    hitCount++;
+                    if (hits.Count < hitsCap)
+                    {
+                        var row = FirstRefusingRow(map, t.def, t.Stuff, t.Position, t.Rotation);
+                        hits.Add(new Dictionary<string, object>
+                        {
+                            ["id"] = t.thingIDNumber,
+                            ["def"] = t.def.defName,
+                            ["stuff"] = t.Stuff?.defName,
+                            ["at"] = Positions.Out(t.Position),
+                            ["rot"] = t.Rotation.ToStringWord(),
+                            ["footprint"] = Footprint.Block(verdict.Rect),
+                            ["reason"] = verdict.PlaceReason,
+                            // The refusing cell and its tier, in the shape every
+                            // other refusal in this mod uses. Null when the
+                            // refusal belongs to no cell — see FirstRefusingRow.
+                            ["cell"] = row,
+                            ["tier"] = row != null ? row["role"] : "def",
+                        });
+                    }
+                }
+                if (!verdict.Selectable)
+                {
+                    unselectableCount++;
+                    if (unselectable.Count < hitsCap)
+                        unselectable.Add(new Dictionary<string, object>
+                        {
+                            ["id"] = t.thingIDNumber,
+                            ["def"] = t.def.defName,
+                            ["at"] = Positions.Out(t.Position),
+                            ["clause"] = verdict.SelectableClause,
+                            ["detail"] = verdict.SelectableDetail,
+                        });
+                }
+            }
+
+            return new Dictionary<string, object>
+            {
+                ["gate"] = SiteGate.GateId,
+                ["source"] = "GenConstruct.CanPlaceBlueprintAt(godMode:false, thingToIgnore:self)",
+                ["rect"] = Footprint.Out(rect),
+                ["rect_source"] = rectSource,
+                ["faction"] = anyFaction ? "any" : faction?.Name,
+                ["fog_exempt"] = fogExempt,
+                ["scanned"] = scanned,
+                ["cap"] = cap,
+                ["more"] = examinedCapHit,
+                ["skipped"] = new Dictionary<string, object>
+                {
+                    ["outside_rect"] = skippedOutside,
+                    ["other_faction"] = skippedFaction,
+                    ["fogged"] = skippedFogged,
+                },
+                ["hit_count"] = hitCount,
+                ["hits"] = hits,
+                ["hits_listed"] = hits.Count,
+                ["hits_more"] = Math.Max(0, hitCount - hits.Count),
+                ["unselectable_count"] = unselectableCount,
+                ["unselectable"] = unselectable,
+                ["heuristic"] =
+                    "a hit means CHECK THIS, not 'this is fake': a real game legitimately reaches "
+                    + "states the blueprint validator would now refuse (a roof built over a solar "
+                    + "panel later, an item hauled onto an interaction spot). `unselectable` is the "
+                    + "widget half and is NOT a hit — an unresearched building on a played map is "
+                    + "ordinary.",
+            };
+        }
+
         // ----------------------------------------------------------- tiers --
+
+        // THE FIRST CELL OF THE TWO GATE TIERS THAT REFUSES, in the game's own
+        // order, or null when neither tier objects.
+        //
+        // This is how a placement verb turns `SiteGate`'s verdict — one sentence
+        // about the whole placement — into the failure row shape the rest of the
+        // surface uses: `{at, role, ok, reason, blocker}`, the same rows
+        // `site-survey` publishes, so a refusal from `build` or from
+        // `dev:spawn-thing {buildable:true}` reads exactly like the survey that
+        // would have predicted it (git-bug c718e4a's acceptance).
+        //
+        // NULL IS A REAL ANSWER AND NOT A FAILURE. `CanPlaceBlueprintAt` refuses
+        // for things no cell owns — a PlaceWorker rule about the placement as a
+        // whole, a MonumentMarker collision, a TerrainDef already on the ground —
+        // and inventing a cell for those would be git-bug 8b4839f's defect
+        // (a refusal describing something other than what refused) reintroduced
+        // one verb over. The caller publishes the target as the locus instead and
+        // says the tier is the def's, not a cell's.
+        internal static Dictionary<string, object> FirstRefusingRow(Map map, BuildableDef def,
+            ThingDef stuff, IntVec3 pos, Rot4 rot)
+        {
+            try
+            {
+                foreach (var c in GenAdj.OccupiedRect(pos, rot, def.Size))
+                {
+                    var row = FootprintRow(map, def, stuff, c);
+                    if (!(bool)row["ok"]) return row;
+                }
+                var cells = InteractionCells(def, pos, rot, map);
+                for (int i = 0; i < cells.Count; i++)
+                {
+                    var row = InteractionRow(map, def, pos, rot, cells[i]);
+                    if (!(bool)row["ok"]) return row;
+                }
+            }
+            catch { }
+            return null;
+        }
 
         // One footprint cell, tested the way RimWorld/GenConstruct.
         // CanPlaceBlueprintAt tests it: bounds, InNoBuildEdgeArea (GenGrid,
