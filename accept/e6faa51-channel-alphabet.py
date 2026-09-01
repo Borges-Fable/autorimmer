@@ -42,26 +42,44 @@ def check(num, what, ok, detail=""):
                                           ("\n           " + detail) if detail else ""))
 
 
-def newest(verb):
-    """The most recent banked envelope for a verb, by transcript directory."""
-    hits = sorted(glob.glob(os.path.join(ROOT, "transcripts", "*", "*-%s" % verb,
-                                         "result.json")))
-    for f in reversed(hits):
+# The envelopes live in `accept/fixtures/` and are TRACKED. The first version of
+# this runner globbed `transcripts/`, which is GITIGNORED — so it passed only on
+# the machine that wrote it, scored 0/2 in a worker's git worktree (correctly
+# reported, and it read like a regression), and would score 0 in a clean clone,
+# while `e6faa51` had already been closed on its evidence. A check whose input
+# is untracked is not a check. See `accept/fixtures/README.md`.
+FIXTURES = {
+    "map-view": "map-view-m1-20260831-124.json",
+    "map-dump": "map-dump-20260831T230213-006.json",
+}
+
+
+def banked(verb):
+    """The tracked envelope for a verb, or a transcripts/ fallback if present."""
+    f = os.path.join(ROOT, "accept", "fixtures", FIXTURES[verb])
+    if os.path.exists(f):
+        d = json.load(open(f))
+        if d.get("ok") and isinstance(d.get("data"), dict):
+            return f, d["data"]
+    # Fallback only, and never the primary route: a live transcript is handy
+    # locally and must not be what the check depends on.
+    for g in reversed(sorted(glob.glob(os.path.join(
+            ROOT, "transcripts", "*", "*-%s" % verb, "result.json")))):
         try:
-            d = json.load(open(f))
+            d = json.load(open(g))
         except ValueError:
             continue
         if d.get("ok") and isinstance(d.get("data"), dict):
-            return f, d["data"]
+            return g, d["data"]
     return None, None
 
 
 def main():
     print("%sChannel identity — banked envelopes, no bench%s" % (YELLOW, OFF))
-    fv, view = newest("map-view")
-    fd, dump = newest("map-dump")
-    check("0.1", "a banked map-view envelope exists", view is not None, "none found")
-    check("0.2", "a banked map-dump envelope exists", dump is not None, "none found")
+    fv, view = banked("map-view")
+    fd, dump = banked("map-dump")
+    check("0.1", "a TRACKED map-view envelope exists", view is not None, "none found")
+    check("0.2", "a TRACKED map-dump envelope exists", dump is not None, "none found")
     if view is None or dump is None:
         print("\n%s%d PASS%s / %s%d FAIL%s" % (GREEN, PASS, OFF, RED, FAIL, OFF))
         return 1

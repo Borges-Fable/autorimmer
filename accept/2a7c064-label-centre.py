@@ -54,13 +54,18 @@ SCALE, OX, OZ, W, H, GX0, GY0 = 20, 0, 0, 40, 40, 0, 0
 TW = TH = 6
 AT = (20, 20)
 
-# Phase 6's input: a real `map-dump` result banked in transcripts/. Chosen
-# because it is the widest one on hand — 213 labels over 51x51, with 1x2, 2x1,
-# 2x2 and 3x2 buildings and East/South/West rotations, so it exercises every
-# branch the constructed cases do and was recorded before any of this was
-# contemplated.
-DUMP = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    "transcripts", "20260831T230213", "006-map-dump", "result.json")
+# Phase 6's input: a real `map-dump` envelope — 213 labels over 51x51, with
+# 1x2, 2x1, 2x2 and 3x2 buildings and East/South/West rotations, recorded by a
+# bench before any of this was contemplated.
+#
+# It lives in `accept/fixtures/`, NOT in `transcripts/`, and that is a
+# correction rather than a preference: `transcripts/` is GITIGNORED, so the
+# first version of this phase passed only on the machine that wrote it. It
+# scored 0 in a worker's git worktree, where the directory does not exist, and
+# would score 0 in any clean clone — while `2a7c064` had already been CLOSED on
+# its evidence. See `accept/fixtures/README.md`.
+DUMP = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                    "fixtures", "map-dump-20260831T230213-006.json")
 
 GREEN, RED, YELLOW, OFF = "\033[32m", "\033[31m", "\033[33m", "\033[0m"
 PASS = FAIL = 0
