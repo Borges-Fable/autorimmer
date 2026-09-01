@@ -1,1 +1,1 @@
-{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":5,"timestamp":1788264860,"nonce":"SZ6IoS3wLbU18NTZ2UCiQpJgklI=","added":null,"removed":["state:backlog"]}]}
+{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":2,"timestamp":1788306398,"nonce":"sB4Zz8YNm1d45O/0z5lJ7ZNwghE=","title":"4.3 M1: thrive-20-days run (rewritten from survive-10-days, 2026-09-01)","was":"4.3 M1: survive-10-days demo run"}]}
