@@ -1100,10 +1100,13 @@ def phase4():
     for defname, group, freq in CORE_RECORDERS:
         before_n = len(hist_a.get(defname) or [])
         after_n = len(hist_c.get(defname) or [])
-        # Boundaries crossed: how many multiples of `freq` lie in (t0', t1].
-        # t0' is the tick of the FIRST save; it is not read exactly, so the
-        # count is allowed a slack of one at each end.
-        expect = (t1 // freq) - ((t0 - span) // freq)
+        # Boundaries crossed: how many multiples of `freq` lie in (t0, t1].
+        # The clock did not move between save-a and t0 (the game is paused and
+        # the 30 reads take no ticks), so t0 IS the tick save-a was written at,
+        # give or take the read itself — hence one tick of slack, and no more.
+        # An earlier draft subtracted `span` here as well, which inflated
+        # `expect` and made this check pass for growth it should have caught.
+        expect = (t1 // freq) - (t0 // freq)
         if not (after_n - before_n) <= expect + 1:
             wrong.append((defname, freq, before_n, after_n, "<= %d" % (expect + 1)))
     check("4.8", "across a real sampling window every series grew by at most the "
@@ -1112,7 +1115,7 @@ def phase4():
                  "cannot insert one",
           not wrong, "no over-growth", wrong)
     note("4.9", "counts after %d ticks: %s"
-         % (t1 - (t0 - span), {k: len(v or []) for k, v in sorted(hist_c.items())}))
+         % (t1 - t0, {k: len(v or []) for k, v in sorted(hist_c.items())}))
     note("4.10", "saves left on the bench: rates-diff-a/-b/-c. Delete them when "
                  "you are done; they are evidence until then.")
 
