@@ -1133,5 +1133,232 @@ namespace AutoRimmer
             }
             throw new VerbArgsException("'area' must be an area id, an area label, or null for unrestricted");
         }
+
+        // --------------------------------------------------------------------
+        // work-cover {work?} {priority?} {dry_run?}
+        //
+        // THE ROSTER-CHANGE REPAIR (git-bug 40ed42f). `digest.work_coverage`
+        // says a floor is unmet; this puts it right, by enabling the work type
+        // on the best remaining CAPABLE and AVAILABLE pawn. `WorkCoverage`'s
+        // header carries where the floors come from and why Doctor's is 2.
+        //
+        // ---------------- WHY THIS IS A VERB AND NOT A HOOK -----------------
+        // The issue's words are "on a roster change (death, downing,
+        // recruitment, a colonist leaving), enable Doctor on the best remaining
+        // capable pawn", and the obvious reading is a Harmony hook that repairs
+        // coverage by itself. It is deliberately NOT that, for the reason
+        // session 13 settled on `threat-pardon`: **the decision must be a
+        // recorded ACT, not a silent exemption.** A mod that quietly reassigns
+        // work behind the agent produces a colony whose state no transcript
+        // explains, and the next post-mortem cannot tell an agent's decision
+        // from the mod's.
+        //
+        // What makes it unforgettable instead is two other things this round
+        // ships: `work_coverage` is in EVERY digest, so under-coverage is
+        // visible at every glance rather than discovered in an emergency; and
+        // `advance` halts on an own-faction downing (722c951), so the roster
+        // change cannot pass unseen. The trigger is the agent, and the agent is
+        // made to look.
+        //
+        // ------------------------------- GATES ------------------------------
+        // Same three as `work-priorities`, and for the same reasons — see its
+        // header. `PawnColumnWorker_WorkPriority.DoCell`'s early-out
+        // (`Dead || workSettings == null || !EverWork`), `WorkTypeIsDisabled`
+        // (because `Pawn_WorkSettings.SetPriority` answers that with a RED
+        // ERROR), and the manual-priorities check on any priority but 0 and 3.
+        [Verb("work-cover")]
+        public static object WorkCover(VerbContext ctx)
+        {
+            const string V = "work-cover";
+            var map = DesignateEngine.Map();
+            var a = ctx.Args;
+            bool dryRun = a.Bool("dry_run", false);
+
+            bool usePriorities = true;
+            try { usePriorities = Find.PlaySettings.useWorkPriorities; } catch { }
+            int priority = a.Int("priority", 3);
+            if (priority < 1 || priority > 4)
+                throw new VerbArgsException(
+                    "priority must be 1..4 — this verb ENABLES a work type, so 0 is not a "
+                    + "value it can take. Use `work-priorities` to turn one off.");
+            if (!usePriorities && priority != 3)
+                throw new VerbArgsException(
+                    $"priority {priority} is meaningless with manual priorities off: the Work tab "
+                    + "is a checkbox then and GetPriority returns a flat 3. Use 3, or turn manual "
+                    + "priorities on with `work-priorities {manual:true}`.");
+
+            var rows = WorkCoverage.Compute(map);
+            // A named work type is answered even when it is NOT under its
+            // floor: "Doctor is already covered" is the answer to the question
+            // asked, and returning an empty repair list instead would read as a
+            // failure. An unknown name is a refusal listing the set, never a
+            // silent no-op (git-bug 7382bdd's class).
+            string want = a.Str("work");
+            if (want != null)
+            {
+                WorkCoverage.Row picked = null;
+                foreach (var r in rows)
+                    if (string.Equals(r.Def.defName, want, StringComparison.OrdinalIgnoreCase)) { picked = r; break; }
+                if (picked == null)
+                {
+                    var known = new List<string>();
+                    foreach (var r in rows) known.Add(r.Def.defName);
+                    throw new VerbArgsException(
+                        $"'{want}' is not an essential work type. This verb covers the game's own "
+                        + "`requireCapableColonist` set plus Doctor: "
+                        + string.Join(", ", known.ToArray())
+                        + ". Any other work type is `work-priorities`' job.");
+                }
+                rows = new List<WorkCoverage.Row> { picked };
+            }
+
+            var repaired = new List<object>();
+            var stillUnder = new List<object>();
+            var alreadyOk = new List<object>();
+
+            foreach (var r in rows)
+            {
+                if (!r.Under)
+                {
+                    alreadyOk.Add(new Dictionary<string, object>
+                    {
+                        ["work"] = r.Def.defName,
+                        ["floor"] = r.Floor,
+                        ["have"] = r.Have,
+                    });
+                    continue;
+                }
+                var ranked = WorkCoverage.Ranked(r);
+                int need = r.ShortBy;
+                int did = 0;
+                for (int i = 0; i < ranked.Count && did < need; i++)
+                {
+                    var pawn = ranked[i];
+                    // Ranked() already excludes disabled, non-EverWork, downed
+                    // and capacity-blocked pawns. Re-check the two the game
+                    // punishes with a red error anyway: this is the shape
+                    // `work-priorities` uses, and a modded workSettings can
+                    // disagree with a predicate evaluated a few lines earlier.
+                    if (pawn.WorkTypeIsDisabled(r.Def)) continue;
+                    int before;
+                    try { before = pawn.workSettings.GetPriority(r.Def); } catch { continue; }
+                    if (!dryRun)
+                    {
+                        try { pawn.workSettings.SetPriority(r.Def, priority); }
+                        catch (Exception e)
+                        {
+                            stillUnder.Add(new Dictionary<string, object>
+                            {
+                                ["work"] = r.Def.defName,
+                                ["gate"] = "exception",
+                                ["reason"] = e.GetType().Name + ": " + Journal.Truncate(e.Message, 160),
+                            });
+                            continue;
+                        }
+                    }
+                    repaired.Add(new Dictionary<string, object>
+                    {
+                        ["work"] = r.Def.defName,
+                        ["pawn"] = pawn.thingIDNumber,
+                        ["name"] = PawnSafe.Name(pawn),
+                        ["before"] = before,
+                        ["after"] = priority,
+                        ["skill"] = PawnSafe.R(Skill(pawn, r.Def), 2),
+                        ["chosen_by"] = "RimWorld/Pawn_WorkSettings.EnableAndInitialize's own order "
+                                      + "— AverageOfRelevantSkillsFor(work) descending",
+                    });
+                    did++;
+                }
+                if (did < need)
+                {
+                    // THE REFUSAL IS THE POINT. "No capable pawn remains" is a
+                    // real answer about the colony and must never present as a
+                    // quiet success with nobody assigned. Every count that
+                    // explains it rides along, because the follow-up is
+                    // different for each: `enabled` short means promote,
+                    // `capable` short means recruit, and an impaired list means
+                    // the fix is surgery.
+                    var why = new Dictionary<string, object>
+                    {
+                        ["work"] = r.Def.defName,
+                        ["floor"] = r.Floor,
+                        ["floor_on"] = r.FloorIsCapability ? "capable" : "available",
+                        ["have"] = r.Have + did,
+                        ["short_by"] = need - did,
+                        ["enabled_this_call"] = did,
+                        ["candidates_offered"] = ranked.Count,
+                        ["capable"] = r.Capable.Count,
+                        ["enabled"] = r.Enabled.Count,
+                        ["available"] = r.Available.Count,
+                        ["gate"] = ranked.Count == 0 ? "no-candidate" : "too-few-candidates",
+                        ["reason"] = ranked.Count == 0
+                            ? "no colonist on this map is capable of " + r.Def.defName
+                              + ", available (spawned, not downed) and has the capacities its "
+                              + "work-givers require. This is a fact about the roster, not a "
+                              + "refused write."
+                            : "only " + ranked.Count + " candidate(s) could be promoted and the "
+                              + "floor needs " + need + " more.",
+                    };
+                    if (r.Impaired.Count > 0)
+                    {
+                        var imp = new List<object>();
+                        foreach (var kv in r.Impaired)
+                            imp.Add(new Dictionary<string, object>
+                            {
+                                ["pawn"] = PawnSafe.Name(kv.Key),
+                                ["missing_capacity"] = kv.Value,
+                            });
+                        why["enabled_but_incapable"] = imp;
+                    }
+                    stillUnder.Add(why);
+                }
+            }
+
+            // Re-read rather than assume. The whole M1 lesson is that a verb
+            // reporting what it INTENDED is not the same as the state
+            // afterwards, and this one is cheap enough to just look again.
+            var after = dryRun ? WorkCoverage.Section(map) : WorkCoverage.Section(map);
+            bool covered = stillUnder.Count == 0;
+
+            long seq = (repaired.Count > 0 && !dryRun) || stillUnder.Count > 0
+                ? Act(V, dryRun ? "plan" : "cover",
+                      repaired.Count + " promotion(s), " + stillUnder.Count + " still under",
+                      new Dictionary<string, object>
+                      {
+                          ["repaired"] = repaired,
+                          ["still_under"] = stillUnder,
+                          ["dry_run"] = dryRun,
+                      })
+                : 0;
+
+            return new Dictionary<string, object>
+            {
+                ["verb"] = V,
+                // The verb's own verdict, NOT the envelope's: the call was
+                // processed either way, and "the colony has no second doctor"
+                // is information rather than breakage (PawnActs.cs, PLAY-LOOP
+                // §act).
+                ["ok"] = covered,
+                ["dry_run"] = dryRun,
+                ["repaired"] = repaired,
+                ["still_under"] = stillUnder,
+                ["already_covered"] = alreadyOk,
+                ["use_priorities"] = usePriorities,
+                ["priority_set"] = priority,
+                ["coverage_after"] = after,
+                ["action"] = Stamp(seq),
+                ["note"] = "`ok` is whether every targeted floor is now met. A `still_under` row "
+                         + "is a fact about the roster — read its `gate`: `no-candidate` means "
+                         + "recruit or heal, `too-few-candidates` means the colony is simply too "
+                         + "small, and an `enabled_but_incapable` list means the fix is surgery "
+                         + "rather than a work priority.",
+            };
+        }
+
+        private static float Skill(Pawn p, WorkTypeDef w)
+        {
+            try { return p.skills?.AverageOfRelevantSkillsFor(w) ?? 1f; }
+            catch { return 1f; }
+        }
     }
 }

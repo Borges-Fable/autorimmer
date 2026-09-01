@@ -727,6 +727,12 @@ namespace AutoRimmer
         // game's own readout" means for acceptance) while `outcome` is
         // computed from the death path, and they can disagree on exactly that
         // pawn.
+        // The triage verb calls this too (`PawnActs.BleedClock`), so the clock
+        // an agent reads on a pawn and the clock a rescue estimate is judged
+        // against are one builder and cannot drift apart.
+        internal static Dictionary<string, object> BleedoutBlock(Pawn pawn)
+            => pawn?.health == null ? null : Bleedout(pawn, pawn.health);
+
         private static Dictionary<string, object> Bleedout(Pawn pawn, Pawn_HealthTracker h)
         {
             var d = new Dictionary<string, object>

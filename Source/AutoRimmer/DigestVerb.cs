@@ -125,6 +125,14 @@ namespace AutoRimmer
                 // constantly.
                 ["construction"] = ConstructionVerbs.Section(map),
                 ["colonists"] = ColonistSection(map, colonistCap),
+                // WHO COULD DO THE ESSENTIAL JOBS, AT EVERY READ (git-bug
+                // 40ed42f). The M1 run had exactly one Doctor-enabled pawn and
+                // he was the first casualty; both deaths were untended blood
+                // loss. Under-coverage belongs in the glance rather than in an
+                // emergency, which is the whole argument for it being here and
+                // not in a verb the agent has to think to call. See
+                // WorkCoverage's header for where every floor comes from.
+                ["work_coverage"] = WorkCoverage.Section(map),
                 ["resources"] = ResourceSection(map),
                 ["power"] = PowerSection(map),
                 ["threats"] = ThreatSection(map),
@@ -155,7 +163,8 @@ namespace AutoRimmer
         // — if the list it quantifies over was truncated for context budget.
         // Nothing here is being sent to a model.
         internal static readonly string[] PredicateSections =
-            { "time", "site", "alerts", "construction", "colonists", "resources", "power", "threats" };
+            { "time", "site", "alerts", "construction", "colonists", "work_coverage",
+              "resources", "power", "threats" };
 
         internal static bool IsPredicateSection(string name)
         {
@@ -174,6 +183,13 @@ namespace AutoRimmer
                 case "alerts": return AlertSection();
                 case "construction": return ConstructionVerbs.Section(map);
                 case "colonists": return ColonistSection(map, 200);
+                // Cheap on the axis that matters: no Room.Role, no
+                // GetStatValueAbstract. It is a roster walk times the essential
+                // work types, with a CalculateCapacityLevel only for pawns who
+                // actually have the type enabled. `work_coverage.ok == false`
+                // is therefore an affordable predicate, and it is the one an
+                // agent wants — "stop when the colony loses its second doctor".
+                case "work_coverage": return WorkCoverage.Section(map);
                 case "resources": return ResourceSection(map);
                 case "power": return PowerSection(map);
                 case "threats": return ThreatSection(map);

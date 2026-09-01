@@ -2034,3 +2034,59 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `game_shows_clock` reproduces the WIDGET (that is what "matches the game's own
   readout" means for acceptance) and `outcome` is computed from the death path,
   and on exactly that pawn they disagree. `61794cd`.
+- 2026-09-01 (session 20) — **Work-coverage floors come from the GAME's own
+  list, plus exactly one stated deviation.** `Verse/WorkTypeDef
+  .requireCapableColonist` is RimWorld's own "somebody must be able to do this",
+  consumed by `Verse/StartingPawnUtility.WorkTypeRequirementsSatisfied`, which
+  refuses to start a colony where a flagged type is disabled for every starting
+  pawn. Twelve vanilla types carry it — Firefighter, Warden, Construction,
+  Growing, Mining, PlantCutting, Crafting, Hauling, Cleaning, plus Childcare
+  from Biotech. Their floor is 1 and it is a floor on CAPABILITY, because that
+  is what the game checks; a modded type that sets the flag is picked up free.
+  Note what that check is not: it runs ONCE, at world-gen, against the STARTING
+  pawns, and never again — a colony that loses its only miner on day 40 is never
+  told. **`Doctor.requireCapableColonist` is FALSE**: the game does not require
+  a doctor to start a colony at all. Doctor's floor of 2 is the one deviation
+  and it is not a house rule either — `RimWorld/Alert_NeedDoctor.Patients` tests
+  `(item.Spawned || item.BrieflyDespawned()) && !item.Downed && item.workSettings
+  != null && item.workSettings.WorkIsActive(Doctor)`, and **`!item.Downed` is in
+  the game's own predicate**, so one doctor's coverage is zero the moment that
+  doctor is the patient. That is the M1 death exactly. Doctor's floor is
+  therefore on AVAILABILITY, not capability. The gap between `enabled` and
+  `available` is the trap one level down: every vanilla Doctor work-giver except
+  `VisitSickPawn` requires `Manipulation`, so a doctor with no hands has the
+  work type on, undisabled, and cannot tend — reproduced from
+  `RimWorld/WorkGiver.MissingRequiredCapacity` over the union of the type's
+  work-givers, and read through `PawnCapacityUtility.CalculateCapacityLevel`
+  rather than `capacities.CapableOf`, because `PawnCapacitiesHandler.GetLevel`
+  lazily builds `cachedCapacityLevels` and observers do not write. `40ed42f`.
+- 2026-09-01 (session 20) — **The roster repair is a VERB, not a hook, and the
+  clock/travel boundary is settled: the clock belongs to the patient, the rescue
+  belongs to the roster.** `40ed42f` reads as though a Harmony hook should
+  repair Doctor coverage on a roster change. It is `work-cover` instead, for the
+  reason session 13 settled on `threat-pardon`: **the decision must be a
+  recorded ACT, not a silent exemption.** A mod that quietly reassigns work
+  behind the agent produces a colony no transcript explains, and the next
+  post-mortem cannot tell the agent's decision from the mod's. What makes it
+  unforgettable instead is that `work_coverage` is in EVERY digest and that
+  `advance` halts on an own-faction downing (`722c951`) — the agent is the
+  trigger, and the agent is made to look. On the boundary `61794cd` asked to be
+  decided: **the clock is a property of the PATIENT** (`pawn.health
+  .ticks_until_bleedout` — one division, correct with no roster, no map and no
+  pathfinder, and `pawn` is read constantly), **and the rescue estimate is a
+  property of the ROSTER** (`triage` — "who could rescue" is `work_coverage`'s
+  question one level down and "how long would they take" is a pathfind PER
+  CANDIDATE). Putting a pathfinder in `pawn` or in the digest would make the
+  cheapest read in the surface pay for it at every glance, which is what the
+  predicate-cost decision of session 19 exists to stop. `travel_ticks` is
+  `PawnPath.TotalCost`, whose unit genuinely IS ticks —
+  `Verse.AI/Pawn_PathFollower.CostToMoveIntoCell` spends `TicksPerMoveCardinal|
+  Diagonal + pathGrid.CalculatedCostAt + edifice.PathWalkCostFor`, one per tick
+  — and it is published as a FLOOR: it excludes door waits, pawn collisions and
+  the time to abandon the current job, which is exactly what `rescue` removes by
+  forcing it. `carry_ticks` is the second leg to the bed `TakeToBedGate` chose,
+  so `total_ticks` is the whole journey. Every casualty row carries `act`, the
+  exact `rescue` envelope with both ids filled in, because the M1 run's sharpest
+  finding is that `rescue` was shipped, forces the job, interrupts `LayDown` —
+  and was called zero times in 195 ops while the response tried was a
+  work-priority flip. `40ed42f`, `61794cd`.
