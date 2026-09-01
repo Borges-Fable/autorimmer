@@ -481,7 +481,18 @@ def phase0():
                  "True) and re-run." % detail)
 
     # 0.4  journal: the watermark every later no_red_errors is measured from.
-    e = send("journal", {"limit": 1})
+    # `since_seq: 999999999` is NOT belt-and-braces — it is the fix for a
+    # known defect, and this file is the one suite that never got it.
+    # `JournalVerbs.Read` updates `last_seq` BEFORE the `since_seq` skip and
+    # breaks on `events.Count >= limit` BEFORE the append, so a bare
+    # `{limit: 1}` reports the SECOND row's seq, not the last. Session 11 found
+    # this in `3.4-pawn-orders` and fixed it there, in `3.6`, in `4087644` and
+    # in `1.8`; here it survived, and on 2026-09-01 it printed `seq0 = 2`
+    # against a 108-row journal — so every red-error check below was counting
+    # from the START of the session and charged a run for a DELIBERATE error
+    # `journal-selftest` had emitted long before the suite began. Sessions 13
+    # and 15 scored 0 FAIL only because nothing happened to precede them.
+    e = send("journal", {"since_seq": 999999999, "limit": 1})
     shape("0.4a", "journal", e, "data.count")
     shape("0.4b", "journal", e, "data.last_seq")
     shape("0.4c", "journal", e, "data.events", list)
