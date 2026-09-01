@@ -388,7 +388,27 @@ namespace AutoRimmer
                     break;
                 }
 
-                Place(map, e, mode, undo, cleared, wiped, ref clearedMore, ref wipedMore);
+                if (!Place(map, e, mode, undo, cleared, wiped, ref clearedMore, ref wipedMore))
+                {
+                    // The placement call itself produced nothing. Unreachable
+                    // through `BuildableByPlayer` — the same condition generates
+                    // the blueprintDef — but a modded def can set
+                    // designationCategory without the generator running, and a
+                    // row that said `placed` with a null `thing_id` would be a
+                    // build the agent could never find. Treated as a late
+                    // refusal so it obeys the same `partial`/rollback rule as
+                    // every other one.
+                    var bad = RefusalRow(map, e, now, "late");
+                    bad["reason"] = e.PlaceMode == "no-blueprint"
+                        ? e.Def.defName + " has no blueprintDef, so there is nothing for a "
+                          + "colonist to build — this def can only be spawned (dev:spawn-thing)"
+                        : "the placement call returned nothing for " + e.Def.defName;
+                    bad["ok"] = false;
+                    lateRefusals.Add(bad);
+                    if (partial) { skipped.Add(bad); continue; }
+                    rolledBack = true;
+                    break;
+                }
                 // `e.PlaceMode` is what actually ran — `instant`, `blueprint`
                 // or vanilla's `instant-zero-work` branch — never the mode
                 // argument, because a zero-work def inside a blueprint-mode
@@ -401,7 +421,7 @@ namespace AutoRimmer
                 placed.Add(PlacedRow(e, p));
             }
 
-            var rollback = rolledBack ? Rollback(map, undo) : null;
+            var rollback = rolledBack ? Rollback(map, undo, cleared.Count, wiped.Count) : null;
             if (rolledBack)
             {
                 Layouts.Abandon(record);
@@ -948,7 +968,11 @@ namespace AutoRimmer
 
         // `Designator_Build.DesignateSingleCell`'s own order, reached through
         // `build`'s helpers rather than a second copy of them.
-        private static void Place(Map map, Element e, string mode, List<Undo> undo,
+        // False means NOTHING WAS PLACED, which the caller treats as a late
+        // refusal — never as a silent success with a null `thing_id`. A
+        // TerrainDef legitimately produces no Thing, so "produced null" is not
+        // by itself the test.
+        private static bool Place(Map map, Element e, string mode, List<Undo> undo,
             List<object> cleared, List<object> wiped, ref int clearedMore, ref int wipedMore)
         {
             if (mode == ModeInstant)
@@ -978,8 +1002,21 @@ namespace AutoRimmer
                     Foundation = (e.Def as TerrainDef)?.isFoundation ?? false,
                     Instant = true,
                 });
+                if (!(e.Def is TerrainDef) && e.Produced == null) return false;
                 PostPlace(map, e);
-                return;
+                return true;
+            }
+
+            // BEFORE THE FIRST MUTATION, not after it. Unreachable through
+            // `BuildableByPlayer` — the same condition generates the
+            // blueprintDef — but a modded def can set designationCategory
+            // without the generator running, and refusing AFTER the
+            // replaceable-frame loop had already destroyed a frame would leave
+            // a mutation no rollback undoes.
+            if (e.Def.blueprintDef == null)
+            {
+                e.PlaceMode = "no-blueprint";
+                return false;
             }
 
             // 1. A Frame this def is allowed to REPLACE, destroyed with
@@ -1009,19 +1046,12 @@ namespace AutoRimmer
                     Foundation = (e.Def as TerrainDef)?.isFoundation ?? false,
                     Instant = true,
                 });
+                if (!(e.Def is TerrainDef) && e.Produced == null) return false;
                 PostPlace(map, e);
-                return;
+                return true;
             }
 
             var bpDef = e.Def.blueprintDef;
-            if (bpDef == null)
-            {
-                // Unreachable through BuildableByPlayer (the same condition
-                // generates the blueprintDef), guarded because a modded def can
-                // set designationCategory without the generator running.
-                e.PlaceMode = "no-blueprint";
-                return;
-            }
             var watch2 = WipeWatch.Before(map, bpDef, e.Pos, e.Rot);
             try { GenSpawn.WipeExistingThings(e.Pos, e.Rot, bpDef, map, DestroyMode.Deconstruct); }
             catch { }
@@ -1032,8 +1062,10 @@ namespace AutoRimmer
             e.PlaceMode = ModeBlueprint;
             e.Produced = GenConstruct.PlaceBlueprintForBuild(e.Def, e.Pos, map, e.Rot,
                 Faction.OfPlayer, e.Stuff);
+            if (e.Produced == null) return false;
             undo.Add(new Undo { Thing = e.Produced, Pos = e.Pos, Instant = false });
             PostPlace(map, e);
+            return true;
         }
 
         // Wrapped: a PlaceWorker is third-party code for a modded def, and
@@ -1071,11 +1103,29 @@ namespace AutoRimmer
         // something; `WipeWatch` recorded it and this publishes
         // `incomplete: true` with the reason, because a rollback that quietly
         // fell short is worse than one that failed loudly.
-        private static Dictionary<string, object> Rollback(Map map, List<Undo> undo)
+        private static Dictionary<string, object> Rollback(Map map, List<Undo> undo,
+            int clearedCount, int wipedCount)
         {
             int destroyed = 0, terrain = 0, failed = 0;
             bool incomplete = false;
             var notes = new List<object>();
+            // Two mutations that happen BEFORE a placement and are not the
+            // placement: blueprint mode's DestroyMode.Deconstruct wipe (which
+            // refunds, so the materials are on the ground) and instant mode's
+            // VanishOrMoveAside (which does not). Neither is undone by putting
+            // our own thing back, so they are named here rather than left for a
+            // reader to infer from a `cleared`/`wiped` list further up.
+            if (clearedCount > 0)
+            {
+                incomplete = true;
+                notes.Add(clearedCount + " thing(s) were deconstructed to make room before the "
+                    + "refusal; they were REFUNDED (DestroyMode.Deconstruct) but not rebuilt");
+            }
+            if (wipedCount > 0)
+            {
+                incomplete = true;
+                notes.Add(wipedCount + " thing(s) were wiped by an instant-mode spawn and are gone");
+            }
             for (int i = undo.Count - 1; i >= 0; i--)
             {
                 var u = undo[i];
@@ -1112,9 +1162,9 @@ namespace AutoRimmer
             };
             if (notes.Count > 0) d["notes"] = notes;
             if (incomplete || failed > 0)
-                d["detail"] = "the rollback did not fully restore the map — see `notes`. Anything "
-                    + "instant mode WIPED is gone regardless; `wiped` on the placing call is the "
-                    + "record of it.";
+                d["detail"] = "the rollback did not fully restore the map — see `notes`. The "
+                    + "call's own `cleared` and `wiped` lists are the record of what it removed "
+                    + "on the way in.";
             return d;
         }
 
