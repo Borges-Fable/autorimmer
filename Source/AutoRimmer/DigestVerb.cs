@@ -98,6 +98,14 @@ namespace AutoRimmer
             return new Dictionary<string, object>
             {
                 ["time"] = TimeSection(map),
+                // WHERE the colony is (M1 finding I1). Constant for the life of
+                // a map and a handful of plain field reads, so it rides in the
+                // glance rather than in a verb of its own — nothing else in the
+                // observation surface answered "what biome is this", and 4.3's
+                // temperate fixture was being inferred from terrain glyphs.
+                // WorldSafe.Site documents every member it reads and every
+                // lazy-init getter it routes around.
+                ["site"] = WorldSafe.Site(map),
                 ["alerts"] = AlertSection(),
                 ["colonists"] = ColonistSection(map, colonistCap),
                 ["resources"] = ResourceSection(map),

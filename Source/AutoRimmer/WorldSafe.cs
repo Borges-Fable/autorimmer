@@ -559,6 +559,91 @@ namespace AutoRimmer
             return foggedCells >= cells.Count;
         }
 
+        // ------------------------- THE SITE (M1 finding I1) -----------------
+        //
+        // WHERE THE COLONY IS. Nothing in the observation surface answered it:
+        // `grep -rn 'Biome' Source/AutoRimmer/` returned nothing on 2026-09-01,
+        // and spec 4.3's "temperate fixture" had to be INFERRED from `map-view`
+        // terrain glyphs. That is a guess dressed as an observation, and the
+        // playbook's own applicability predicates are written in these terms
+        // (`playbook/README.md`: `applies-when: biome:desert`).
+        //
+        // No new verb — this is a section of `digest`, the standing glance.
+        // Constant for the life of a map, so it costs the same handful of field
+        // reads every call and never grows.
+        //
+        // THE ROUTE, member by member, against the decompiled 1.6 tree
+        // (rimworld-tools/Info/decompiled/RimWorldBase; verify by member name):
+        //
+        //   Verse/Map.cs Tile      -> MapInfo.Tile -> MapParent.Tile. A
+        //                             PlanetTile struct; `tileId` is a plain
+        //                             readonly int field
+        //                             (RimWorld.Planet/PlanetTile.cs tileId).
+        //   Verse/Map.cs TileInfo  -> Find.WorldGrid[Tile] for a surface map,
+        //                             `pocketTileInfo` for a pocket map.
+        //                             RimWorld.Planet/WorldGrid.cs's indexer is
+        //                             `tile.Layer.Tiles[tile.tileId]` — a List
+        //                             index, no lazy init, no cache rebuild.
+        //   Verse/Map.cs Biome     -> TileInfo.PrimaryBiome, and
+        //                             RimWorld.Planet/Tile.cs PrimaryBiome is a
+        //                             bare `return biome;` over a private field.
+        //                             SAFE.
+        //   RimWorld.Planet/Tile.cs temperature, rainfall, elevation,
+        //                             hilliness, swampiness, pollution — public
+        //                             instance FIELDS, scribed in ExposeData and
+        //                             read without a getter. SAFE.
+        //
+        // DELIBERATELY NOT READ, each one a hazard of the class this file
+        // exists to catalogue:
+        //
+        //   * Tile.Biomes (RimWorld.Planet/Tile.cs) — the iterator resolves the
+        //     mixed-biome tile mutator and MEMOISES the answer into the private
+        //     `tmpHasSecondaryBiome`/`tmpSecondaryBiome` fields, calling
+        //     TileMutatorWorker_MixedBiome.SecondaryBiome to do it. A lazy-init
+        //     write on an observer read. The primary biome is what a fixture
+        //     predicate keys on; the secondary is not worth that.
+        //   * Tile.MaxTemperature / MinTemperature — each caches a
+        //     GenTemperature.MaxTemperatureAtTile / MinTemperatureAtTile result
+        //     into `cachedMaxTemp`/`cachedMinTemp` on first read. Idempotent and
+        //     RNG-free, but it is a computation behind a field-shaped name and
+        //     `temperature` (the tile's ANNUAL AVERAGE, which is what was asked
+        //     for) is a plain field that needs none of it.
+        //   * Tile.HillinessLabel — same shape, `hillinessLabelCached`. The raw
+        //     `hilliness` field is published instead.
+        //   * Tile.Landmark — `Find.World.landmarks[tile]`, Odyssey-gated. Not
+        //     needed, and it would make the section DLC-conditional.
+        //
+        // Returns null rather than throwing: a pocket map, a half-loaded world
+        // or a modded WorldGrid must degrade one digest SECTION, not the verb.
+        public static Dictionary<string, object> Site(Map map)
+        {
+            if (map == null) return null;
+            try
+            {
+                var tile = map.TileInfo;
+                if (tile == null) return null;
+                var biome = map.Biome;
+                return new Dictionary<string, object>
+                {
+                    // The fixture predicate keys on defName; the label is for the
+                    // human reading the transcript.
+                    ["biome"] = biome?.defName,
+                    ["biome_label"] = Safe(() => biome?.label),
+                    ["tile"] = map.Tile.tileId,
+                    // Annual average, degrees C — Tile.temperature's own meaning.
+                    ["avg_temp_c"] = R(tile.temperature, 1),
+                    ["rainfall"] = R(tile.rainfall, 0),
+                    ["elevation"] = R(tile.elevation, 0),
+                    ["hilliness"] = tile.hilliness.ToString(),
+                    ["swampiness"] = R(tile.swampiness, 2),
+                    ["pollution"] = R(tile.pollution, 2),
+                    ["map_size"] = new List<object> { (double)map.Size.x, (double)map.Size.z },
+                    ["pocket_map"] = map.IsPocketMap,
+                };
+            }
+            catch { return null; }
+        }
+
         // --------------------------- small helpers --------------------------
 
         public static Map CurrentMap() => PawnSafe.CurrentMap();
