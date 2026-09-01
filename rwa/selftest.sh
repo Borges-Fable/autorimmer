@@ -166,8 +166,17 @@ has '"until": {"event": {"type": "death", "contains": "Xitral"}}'
 has '"types": ["letter", "death"]'
 has '"rect": [10, 20, 5, 5]'
 run 2 "an id the mod would sanitise is rejected up front, not silently rewritten" -- \
-    "$RWA" ping --id 'has.a.dot'
+    "$RWA" ping --cmd-id 'has.a.dot'
 has "Poller.Sanitize"
+# The reserved-option collision: rwa's own command id is --cmd-id precisely so
+# that a bare --id is an ORDINARY op argument. It used to be a global, so
+# `rwa pawn --id 3` set the command id and the verb got bad-args instead.
+run 0 "--id is a verb argument, --cmd-id is rwa's own" -- \
+    "$RWA" ping --json --cmd-id verb-id-check --id 3
+run 0 "…and the command file proves both landed where they belong" -- \
+    sh -c 'cat "$RWA_TRANSCRIPTS"/*/*-ping/cmd.json | tail -1'
+has '"id": "verb-id-check"'
+has '"args": {"id": 3}'
 
 
 section "6. the error taxonomy, one code at a time"
@@ -256,6 +265,9 @@ run 0 "the transcript replays against the bench" -- "$RWA" replay acceptance --r
 hasre "4 sent, 0 failed"
 run 0 "…and the replay is itself a transcript" -- \
     sh -c 'ls "$RWA_TRANSCRIPTS/replayed"'
+run 0 "--same-ids replays under the original ids (the --cmd-id path)" -- \
+    "$RWA" replay acceptance --run replayed-same --same-ids --pretty
+hasre "4 sent, 0 failed"
 unset RWA_RUN
 run 0 "with no --run, the run dir is the game session id" -- \
     sh -c '"$RWA" ping --quiet >/dev/null; ls "$RWA_TRANSCRIPTS" | grep -E "^[0-9]{8}T[0-9]{6}$"'
