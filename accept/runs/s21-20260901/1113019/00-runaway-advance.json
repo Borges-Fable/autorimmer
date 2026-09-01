@@ -1,0 +1,38 @@
+{
+  "_what": "THE DEFECT ENVELOPE, RECONSTRUCTED FROM THE ISSUE — NOT A CAPTURE.",
+  "_source": "git-bug 1113019, body (#0) and comment #2, both quoting the same live-bench result on 2026-09-01 (session 21).",
+  "_complete": false,
+  "_honesty": [
+    "Every field under `envelope` is quoted VERBATIM from the issue. Nothing here is invented and nothing is filled in.",
+    "It is NOT the whole envelope: the run was not banked to accept/runs/, and the issue quoted only these fields. Every other key an advance publishes (speed, avg_tps, overshoot_bound, journal_seq, paused_on_exit, ...) is MISSING FROM THIS FILE and was present on the bench.",
+    "So this file may be used to prove that a key was ABSENT ONLY for the two keys 1113019 adds — `data.timeout_ticks` and `data.timeout_source` — which cannot have been published, because the code that publishes them did not exist. Absence of anything else here means only that the issue did not quote it.",
+    "It is wrapped rather than written as a bare envelope on purpose: a partial capture sitting in accept/runs/ under an envelope-shaped name would be read as a real one."
+  ],
+  "_command_sent": {"op": "advance", "args": {"until": {"condition": {"path": "time.tick", "op": ">=", "value": 949}}}},
+  "_note": "The map's tick at arm time was exactly 949, so the predicate was TRUE the moment it armed. There is no `timeout_ticks` in the command. The advance ran 187,541 ticks - a bit over three in-game days - and the only thing that stopped it was 722c951's own-faction casualty halt, which had shipped hours earlier the same session.",
+  "envelope": {
+    "op": "advance",
+    "ok": true,
+    "data": {
+      "reason": "casualty",
+      "ticks_elapsed": 187541,
+      "tick": 188490,
+      "journal_unread": 47,
+      "until": {
+        "kind": "condition",
+        "path": "time.tick",
+        "op": ">=",
+        "value": 949,
+        "edge": true,
+        "true_when_armed": true,
+        "saw_false": false,
+        "first_false_tick": null,
+        "observed_last": 188400,
+        "evaluations": 419,
+        "frames": 6287,
+        "eval_ms_total": 7.19,
+        "eval_ms_avg": 0.0172
+      }
+    }
+  }
+}
