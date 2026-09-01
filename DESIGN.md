@@ -2115,9 +2115,27 @@ queue by default (an agent flailing mid-experiment must not page triage).
   proof is the refutation**: op 109 had seek ON, hostility `Flee`, and Captain
   in `JobDriver_FleeAndCower`, which is impossible if the flee node is
   unreachable. So `Flee` BEATS seek, and seek ON with `Flee` is the worst
-  combination available — run from anything within 8 cells with LOS
-  (`FleeUtility.ShouldFleeFrom`, checkDistance:true), march at anything beyond
-  it. That is M1 day 1 and M1 day 4 in one state. **`on_contact` is therefore
+  combination available. **The flee branch has two halves and this entry
+  conflated them with the ATTACK branch's numbers until the orchestrator caught
+  it on 2026-09-01** — recorded rather than quietly corrected, because a
+  citation that names the wrong method is worse than none. The TRIGGER is
+  `SelfDefenseUtility.ShouldStartFleeing`, which `TryGetFleeJob` opens with, and
+  it is the only place distance and sight are tested: `ShouldFleeFrom` with
+  `checkDistance:true, checkLOS:false` over `ThingRequestGroup.AlwaysFlee` and
+  `checkDistance:true, checkLOS:true` over `ThingRequestGroup.AttackTarget` in a
+  9-region `BreadthFirstTraverse`, where `checkDistance:true` is
+  `InHorDistOf(pawn.Position, 8f)`. The DESTINATION is a different question:
+  `TryGetFleeJob` re-gathers threats with `checkDistance:false, checkLOS:false`
+  at all three of its own call sites and passes the lot to
+  `CellFinderLoose.GetFleeDest`, so the pawn runs from EVERY hostile the caches
+  hold — which is how one crow inside 8 cells produced Captain's 150-cell run.
+  The `maxDist = 8f` / `Clamp(EffectiveRange * 0.66, 2, 20)` pair and the
+  `NeedLOSToAll` scan flag belong to `TryGetAttackNearbyEnemyJob` and are cited
+  only there. `TryGiveJob` also bails to null before the switch on
+  `PlayerForcedJobNowOrSoon`, `pawn.Downed` and an Anomaly
+  `LordJob_PsychicRitual`, which is why the `downed` and `player-controlled`
+  verdicts cite the constant tree as well as the seek side. That is M1 day 1 and
+  M1 day 4 in one state. **`on_contact` is therefore
   computable and is published**, per pawn and as a rollup, as the resolved
   decision order rather than a field echo: downed / mental-break /
   player-controlled / flee / attack-then-seek / attack-nearby / seek-only /

@@ -131,9 +131,13 @@ Two costs, both stated rather than hidden:
   only published field that would answer "is this pawn fleeing" is
   `colonists.list[*].job` — a *truncated* driver report string
   (`Journal.Truncate(job, 48)`), which is not a contract to compare with `==`.
-  A raid also needs its pawns to walk into line of sight before any reaction
-  fires, a distance the suite cannot know. So the wait is `advance {ticks:2500}`
-  with the reason written down, rather than a predicate that would be a lie.
+  A raid also has to close before anything fires: the flee trigger is
+  `SelfDefenseUtility.ShouldStartFleeing`, whose `AttackTarget` branch needs a
+  threat within 8 cells **and** in line of sight
+  (`ShouldFleeFrom(checkDistance:true, checkLOS:true)`), and how long raiders
+  take to cover that ground is not something the suite can know. So the wait is
+  `advance {ticks:2500}` with the reason written down, rather than a predicate
+  that would be a lie.
 
 Every `advance` in this file goes through one helper that always carries
 `unread_ok` and `through_casualties` (Worker B's `722c951` contract), both

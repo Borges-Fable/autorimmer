@@ -684,10 +684,25 @@ namespace AutoRimmer
         // Consequences this file is built on:
         //   * `hostility:"Attack"` is not a BACKSTOP. It is the load-bearing
         //     setting, and seek is what happens after it declines.
-        //   * seek ON + hostility `Flee` is the WORST combination available: the
-        //     pawn runs from anything within 8 cells with line of sight
-        //     (`FleeUtility.ShouldFleeFrom`, checkDistance:true) and marches at
-        //     anything further away. That is M1 day 1 and M1 day 4 in one state.
+        //   * seek ON + hostility `Flee` is the WORST combination available, and
+        //     the flee branch has TWO halves that must not be conflated (this
+        //     comment named the ATTACK branch's numbers until the orchestrator
+        //     caught it, 2026-09-01):
+        //       TRIGGER — `TryGetFleeJob` opens with
+        //         `if (!SelfDefenseUtility.ShouldStartFleeing(pawn)) return null;`
+        //         and THAT is where distance and sight live: `ShouldFleeFrom`
+        //         with `checkDistance:true, checkLOS:false` over
+        //         `ThingRequestGroup.AlwaysFlee`, and `checkDistance:true,
+        //         checkLOS:true` over `ThingRequestGroup.AttackTarget` inside a
+        //         `RegionTraverser.BreadthFirstTraverse` capped at 9 regions.
+        //         `checkDistance:true` is `InHorDistOf(pawn.Position, 8f)`.
+        //       DESTINATION — once triggered, `TryGetFleeJob` re-gathers the
+        //         threat set at all THREE of its own call sites with
+        //         `checkDistance:false, checkLOS:false` and hands the lot to
+        //         `CellFinderLoose.GetFleeDest`. So the pawn flees from EVERY
+        //         hostile the caches know about, not just the one that set it
+        //         off — which is why one crow at 8 cells produced a 150-cell
+        //         run. That is M1 day 1 and M1 day 4 in one state.
         //   * `on_contact` is therefore COMPUTABLE and is published. See
         //     `OnContact` below for the ordered resolution and its citations.
         //
@@ -811,18 +826,34 @@ namespace AutoRimmer
         // published. The resolution below is the decision order, first match
         // wins, with the member that decides named in `why`:
         //
+        // FOUR OF THESE ALSO TURN ON `TryGiveJob`'s PRE-SWITCH BAILS, which run
+        // before the hostility mode is even read: `playerSettings == null ||
+        // !UsesConfigurableHostilityResponse`, `PawnUtility
+        // .PlayerForcedJobNowOrSoon`, `pawn.Downed`, and (Anomaly) a
+        // `LordJob_PsychicRitual` lord. A verdict that leaned only on the seek
+        // side would be citing half the reason.
+        //
         //   1 downed            Humanlike root index 2 is
         //                       `ThinkNode_Subtree(Downed)`, above the index-11
         //                       insertion point, and ThinkTreeInjector skips the
-        //                       Downed tree outright.
+        //                       Downed tree outright. The constant node is inert
+        //                       too: `TryGiveJob` returns null on `pawn.Downed`
+        //                       before the switch.
         //   2 mental-break      `SeekRegistry.ShouldSeek` requires
         //                       `!InMentalState`; so does
         //                       `ThinkNode_ConditionalCanDoConstantThinkTreeJobNow`.
-        //   3 player-controlled Both of those also require `!Drafted`.
+        //   3 player-controlled Both of those also require `!Drafted`, and a
+        //                       drafted order is `playerForced`, which
+        //                       `PlayerForcedJobNowOrSoon` reads off `CurJob`
+        //                       (else the head of `jobs.jobQueue`) to bail
+        //                       `TryGiveJob` before the switch.
         //   4 flee              `JobGiver_ConfigurableHostilityResponse` in the
         //                       CONSTANT tree, which runs before the main tree
-        //                       and interrupts it every 30 ticks. Triggers at
-        //                       <= 8 cells with LOS.
+        //                       and interrupts it every 30 ticks. TRIGGER is
+        //                       `SelfDefenseUtility.ShouldStartFleeing` (8 cells,
+        //                       LOS on the AttackTarget branch); the DESTINATION
+        //                       is scored against every threat, distance and LOS
+        //                       both OFF. See the header.
         //   5 attack-then-seek  hostility Attack and `ShouldSeek` passes: the
         //                       constant node engages inside its radius, seek
         //                       takes everything beyond it.
@@ -859,7 +890,9 @@ namespace AutoRimmer
             if (f.Downed)
             {
                 why = "downed — the Downed subtree is at Humanlike root index 2, above the "
-                    + "index-11 seek insertion, and SeekAndKill/ThinkTreeInjector skips that tree";
+                    + "index-11 seek insertion, and SeekAndKill/ThinkTreeInjector skips that tree. "
+                    + "The hostility response is inert too: JobGiver_ConfigurableHostilityResponse"
+                    + ".TryGiveJob returns null on pawn.Downed BEFORE it reads the mode";
                 return "downed";
             }
             if (f.Mental)
@@ -870,9 +903,13 @@ namespace AutoRimmer
             }
             if (f.Drafted)
             {
-                why = "DRAFTED — you are driving this pawn. ShouldSeek requires !Drafted and the "
-                    + "constant think tree's own gate requires !Drafted, so neither seek nor the "
-                    + "hostility response decides anything while the draft holds";
+                why = "DRAFTED — you are driving this pawn. ShouldSeek requires !Drafted and "
+                    + "ThinkNode_ConditionalCanDoConstantThinkTreeJobNow requires !Drafted; and a "
+                    + "drafted order is playerForced, which PawnUtility.PlayerForcedJobNowOrSoon "
+                    + "reads off CurJob (else the head of jobs.jobQueue) to bail "
+                    + "JobGiver_ConfigurableHostilityResponse.TryGiveJob before it reads the mode. "
+                    + "So neither seek nor the hostility response decides anything while the draft "
+                    + "holds";
                 return "player-controlled";
             }
             bool attack = f.ConfigurableHostility
@@ -882,15 +919,31 @@ namespace AutoRimmer
 
             if (flee)
             {
+                // THE TRIGGER AND THE DESTINATION ARE DIFFERENT CALLS with
+                // different flags, and this string named the ATTACK branch's
+                // numbers until 2026-09-01. TryGetFleeJob's own three
+                // ShouldFleeFrom calls pass checkDistance:false, checkLOS:false;
+                // the 8 cells and the sight test are one level up, in the
+                // ShouldStartFleeing gate it opens with.
                 why = "hostility_response is Flee, and that is decided ABOVE seek: "
                     + "JobGiver_ConfigurableHostilityResponse lives in the HumanlikeConstant tree, "
                     + "which Pawn_JobTracker.DetermineNextJob runs BEFORE the main tree and "
                     + "JobTrackerTickInterval re-runs every 30 ticks with JobCondition."
-                    + "InterruptForced. It fires at <= 8 cells with line of sight "
-                    + "(FleeUtility.ShouldFleeFrom, checkDistance:true)"
+                    + "InterruptForced. TryGetFleeJob opens on "
+                    + "SelfDefenseUtility.ShouldStartFleeing, which is the TRIGGER and the only "
+                    + "place distance and sight are tested: ShouldFleeFrom(checkDistance:true, "
+                    + "checkLOS:false) over ThingRequestGroup.AlwaysFlee, and "
+                    + "(checkDistance:true, checkLOS:true) over ThingRequestGroup.AttackTarget in a "
+                    + "9-region BreadthFirstTraverse, where checkDistance:true is "
+                    + "InHorDistOf(pawn.Position, 8f). Once it fires, the DESTINATION is a "
+                    + "different question: TryGetFleeJob re-gathers threats with "
+                    + "checkDistance:false and checkLOS:false at all three of its call sites and "
+                    + "passes the lot to CellFinderLoose.GetFleeDest, so the pawn runs from EVERY "
+                    + "hostile the caches hold, not just the one that set it off"
                     + (f.WillSeek
-                        ? ". SEEK IS ON AND LOSES: this pawn runs from anything close and marches "
-                          + "at anything far. That is the M1 state that killed two colonists."
+                        ? ". SEEK IS ON AND LOSES. That is the M1 state that killed two "
+                          + "colonists: one crow inside 8 cells triggered a flee scored against "
+                          + "the whole map, and Captain ran 150 cells into unexplored ground."
                         : ".");
                 return "flee";
             }
@@ -1254,8 +1307,11 @@ namespace AutoRimmer
                     byContact[contact] = byContact.TryGetValue(contact, out var c) ? c + 1 : 1;
 
                     // THE M1 STATE, NAMED. A violence-capable pawn set to Flee
-                    // will run from anything within 8 cells whatever seek says,
-                    // because the constant tree decides first.
+                    // runs whatever seek says, because the constant tree decides
+                    // first — triggered by a threat inside 8 cells
+                    // (SelfDefenseUtility.ShouldStartFleeing), then fleeing a
+                    // destination scored against EVERY threat, distance and LOS
+                    // both off (TryGetFleeJob -> CellFinderLoose.GetFleeDest).
                     if (f.ViolenceCapable && contact == "flee")
                         fleeRisk.Add(new Dictionary<string, object>
                         {

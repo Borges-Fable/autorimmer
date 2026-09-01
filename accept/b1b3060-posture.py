@@ -964,9 +964,12 @@ def phase6():
     # over. `advance {until:{condition}}` compares with < <= > >= == != only, and
     # the field that would answer — `colonists.list[*].job` — is a TRUNCATED
     # driver report string (`Journal.Truncate(job, 48)`), so `==` against it is
-    # not a contract anything should depend on. A raid also needs its pawns to
-    # walk into line of sight before any reaction fires, which is a distance the
-    # suite cannot know. So: a bounded tick budget, with the reason written down.
+    # not a contract anything should depend on. A raid also has to CLOSE before
+    # anything fires: the flee trigger is SelfDefenseUtility.ShouldStartFleeing,
+    # whose AttackTarget branch needs a threat within 8 cells AND in line of
+    # sight (ShouldFleeFrom(checkDistance:true, checkLOS:true)) — and how long
+    # raiders take to cover that ground is not something the suite can know.
+    # So: a bounded tick budget, with the reason written down.
     advance({"ticks": 2500})
 
     d = send("digest")

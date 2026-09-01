@@ -52,10 +52,17 @@ impossible if the flee node is unreachable.
 **`hostility:"Attack"` is the load-bearing setting, not a backstop.** Seek is
 what happens after the close-range node declines.
 
-- **Seek ON with hostility `Flee` is the worst combination available.** The pawn
-  runs from anything within 8 cells with line of sight and marches at anything
-  further away. That is M1 day 1 and M1 day 4 in a single state, and it is what
-  `digest.posture.flee_risk` names.
+- **Seek ON with hostility `Flee` is the worst combination available**, and the
+  flee branch is two separate tests that are easy to conflate. It *triggers* on
+  a threat inside 8 cells — `SelfDefenseUtility.ShouldStartFleeing`, which is
+  the gate `TryGetFleeJob` opens with, and the only place distance and sight are
+  checked. Where it *runs to* is scored against **every** threat the caches
+  hold, distance and sight both off (`TryGetFleeJob` ->
+  `CellFinderLoose.GetFleeDest`). That gap is the 150 cells: one crow inside
+  eight cells started it, the whole map chose the destination. Meanwhile seek
+  marches at anything too far away to have triggered the flee. That is M1 day 1
+  and M1 day 4 in a single state, and it is what `digest.posture.flee_risk`
+  names.
 - **Seek ON as a standing posture** — not switched on at the letter, because a
   threat letter can arrive mid-advance and the fight is decided before you read
   it. Prefer `seek:"auto"`, which declines a pawn that is unarmed and Melee < 6;
