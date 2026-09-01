@@ -1,0 +1,25 @@
+# accept/4.2-play-loop.py against RUNS/m1-20260831 — session 13, after the C/B/D fixes
+# journal 20260901T022324.ndjson (175 events) · transcript 195 ops · EXIT=1
+#
+# Session 12 baseline was 4 PASS / 2 WARN / 5 FAIL. Now 8 PASS / 2 WARN / 2 FAIL,
+# and BOTH remaining failures are facts about the run, not auditor defects:
+#   daily-coverage  — session 12's execution-slip, recorded in postmortem.md.
+#                     The gap WIDENED (days 1,2,4) because barracks-heat was
+#                     promoted into daily.md this session. A closed run is a
+#                     record; a count that moves with the item set is the diff working.
+#   final-undrafted — this run never declared the pardon its six fogged insects
+#                     needed. The auditor falls back to threats.hostiles when
+#                     hostiles_unpardoned is absent, precisely so a pre-ruling
+#                     run cannot be massaged green.
+
+PASS  ledger-valid          53 lines
+PASS  item-ids-known        12 colony-start steps, 21 ### ids
+FAIL  daily-coverage        missing (day, item): [(1, 'armed-roster'), (1, 'freezer-below-zero'), (1, 'barracks-heat'), (1, 'production-still-runs'), (1, 'apparel-margin'), (2, 'barracks-heat'), (4, 'freezer-below-zero'), (4, 'barracks-heat'), (4, 'production-still-runs'), (4, 'apparel-margin')]
+PASS  action-taken          30, first: colony-start-1: stockpile 'home stock' [120,122,7,6], filter=all, priority=Normal
+PASS  summary-written       summary.md
+FAIL  final-undrafted       threats.hostiles == 6 at end, none declared — pre-pardon run, no threats.hostiles_unpardoned field to key on
+WARN  advance-invariants    136-advance: empty command dir — cause unrecoverable, the client wrote nothing before dying
+WARN  advance-invariants    187-advance: empty command dir — cause unrecoverable, the client wrote nothing before dying
+PASS  advance-invariants    27 advances within policy
+PASS  zero-red-errors       175 events, 0 red
+PASS  transcript-journal    65 journaled mutations all covered by transcript ops (+7 nested, attributed to their composite verb)
