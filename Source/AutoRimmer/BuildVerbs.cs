@@ -94,21 +94,23 @@ namespace AutoRimmer
             var a = ctx.Args;
 
             var def = SiteGate.Named(a.StrReq("def"));
-            // IS THERE A DESIGNATOR FOR THIS AT ALL. The architect menu is built
-            // by `Verse/DesignationCategoryDef.ResolveDesignators`, whose generic
-            // pass is `from tDef in TerrainDef+ThingDef where tDef
-            // .designationCategory == this && tDef.canGenerateDefaultDesignator`
-            // — so a null `designationCategory` means no `Designator_Build` for
-            // the def exists anywhere and the player has no way to place it.
-            // Without this test `build {def:"Steel"}` reaches the zero-work
-            // branch (a resource has no WorkToBuild stat, so the abstract value
-            // is the stat's default) and god-hands a steel stack into existence
-            // through the one verb that is supposed to be a player's hand.
-            if (def.designationCategory == null)
+            // CAN A PLAYER BUILD THIS AT ALL — the game's own predicate, which
+            // has a name: `Verse/BuildableDef.BuildableByPlayer` is
+            // `designationCategory != null`. That is the same condition
+            // `Verse/DesignationCategoryDef.ResolveDesignators` uses to generate
+            // a `Designator_Build` for a def, AND the condition
+            // `RimWorld/ThingDefGenerator_Buildings.ImpliedBlueprintAndFrameDefs`
+            // uses to generate its `blueprintDef` and `frameDef` — so this test
+            // and "has a blueprintDef" are the SAME test, and the value of doing
+            // it here is the sentence, not extra coverage. `build {def:"Steel"}`
+            // would otherwise die further down on a null `blueprintDef`, which
+            // tells the caller nothing about why a resource is not a building.
+            if (!def.BuildableByPlayer)
                 throw new VerbArgsException(
-                    $"'{def.defName}' has no designationCategory, so no Designator_Build exists for "
-                    + "it and no player can place it (Verse/DesignationCategoryDef"
-                    + ".ResolveDesignators). It may still be spawnable — that is dev:spawn-thing.");
+                    $"'{def.defName}' is not BuildableByPlayer (Verse/BuildableDef: its "
+                    + "designationCategory is null, so no Designator_Build exists for it and it has "
+                    + "no blueprintDef either). It may still be spawnable — that is "
+                    + "dev:spawn-thing.");
             var stuff = SiteVerbs.ResolveStuff(def, a.Str("stuff"));
             // `def.defaultPlacingRot`, not Rot4.North: this verb models
             // Designator_Build, which starts there, and 76 vanilla defs set it

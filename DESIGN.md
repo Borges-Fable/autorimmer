@@ -1548,14 +1548,23 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `build` refuse to do what a player's click does — a blueprint needing no work
   is a blueprint no pawn is ever dispatched to. `mode` in the result is
   `blueprint` or `instant-zero-work` so the two never read alike.
-  Two guards fell out of writing it. **`def.designationCategory == null` is
-  `bad-args`**: the architect menu is built by
-  `Verse/DesignationCategoryDef.ResolveDesignators` from defs with a non-null
-  category, so a null one means no `Designator_Build` for that def exists
-  anywhere — and without the test `build {def:"Steel"}` reaches the zero-work
-  branch (a resource has no `WorkToBuild` stat, so the abstract value is the
-  stat's default) and god-hands a steel stack through the one verb that is
-  supposed to be a player's hand. And **`cleared` is a different field from
+  Two guards fell out of writing it. **`!def.BuildableByPlayer` is `bad-args`,
+  and the first version of this entry got the reason wrong.** The guard was
+  written believing `build {def:"Steel"}` would otherwise reach the zero-work
+  branch and god-hand a steel stack. Measured instead of assumed: `WorkToBuild`'s
+  `defaultBaseValue` is **1**, not 0 (Core `Defs/Stats/Stats_Building_Special.xml`),
+  so a resource takes the BLUEPRINT branch and dies on a null `blueprintDef`.
+  The guard's real value is therefore the SENTENCE, not extra coverage — and the
+  predicate has a name in the game: `Verse/BuildableDef.BuildableByPlayer` is
+  `designationCategory != null`, which is both the condition
+  `DesignationCategoryDef.ResolveDesignators` uses to generate a
+  `Designator_Build` and the condition
+  `ThingDefGenerator_Buildings.ImpliedBlueprintAndFrameDefs` uses to generate a
+  `blueprintDef`. So "no designator exists" and "no blueprintDef exists" are the
+  same fact, and the verb says which one the caller tripped. Recorded with the
+  correction visible rather than silently fixed, because an unmeasured
+  defaultBaseValue is exactly the kind of claim this log has gone stale on
+  before. And **`cleared` is a different field from
   `dev:spawn-thing`'s `wiped`, because the wipe MODE differs**: the blueprint
   path passes `DestroyMode.Deconstruct`, which REFUNDS, while the god-hand passes
   `Vanish`, which does not. One vocabulary for two behaviours would have made
