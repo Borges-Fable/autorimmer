@@ -256,6 +256,16 @@ namespace AutoRimmer
             "power_stored", "power_generator", "timeout_ticks_letter", "letter_tag",
             "drop_fixture_letters", "error_delay_ticks", "error_repeats",
             "error_text", "main_menu_delay_ticks",
+            // git-bug 722c951's `down-at` step. THIS LIST IS WHY THAT MERGE
+            // NEEDED A HUMAN: `spec/arg-names` added the guard and
+            // `spec/advance-halt` added the step, git merged both cleanly
+            // because they touch different lines, and the result would have
+            // refused every `down-at` call BEFORE any step ran — the fixture
+            // that phases 3, 4 and 5 of accept/722c951 are built on, and
+            // phase 0's own precondition. An allowlist is a declaration, and a
+            // declaration is a thing two branches can each be right about
+            // separately.
+            "down_delay_ticks", "down_pawn", "down_kill",
         };
 
         [Verb("journal-selftest")]
