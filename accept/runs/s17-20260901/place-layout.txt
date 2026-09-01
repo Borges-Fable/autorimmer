@@ -1,0 +1,140 @@
+AutoRimmer acceptance - place-layout / cancel-layout (1adc737)
+protocol root: /home/dorian/projects/rimworld/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer
+phases: 0 + 1, 2, 3, 4, 5
+
+==============================================================================
+PHASE 0 - the bench, the verbs, and THE SHAPE CONTRACT
+==============================================================================
+  0.1     OK      precondition: the bench answers `status`
+  0.2a    PASS    `journal` publishes data.last_seq
+  journal watermark: seq0=11
+  0.3a    FAIL    `verbs` lists place-layout
+          expected: place-layout in the registry
+          actual:   "{}"
+  0.3b    FAIL    `verbs` lists cancel-layout
+          expected: cancel-layout in the registry
+          actual:   "{}"
+  0.4     OK      precondition: a clear box for the rehearsal room
+  site: rect at [121, 120], layout origin [123, 122]
+  0.5a    PASS    a dry run reports ok and places nothing (data.ok)
+  0.5b    PASS    and says so (data.placed_count)
+  0.5c    PASS    `place-layout` publishes data.gate
+  0.5d    PASS    `place-layout` publishes data.anchor
+  0.5e    PASS    `place-layout` publishes data.rect
+  0.5f    PASS    `place-layout` publishes data.origin
+  0.5g    PASS    `place-layout` publishes data.requested
+  0.5h    PASS    `place-layout` publishes data.preflight
+  0.5i    PASS    `place-layout` publishes data.preflight.ok
+  0.5j    PASS    `place-layout` publishes data.preflight.checked
+  0.5k    PASS    `place-layout` publishes data.preflight.failed
+  0.5l    PASS    `place-layout` publishes data.preflight.failures
+  0.5m    PASS    `place-layout` publishes data.materials
+  0.5n    PASS    `place-layout` publishes data.shortfall
+  0.5o    PASS    `place-layout` publishes data.stuff_defaulted
+  0.5p    PASS    `place-layout` publishes data.layout_id
+  0.5q    FAIL    `place-layout` publishes data.rolled_back
+          expected: the key to be present
+          actual:   null
+  0.5r    PASS    `at` is documented as the north-west cell (data.anchor)
+  0.5s    PASS    22 tokens in the 5x7 grid (data.requested)
+  0.5t    PASS    the preflight sees the whole layout (data.preflight.checked)
+  0.5u    PASS    and the site is clear (data.preflight.failed)
+  0.6     PASS    this suite's inline grid IS templates/bedroom.ir.json
+
+==============================================================================
+PHASE 1 - THE INVARIANT: one refusal places NOTHING
+==============================================================================
+  1.1a    PASS    a self-overlapping layout is refused (data.ok)
+  1.1b    PASS    and nothing is placed (data.placed_count)
+  1.1c    PASS    and it gets no layout id (data.layout_id)
+  1.1d    PASS    the preflight names the offending element (data.preflight.failed)
+  1.1e    PASS    the failure is attributed to the SELF-check, not to the ground
+  1.1f    PASS    and it names the other element by index (r.with_index)
+  1.1g    PASS    with the game's own vocabulary in the reason
+  1.1h    PASS    nothing was placed, per `construction` rather than per the verb (n)
+  1.2a    PASS    a wall is placed by hand at the layout's south-west corner (data.placed)
+  1.2b    PASS    and it has a placement id
+  1.3a    FAIL    the layout is refused for that one cell (data.ok)
+          expected: false
+          actual:   true
+  1.3b    FAIL    and places NOTHING - the whole invariant (data.placed_count)
+          expected: 0
+          actual:   22
+  1.3c    FAIL    no layout id for a transaction that did not happen (data.layout_id)
+          expected: null
+          actual:   "ly-1"
+  1.3d    FAIL    exactly one element refused (data.preflight.failed)
+          expected: 1
+          actual:   0
+  1.3e    FAIL    the refusal names the refusing CELL
+          expected: a [x,z] cell
+          actual:   null
+  1.3f    PASS    and carries Blockers' {removal, reason} shape, which is what turns 'clear it' and 'site elsewhere' into a decision
+  1.3g    FAIL    the reason is the game's own sentence
+          expected: a reason naming an identical blueprint/thing
+          actual:   null
+  1.3h    FAIL    which half refused: the ground, not the architect menu (r.half)
+          expected: "verdict"
+          actual:   null
+  1.3i    FAIL    still exactly one blueprint on that ground - ours (n)
+          expected: 1
+          actual:   22
+  1.4a    PASS    cancel-layout takes a single placement id (data.cancelled)
+  1.4b    PASS    and says it belonged to no layout (data.layout_id)
+  1.4c    PASS    scope names what was asked (data.scope)
+  1.4d    FAIL    the ground is clear again (n)
+          expected: 0
+          actual:   21
+
+==============================================================================
+PHASE 2 - blueprint mode, and THE CORNER CONTRACT in real numbers
+==============================================================================
+  2.1a    FAIL    the whole room goes down (data.ok)
+          expected: true
+          actual:   false
+  2.1b    FAIL    all 22 elements (data.placed_count)
+          expected: 22
+          actual:   0
+  2.1c    FAIL    with nothing refused (data.preflight.failed)
+          expected: 0
+          actual:   1
+  2.1d    FAIL    and nothing rolled back (data.rolled_back)
+          expected: false
+          actual:   null
+  2.1e    FAIL    it gets a layout id
+          expected: an ly-N id
+          actual:   null
+  2.1f    PASS    the layout's rect is the 5x7 the caller asked for (data.rect)
+  2.1g    FAIL    and the whole transaction is journaled once (data.journal_seq)
+          expected: >= 1
+          actual:   null
+  2.2a    FAIL    grid [6,0] lands exactly on the origin
+          expected: a placed row labelled [6,0] Wall
+          actual:   []
+  2.4a    FAIL    the bed is placed
+          expected: a placed row labelled [1,2] Bed_South
+          actual:   []
+  2.5c    PASS    nothing fell through to the game's default (data.stuff_defaulted)
+  2.6a    PASS    the material bill names the wood the room needs
+  2.6b    PASS    and the count is a real total (m.count)
+  2.6c    PASS    with what is in stockpiles beside it
+  2.7a    FAIL    `construction` sees 22 blueprints on that ground (data.blueprints)
+          expected: 22
+          actual:   21
+  2.7b    PASS    and no frames yet (data.frames)
+  2.8a    FAIL    every element got its own placement id
+          expected: 22 distinct pl-N ids
+          actual:   []
+  2.9a    PASS    exactly one `place-layout` action row for this run
+  2.9b    FAIL    carrying the layout id (e.payload.layout_id)
+          expected: null
+          actual:   "ly-1"
+  2.9c    PASS    and the mode (e.payload.mode)
+  2.9d    PASS    and every placement id in it (n)
+
+==============================================================================
+PHASE 3 - cancel-layout, and the second call
+==============================================================================
+  3.0     SKIP    precondition NOT MET: phase 2 left a layout id
+          run phase 2 first (or the whole suite)
+          This is a FIXTURE gap, not a failure of 1adc737.

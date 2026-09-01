@@ -3103,3 +3103,124 @@ grid) is held until after M2 and is the first thing after it. M2 itself needs
 Room analysis.
 
 Bench left running, paused. Prefs at 640x480 windowed (unattended).
+
+## Session 18 — 2026-09-01 (dorian's Linux box). M2: a room colonists built
+
+**M2 is met.** `templates/bedroom.ir.json` went down as 22 blueprints at a
+`find-rect`-chosen origin, Danielle built all 22 under `advance`, and the game's
+own `Room` analysis returns `role: "Bedroom"`, `proper: true`,
+`open_roof_cells: 0`. Nothing had ever been built from a template before this.
+Full record, envelopes and a render: `accept/runs/s18-20260901/`.
+
+No code was written. The mod already did this; nobody had asked it to.
+
+### The run, in the order it happened
+
+`_RimWorld-Agent --quicktest`, 250x250 temperate forest, three colonists, watched
+on workspace 3 at 2560x1600 throughout. `dev:starter-kit --preset survival` then
+`unforbid`; construction skill raised to 8 on all three so the run would not
+spend itself on failed-construction rolls. `find-rect --w 5 --h 7 --require
+buildable --require unroofed --require reachable-from:111,127` -> `at [119,126]`.
+`place-layout` -> preflight 22/22, `layout_id "ly-1"`, `rolled_back false`. Two
+advances. Done at tick 4444; the whole room took **3,180 ticks and one builder**.
+
+`room --id 66`: `role "Bedroom"`, `regions 1`, `cells 15`, `touches_map_edge
+false`, `uses_outdoor_temp false`, 22.7 C against an outdoor 4, 19 WoodLog walls
+all roofed, bed 37916 owned by Izzy. Journal seq 12-62: 22 `construction`, 19
+`dev`, 5 `alert_on`, 3 `action`, 2 `alert_off` — **no `warning`, no `error`.**
+
+The room roofed itself, exactly as session 17's decision predicted: 35 cells is
+under `AutoBuildRoofAreaSetter`'s 320 and the area was generated without a single
+roof designation being sent. Izzy claimed the bed by sleeping in it, with no verb
+involved.
+
+### Three defects, and none of them is in the placement path
+
+`place-layout` did its job on the first call. What the run found is around it.
+
+**`54b0c9a` — a shortfall that does not exist.** The envelope reported
+`short_by: 185` while 869 reachable, unforbidden WoodLog sat ten cells from the
+site, and the room was then built out of that "missing" wood. `in_stockpiles` is
+`map.resourceCounter`, a quicktest map has no stockpile zone, and
+`MaterialBill`'s own header already says the number "cannot tell them apart".
+The header is right and it indicts the code three lines below it: `in_stockpiles`
+is a measurement whose name says what it measured, and `short_by` is a conclusion
+drawn from it anyway. Vanilla's own availability test has no stockpile clause at
+all — `WorkGiver_ConstructDeliverResources.ResourceValidator` (`:34`) is def
+match, `IsForbidden(pawn)`, `PawnCanAutomaticallyHaulFast`, and the word
+`SlotGroup` does not appear anywhere in that file.
+
+**`36999fd` — the progress verb cannot be asked about a layout.**
+`place-layout` mints `ly-1`, `cancel-layout` takes `ly-1`, `construction` has no
+such branch — and it **silently ignored `--layout_id ly-1` and answered
+whole-map while reporting success.** Right today only because those were the
+only blueprints on the map. That is `7382bdd`'s class landing on a new verb, and
+worse here than in the cases that issue banks, because the fallback is not a
+default but a different question.
+
+**A comment on `fc287ba` — there is no way to say "until it's done".** Every
+`until` matcher is a journal tap and a finished building emits nothing, so the
+advance was 2000 ticks, look, 6000 more. Evan caught the first number mid-run
+and asked whether it was part of the instructions. It was not; it was a guess,
+and there was nothing better. His follow-up — trigger, or a progress shell you
+look at? — has a structural answer: a shell cannot help an agent with no way to
+sleep, because between two looks it must still guess a tick count, so a shell
+returns the same arbitrary number plus latency. The halting decision belongs in
+the tick loop.
+
+The same comment settles one of that issue's open questions by measurement. The
+natural spelling, `construction.frames == 0`, was **true at three separate
+moments** on this run — before placement, during the ~900 ticks when 22
+blueprints were awaiting materials and none had become a frame, and at the end.
+So same-tick evaluation halts instantly on a room that does not exist, and edge
+detection halts on the wrong crossing. Some predicates are not expressible as
+`path op value` over the digest at all, and the most-wanted one in the mod is
+among them.
+
+### A premise in the brief was wrong, and reading the source was the only way to know
+
+The M2 brief stated as known: *"role: Bedroom needs a bed owner [...] an unowned
+bed scores as Barracks."* Not true in 1.6 for a one-bed room.
+`RoomRoleWorker_Bedroom.IsBedroomHelper` counts an owner-less bed into `num` when
+`bed_emptyCountsForBarracks` (default true, `BuildingProperties.cs:196`) and
+opens with `if (num == 1 && num2 == 0) { return true; }`;
+`RoomRoleWorker_Barracks.GetScore` returns `0f` whenever `IsBedroom` is true, so
+Barracks cannot win it. The rule holds from two empty beds up.
+
+It changed nothing here — Izzy claimed the bed anyway — so it is a **source
+reading and not a measurement**, and it is written down that way. It matters for
+whoever writes the acceptance suite, which would otherwise advance until a
+colonist sleeps to reach a state already reached, and would pass for the wrong
+reason.
+
+### Two of my own errors, both cheap and both recorded
+
+`dev:starter-kit` ran **twice**: the first call was meant to read the resolved
+plan, and I had forgotten the plan is only a preview under `dry_run: true`.
+Doubled materials, no harm — recorded because a doubled fixture is invisible in
+an envelope that reports only its own call.
+
+And I tallied the journal by `e.get('kind')` when the field is `type`, which
+returned `Counter({None: 51})` — a confident zero errors from a wrong dig path.
+Caught by looking at the raw first row. This is the memory-noted shape trap
+(`eq(..., None)` passes on an absent key) committed by hand rather than in a
+suite, one session after session 15 and 16 each recorded an instrument reading
+mistaken for a fact. Three sessions running.
+
+### Status
+
+`1adc737` stays **open**: this run meets its M2-rehearsal bullet except the
+"heated by placed heater" clause, which `bedroom.ir.json` cannot satisfy (no
+heater among Wall/Bed/TorchLamp/Door) — Evan's call whether the template or the
+bullet changes. Its other two bullets, instant mode and a deliberately colliding
+layout, were **not attempted** and are named as such on the issue. M2 itself is
+discharged on the muster independently.
+
+The s17 acceptance run at `accept/runs/s17-20260901/` was left alone, as briefed.
+Two of its failures are confirmed the suite's own: `verbs` **does** list
+`place-layout` and `cancel-layout` (125 verbs on this bench, both present), and
+`0.5q`'s missing `rolled_back` is absent only on the dry-run path, which is a
+shape question and not a placement one.
+
+Bench left running and paused at tick 14625. `Prefs.xml` restored to the 640x480
+windowed unattended values.
