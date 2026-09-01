@@ -577,12 +577,65 @@ def _room_name_pass(im, planes, rooms_list, w, h, scale, gx0, gy0, placed):
             break
 
 
+# --------------------------------------------------------------------------
+# footprint geometry, ported from Verse/GenAdj (git-bug 2a7c064, c718e4a)
+# --------------------------------------------------------------------------
+# `map-dump` publishes `at = Thing.Position`, which is a CENTRE, not a corner —
+# `GenAdj.OccupiedRect(center, rot, size)` builds the rect around it. Getting
+# from one to the other is rotation-dependent in two steps, and this module
+# used to do only the first:
+#
+#   1. `AdjustForRotation` swaps size.x/size.z when the rotation is horizontal
+#      (East/West), and
+#   2. shifts the centre by a per-rotation offset — applying each axis's shift
+#      ONLY when that axis's size is even, and returning early for 1x1.
+#
+# Reproducing step 1 alone displaces every EVEN-sized rotated building by one
+# cell, which no amount of fixing the label arithmetic can correct, because the
+# rect itself is wrong. Ported whole rather than approximated; the tuple table
+# is `AdjustForRotation`'s own, for reference = North, which is the reference
+# `OccupiedRect` always passes.
+_ROT_INT = {"North": 0, "East": 1, "South": 2, "West": 3}
+_ROT_SHIFT = {0: (0, 0), 1: (0, -1), 2: (-1, -1), 3: (-1, 0)}
+
+
+def occupied_rect(cx, cz, sw, sh, rot):
+    """(centre, size, rotation) -> (minX, minZ, w, h), the way Verse/GenAdj does.
+
+    `rot` is the invariant word ("North".."West") or a Rot4 int. Anything
+    unrecognised is treated as North — which is also what a 1x1 thing collapses
+    to, since `AdjustForRotation` returns early for it.
+    """
+    r = rot if isinstance(rot, int) else _ROT_INT.get(rot, 0)
+    if sw == 1 and sh == 1:
+        return cx, cz, 1, 1
+    if r in (1, 3):                       # Rot4.IsHorizontal
+        sw, sh = sh, sw
+    dx, dz = _ROT_SHIFT[r]
+    if sw % 2 == 0:
+        cx += dx
+    if sh % 2 == 0:
+        cz += dz
+    return cx - (sw - 1) // 2, cz - (sh - 1) // 2, sw, sh
+
+
 def _label_pass(im, dump, codes, entry, px, ox, oz, w, h, scale, gx0, gy0, placed):
     """Draw each building's code once, skipping overlaps and clamping to the grid.
 
     The first render drew labels wherever they landed, producing `A$IR` where
     two overlapped and glyphs pressed into the right border. Boxes are tracked
     and a label that would collide is dropped — in dump order, so deterministic.
+
+    The code goes on the footprint's true centre. It used to go at
+    `at + size/2`, which treats a position that is ALREADY central as a corner:
+    one cell east for an odd width. The z axis had the opposite error — an
+    extra `- (sh-1)/2` put an odd-height label one cell north — and it stayed
+    invisible because the specimen that found the bug was a 3x1 stove, height 1.
+    Both are gone: the rect is computed once by `occupied_rect` and the label is
+    centred in it, which needs no parity special-case. An EVEN-sized building
+    has no middle cell, so its centre is the boundary between the two middle
+    cells — a whole number of cells from the west/north edge, which falls out of
+    the same arithmetic. git-bug 2a7c064.
     """
     tscale = 2 if scale >= 20 else 1
     for lab in dump.get("labels") or []:
@@ -593,12 +646,13 @@ def _label_pass(im, dump, codes, entry, px, ox, oz, w, h, scale, gx0, gy0, place
         if not (ox <= gxc < ox + w and oz <= gzc < oz + h):
             continue
         sw, sh = (lab.get("size") or [1, 1])[:2]
-        if lab.get("rot") in ("East", "West"):
-            sw, sh = sh, sw
-        x, y = px(gxc, gzc)
+        mnx, mnz, sw, sh = occupied_rect(gxc, gzc, sw, sh, lab.get("rot"))
+        # px() is a CELL's top-left and z flips to y, so the footprint's
+        # north-west pixel is the NORTH row's: maxZ = mnz + sh - 1.
+        x, y = px(mnx, mnz + sh - 1)
         tw, th = text_width(code, tscale), FONT_H * tscale
         cx = x + (sw * scale) // 2 - tw // 2
-        cy = y + scale // 2 - ((sh - 1) * scale) // 2 - th // 2
+        cy = y + (sh * scale) // 2 - th // 2
         cx = max(gx0, min(cx, gx0 + w * scale - tw - 1))
         cy = max(gy0, min(cy, gy0 + h * scale - th - 1))
         box = (cx - 1, cy - 1, cx + tw + 1, cy + th + 1)
