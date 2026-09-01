@@ -51,6 +51,14 @@ namespace AutoRimmer
         //                                          resolved". See StateWatch.cs
         //                                          for why the second is a
         //                                          named family and not a path.
+        //   casualty                             — 722c951. An OWN-FACTION pawn
+        //                                          went down or died while time
+        //                                          ran. Not a matcher and not
+        //                                          opt-in: default-on, like
+        //                                          `dialog`, because "the pawn
+        //                                          you were told about died
+        //                                          during the next advance" is
+        //                                          the M1 failure verbatim.
         //   red_error                            — halt_on_error
         //   dialog                               — a force-pausing modal is up
         //                                          (spec 1.7); vanilla stopped
@@ -82,6 +90,66 @@ namespace AutoRimmer
         private static string filterB;             // event contains
         private static bool haltOnError;
         private static int timeoutTicks;
+
+        // ==================================================== git-bug 722c951 ==
+        // THE READ OBLIGATION, and it is created BY AN ADVANCE.
+        //
+        // `Journal.CurrentSeq` at the moment the LAST advance handed back
+        // control — i.e. exactly the top of the `journal_seq:[a,b]` that advance
+        // published. The next `advance` refuses while
+        // `Journal.ReadWatermark < lastAdvanceEndSeq`.
+        //
+        // WHY THE WINDOW IS THE PREVIOUS ADVANCE'S DELTA and not "any unread
+        // event at all". The issue's own question is "has this client read the
+        // journal SINCE THE LAST ADVANCE", and the two readings differ sharply
+        // in practice:
+        //
+        //   * Events emitted while TIME RAN are news the caller did not see.
+        //     Nobody was watching; that is what an advance IS. m1-20260831 step
+        //     148 produced seqs 125..128 announcing Table's downing, the run
+        //     read none of them, and advanced five more times.
+        //   * Events emitted while the agent is AT THE WHEEL — the game is
+        //     paused, the loop is reading and acting — are things it did or
+        //     asked for, and it got a result envelope for each. The play loop is
+        //     read -> think -> ACT -> advance, and every mutating verb journals
+        //     an `action` row, so blocking on those would charge a `journal`
+        //     round trip to every turn that acted. That is friction with no
+        //     safety in it, and friction is what drives a run to leave the
+        //     escape hatch switched on — the one outcome this issue must not
+        //     produce.
+        //
+        // The narrower window is also strictly enough for the failure being
+        // fixed: every event in the M1 sequence was produced inside an advance.
+        // And it is still bookkeeping with no judgement in it — two longs, no
+        // allow-list of "interesting" event types, which is the shape that would
+        // have had to GUESS that `downed` mattered.
+        //
+        // Consequences worth stating rather than discovering:
+        //   * The FIRST advance of a session is never refused. Nothing has run
+        //     unobserved yet, so the session `boot` event is not an obligation.
+        //   * An advance that journaled NOTHING creates no obligation, so a
+        //     quiet colony never pays for this at all.
+        //   * `unread_ok` DOES NOT DISCHARGE THE OBLIGATION. It bypasses the
+        //     refusal for ONE call and leaves the watermark exactly where it
+        //     was, so the next advance refuses again unless it reads or escapes
+        //     again — and every escape writes its own journal row. Riding past a
+        //     delta for three in-game days therefore costs three journaled
+        //     admissions rather than one flag, which is the whole difference
+        //     between a per-call escape and a mode. Only `journal` clears it.
+        private static long lastAdvanceEndSeq;
+
+        // The two per-call escapes, each a REQUIRED non-empty reason string.
+        // Null when not passed. Session 13's `threat-pardon` precedent: the
+        // decision must be a recorded ACT, not a silent exemption — so these are
+        // journaled at arm time and echoed in the result envelope, and a
+        // post-mortem can grep either.
+        private static string unreadOk;
+        private static string throughCasualties;
+        private static bool haltOnCasualty;
+        // What the refusal WOULD have said, kept for the result envelope when an
+        // escape overrode it. An escape that hides the number it bypassed is a
+        // silent bypass with a reason string stapled on.
+        private static Dictionary<string, object> bypassed;
         // 1.6. Non-null only for until:{condition|layout}; polled from Step on
         // its own frame cadence, never from Notice (wrong thread).
         private static StateWatch watch;
@@ -340,6 +408,7 @@ namespace AutoRimmer
             haltOnError = args.Bool("halt_on_error", true);
             timeoutTicks = args.Int("timeout_ticks", until == Until.Ticks ? 0 : 600000);
 
+
             // ---- which speed to run at ---------------------------------
             //
             // `speed:` is 1.8's own knob. `max_tps:` is kept, and kept
@@ -394,6 +463,99 @@ namespace AutoRimmer
                 ["by"] = clampBy,
             };
 
+            // ---- 722c951 / 40ed42f#3: the two refusals ---------------------
+            //
+            // HERE, and the position is load-bearing in BOTH directions.
+            //
+            // AFTER every other argument has been READ, because `VerbArgs` now
+            // keeps a read log and reports `supplied - queried` as
+            // `ignored_args` (git-bug 7382bdd). Returning from above the speed
+            // block would leave `speed`/`max_tps` unread on a refused advance
+            // and make the caller's own arguments look ignored — a refusal that
+            // manufactures a second, false complaint.
+            //
+            // BEFORE `SetSpeed`, because a refusal must leave the clock exactly
+            // where it found it: no ticks ran, nothing was armed, and `cmd` is
+            // not claimed yet, so there is nothing to unwind and no risk of a
+            // second result for one command.
+            //
+            // The escapes are parsed here too, and REFUSED rather than coerced:
+            // a present-but-empty reason is the shape of a bypass somebody added
+            // to get a suite green, and it must not be spellable. `VerbArgs.Str`
+            // already throws for a non-string. They need no registration
+            // anywhere — reading them through this same `VerbArgs` instance is
+            // what marks them read, which is the whole design of 7382bdd.
+            unreadOk = args.Has("unread_ok") ? Reason(args, "unread_ok") : null;
+            throughCasualties = args.Has("through_casualties") ? Reason(args, "through_casualties") : null;
+            haltOnCasualty = throughCasualties == null;
+            bypassed = null;
+
+            // REFUSAL 1 — the unread journal delta. Cheapest check first,
+            // deliberately: it is two longs plus (only when it fires) one ring
+            // walk, whereas refusal 2 can cost a pathfind. Doing the cheap one
+            // first means a blind advance never pays for the deadline check —
+            // and the unread refusal's own type breakdown names the `downed`
+            // that refusal 2 is about, so the caller is pointed at the casualty
+            // either way.
+            long watermark = Journal.ReadWatermark;
+            if (watermark < lastAdvanceEndSeq)
+            {
+                long n = lastAdvanceEndSeq - watermark;
+                long total = Math.Max(0L, Journal.CurrentSeq - watermark);
+                var counts = Journal.CountsRange(watermark, lastAdvanceEndSeq, out _, out bool ringTrunc);
+                string breakdown = Breakdown(counts);
+                var block = new Dictionary<string, object>
+                {
+                    ["unread"] = (double)n,
+                    ["unread_total"] = (double)total,
+                    ["read_watermark"] = (double)watermark,
+                    ["advance_end_seq"] = (double)lastAdvanceEndSeq,
+                    ["seq_from"] = (double)(watermark + 1),
+                    ["seq_to"] = (double)lastAdvanceEndSeq,
+                    ["types"] = breakdown,
+                };
+                if (ringTrunc) block["ring_truncated"] = true;
+                string detail =
+                    $"the previous advance journaled {n} event(s) that no `journal` call has read "
+                    + $"(seq {watermark + 1}..{lastAdvanceEndSeq}; types: {breakdown}). "
+                    + $"unread={n} unread_total={total} read_watermark={watermark} "
+                    + $"advance_end_seq={lastAdvanceEndSeq}. "
+                    + "Advancing again now is advancing BLIND: run m1-20260831 lost a colonist to "
+                    + "exactly this, when step 148's own result carried journal_seq:[125,128] "
+                    + "announcing Table was down and the run advanced five more times while he "
+                    + "bled for 11,335 ticks. "
+                    + $"Fix: `journal {{since_seq:{watermark}}}`, then advance. "
+                    + "Or pass `advance {unread_ok:\"<why>\"}` to proceed anyway — the reason is "
+                    + "journaled as an act. It bypasses ONE call and does not move the watermark, "
+                    + "so the next advance asks again; only `journal` clears this.";
+                if (unreadOk == null)
+                    return Result.Fail(command.Id, command.Op, ErrUnreadJournal, detail);
+                bypassed = bypassed ?? new Dictionary<string, object>();
+                block["reason"] = unreadOk;
+                bypassed["unread_journal"] = block;
+            }
+
+            // REFUSAL 2 — the bleed clock against the rescue. `triage`'s own
+            // row, `triage`'s own verdict: TriageVerbs.BleedoutDeadline is the
+            // one path, and its header carries what this costs and when it is
+            // skipped (one cached float per colonist when nobody is bleeding;
+            // pathfinds only for a bleeder on a finite clock, capped at 3).
+            var deadline = PawnActs.BleedoutDeadline(Find.CurrentMap);
+            if (deadline != null)
+            {
+                string detail = DeadlineDetail(deadline);
+                if (throughCasualties == null)
+                    return Result.Fail(command.Id, command.Op, ErrBleedoutDeadline, detail);
+                bypassed = bypassed ?? new Dictionary<string, object>();
+                var block = new Dictionary<string, object>
+                {
+                    ["reason"] = throughCasualties,
+                    ["detail"] = detail,
+                    ["casualty"] = deadline,
+                };
+                bypassed["bleedout_deadline"] = block;
+            }
+
             // Own the clock: set the speed and VERIFY it took. A refused set is
             // a failure result, not a stalled advance — see SetSpeed.
             speedRefusals.Clear();
@@ -414,6 +576,35 @@ namespace AutoRimmer
                     $"the game refused {want} and stayed at {tm.CurTimeSpeed}: PlayerCanControl is "
                     + "false (screen fade, gravship cutscene, or landing-area confirmation). "
                     + "Nothing was armed; retry when the game hands control back.");
+
+            // THE ESCAPE IS AN ACT, so it is journaled the moment it is used —
+            // present-but-unnecessary included, because a post-mortem asking
+            // "was this run driving with the guard rails off" wants every
+            // occurrence, not only the ones that changed an outcome. ONE event
+            // per advance however many escapes were passed, so
+            // `accept/4.2-play-loop.py`'s per-verb journal-vs-transcript tally
+            // stays <= 1 line per `advance` op.
+            //
+            // AFTER the speed took, deliberately: an advance the game itself
+            // refused (`cannot-set-speed`) never existed, and a journal row
+            // declaring an escape for it would be a confession to a decision
+            // nobody got to make.
+            if (unreadOk != null || throughCasualties != null)
+            {
+                var payload = new Dictionary<string, object>
+                {
+                    ["verb"] = "advance",
+                    ["step"] = "escape",
+                    ["id"] = command.Id,
+                };
+                if (unreadOk != null) payload["unread_ok"] = unreadOk;
+                if (throughCasualties != null) payload["through_casualties"] = throughCasualties;
+                var applied = new List<object>();
+                if (bypassed != null) foreach (var kv in bypassed) applied.Add(kv.Key);
+                payload["bypassed"] = applied;
+                if (bypassed != null) payload["detail"] = bypassed;
+                Journal.Emit("action", payload, tm.TicksGame);
+            }
 
             cmd = command;
             Target = ticks;
@@ -472,6 +663,99 @@ namespace AutoRimmer
             ActiveId = command.Id;
             Active = true;
             return null;
+        }
+
+        // ---- 722c951 / 40ed42f#3: refusal codes, and why `ok:false` ---------
+        //
+        // `ok:false` IS RIGHT HERE AND `ok:true` IS RIGHT FOR A REFUSED
+        // `dev:spawn-thing`, and the difference is not a style preference.
+        // Session 13's ruling (RUNLOG, PLAY-LOOP §act): a refusal from a player
+        // verb is a WIDGET-GATE ANSWER — "the game will not let this pawn be
+        // drafted", "there is nowhere to put that" — an answer ABOUT THE WORLD,
+        // which is information, so the envelope succeeded even though the act
+        // did not. These two are not answers about the world. They are the mod
+        // REFUSING TO ACT: no ticks ran, the clock was never touched, nothing
+        // was armed, and the caller's next move must be different from the one
+        // it just made. That is a failed command, and a caller that branches on
+        // `ok` alone must land in its error path, not read a `data` block and
+        // conclude time passed.
+        //
+        // Both codes are protocol surface (DESIGN §Protocol) and both carry
+        // their numbers in `error.detail`, because the envelope carries no
+        // `data` on a failure (Poller.BuildResultJson). The detail is written so
+        // it can be parsed as well as read: `key=value` tokens for every number,
+        // prose for the human.
+        public const string ErrUnreadJournal = "unread-journal";
+        public const string ErrBleedoutDeadline = "bleedout-deadline";
+
+        // A per-call escape's reason. Required, non-empty, a string — a blank
+        // one would let "unread_ok" become a bare boolean by another name.
+        private static string Reason(VerbArgs args, string key)
+        {
+            string s = args.Str(key); // throws bad-args for a non-string
+            if (string.IsNullOrWhiteSpace(s))
+                throw new VerbArgsException(
+                    $"'{key}' must be a non-empty reason string saying WHY this advance may skip "
+                    + "the guard. It is journaled as an act (session 13's threat-pardon "
+                    + "precedent: the decision is a recorded ACT, not a silent exemption), so a "
+                    + "blank one would be a silent bypass with a quote mark on it. "
+                    + $"Example: {key}:\"burning 3 days unattended to reach the caravan, "
+                    + "casualties accepted\".");
+            return s;
+        }
+
+        private static string Breakdown(Dictionary<string, int> counts)
+        {
+            if (counts == null || counts.Count == 0) return "none in the ring";
+            var keys = new List<string>(counts.Keys);
+            keys.Sort(StringComparer.Ordinal);
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < keys.Count; i++)
+            {
+                if (i > 0) sb.Append(", ");
+                sb.Append(keys[i]).Append(' ').Append(counts[keys[i]]);
+            }
+            return sb.ToString();
+        }
+
+        // The refusal sentence for a `too-slow` triage row. Every number comes
+        // off the row `triage` itself publishes — nothing is recomputed here,
+        // which is what "consume it, do not grow a second path" means in code.
+        private static string DeadlineDetail(Dictionary<string, object> row)
+        {
+            string name = row.TryGetValue("name", out var n) ? n as string : "?";
+            object id = row.TryGetValue("pawn", out var i) ? i : null;
+            long bleed = 0, margin = 0;
+            try
+            {
+                if (row["clock"] is Dictionary<string, object> clock)
+                    bleed = Convert.ToInt64(clock["ticks"]);
+                margin = Convert.ToInt64(row["margin_ticks"]);
+            }
+            catch { }
+            long rescue = bleed - margin;   // margin is clock - best total, by construction
+            object rescuer = null;
+            try
+            {
+                if (row["act"] is Dictionary<string, object> act
+                    && act["args"] is Dictionary<string, object> aa)
+                    rescuer = aa["pawn"];
+            }
+            catch { }
+            return $"{name} bleeds out in {bleed} ticks and the nearest capable rescuer needs "
+                + $"{rescue} ticks to reach a bed with them — {-margin} ticks short. "
+                + $"bleedout_ticks={bleed} rescue_ticks={rescue} margin_ticks={margin} "
+                + $"pawn={id} pawn_name={name} rescuer={rescuer} verdict=too-slow. "
+                + "Advancing now is a decision to let this pawn die, and the M1 run made it by "
+                + "accident: at tick 231,968 a ~9,040-tick bleed clock was answered with a "
+                + "work-priority flip whose chosen rescuer stayed asleep for ~6,100 ticks. "
+                + "Send the call `triage` already spells out (`rescue {pawn, target}` FORCES the "
+                + "job through Pawn_JobTracker.TryTakeOrderedJob and interrupts LayDown), read "
+                + "`triage` for the whole row and the other candidates, or pass "
+                + "`advance {through_casualties:\"<why>\"}` to make the decision explicitly. "
+                + "The travel estimate is a FLOOR (PawnPath.TotalCost excludes door waits, pawn "
+                + "collisions and the time to abandon the current job), so the real margin is "
+                + "worse than this, not better.";
         }
 
         // The `until` object's whole vocabulary, in one place. Exactly one
@@ -534,6 +818,58 @@ namespace AutoRimmer
                 Halt("dialog", payload, seq);
                 return;
             }
+            // ---- 722c951 #1: the casualty halt --------------------------------
+            //
+            // DEFAULT-ON AND NOT A MATCHER, exactly like `dialog` above and for
+            // the same kind of reason. `until:{event:{type:"downed"}}` has always
+            // existed and the M1 run did not use it — the failure was never that
+            // the spelling was missing, it was that the DEFAULT let a long
+            // advance run straight through a downing and a death without
+            // returning control. Post-mortem numbers: 27 advances, zero `journal`
+            // calls; Table went down at 214,599 inside a 2,500-tick advance and
+            // Captain at 229,014 the same way. Making this opt-in would ship the
+            // fix switched off.
+            //
+            // THE FILTER IS ON FACTION, NOT ON THE EVENT. A hostile going down is
+            // the advance working — that is what "advance until the raid is over"
+            // looks like from the inside — and halting on it would make every
+            // fight a wedge. `payload["player"]` is `Faction.IsPlayer` resolved on
+            // the MAIN thread by the hook that emitted it (JournalHooks.StampPawn,
+            // and see its header for why `IsColonist` is the wrong test): this tap
+            // is documented "any thread" and may not touch Verse to ask for
+            // itself.
+            //
+            // Both transitions, because both are the loss: `downed` is
+            // Pawn_HealthTracker.MakeDowned and `death` is SetDead, and a pawn
+            // already down when the advance started emits neither — the hooks are
+            // on the transition, so this cannot re-fire for the same pawn and
+            // cannot wedge.
+            if (haltOnCasualty && (type == "downed" || type == "death")
+                && payload != null && payload.TryGetValue("player", out var mine)
+                && mine is bool isMine && isMine)
+            {
+                var evt = new Dictionary<string, object>
+                {
+                    ["kind"] = "casualty",
+                    ["event"] = type,
+                    ["pawn"] = Str(payload, "pawn"),
+                    ["faction"] = Str(payload, "faction"),
+                    ["player_faction"] = true,
+                    ["tick"] = (double)tick,
+                };
+                if (payload.TryGetValue("pawn_id", out var pid)) evt["pawn_id"] = pid;
+                if (payload.TryGetValue("kind", out var pk)) evt["pawn_kind"] = pk;
+                if (payload.TryGetValue("damage", out var dmg)) evt["damage"] = dmg;
+                evt["detail"] = Str(payload, "pawn") + " ("
+                    + (Str(payload, "faction") ?? "your faction") + ") "
+                    + (type == "death" ? "DIED" : "went DOWN") + " at tick " + tick
+                    + " — the advance stopped here rather than running on. `triage` has the "
+                    + "bleed clock, the rescuers and the exact `rescue` call; "
+                    + "`advance {through_casualties:\"<why>\"}` rides past it deliberately.";
+                Halt("casualty", evt, seq);
+                return;
+            }
+
             // red_error is deliberately NOT matched here — NoticeRedError below
             // owns the halt, upstream of the journal's dedupe cap. An explicit
             // until:{event:{type:"red_error"}} still works through Until.Event,
@@ -626,6 +962,13 @@ namespace AutoRimmer
             haltEvent = null;
             haltSeq = 0;
             slowerNow = false;
+            // 722c951: the read obligation dies with the game that created it.
+            // The command was answered `no-active-game` with NO data, so the
+            // caller was never handed a `journal_seq` range and never learned a
+            // delta existed; blocking the NEXT colony's first advance on events
+            // from a colony that no longer exists is noise, not discipline. The
+            // events are still in the file for a post-mortem.
+            lastAdvanceEndSeq = 0;
             if (c == null) return false;
             var r = Result.Fail(c.Id, c.Op, code, detail);
             r.Data = null;
@@ -867,6 +1210,20 @@ namespace AutoRimmer
             // driver that is on its way out.
             Active = false;
             ActiveId = null;
+            // 722c951: the read obligation this advance just created. HERE and
+            // not in Finish, because `FinishFailed` runs ticks too — an advance
+            // that died on an exception still let time pass unobserved, and the
+            // caller got no `journal_seq` at all for it. Read before
+            // `RestorePause` below, whose Log.Warning would itself journal.
+            //
+            // ONLY IF THIS ADVANCE ACTUALLY PRODUCED EVENTS. `endSeq > startSeq`
+            // is the same test `BuildData` uses to decide whether to publish a
+            // `journal_seq` range at all, so the obligation and the published
+            // delta are the same fact. A silent advance leaves any EARLIER
+            // obligation standing — it does not discharge one — and it does not
+            // invent one out of events that predate it.
+            long endedAt = Journal.CurrentSeq;
+            if (endedAt > startSeq) lastAdvanceEndSeq = endedAt;
             try
             {
                 if (slowerNow)
@@ -974,7 +1331,30 @@ namespace AutoRimmer
                     ? new List<object> { (double)(startSeq + 1), (double)endSeq }
                     : new List<object>(),
                 ["slower_spans"] = new List<object>(slowerSpans),
+
+                // 722c951. THIS ECHO IS NOT A READ AND DOES NOT DISCHARGE
+                // ANYTHING — see JournalVerbs.Read's header for why, and the M1
+                // step 148 that proves it. It is published so the caller knows
+                // what its next `journal {since_seq}` should be and can see the
+                // obligation it is now carrying.
+                //
+                // `journal_unread` is what the NEXT advance will refuse on:
+                // nonzero here means the next one is blocked until a `journal`
+                // call moves the watermark past it.
+                // Teardown has already run by the time BuildData is called, so
+                // `lastAdvanceEndSeq` is THIS advance's obligation and this
+                // subtraction is literally the comparison Start will make next.
+                ["journal_read_watermark"] = (double)Journal.ReadWatermark,
+                ["journal_unread"] = (double)Math.Max(0L, lastAdvanceEndSeq - Journal.ReadWatermark),
             };
+            // The escapes, echoed on the envelope as well as journaled, so a
+            // post-mortem reading transcripts alone still sees them and does not
+            // have to join to the journal to find out the guard rails were off.
+            // Present ONLY when one was passed, so silence means "the defaults
+            // ran".
+            if (unreadOk != null) data["unread_ok"] = unreadOk;
+            if (throughCasualties != null) data["through_casualties"] = throughCasualties;
+            if (bypassed != null) data["escaped"] = bypassed;
             if (Target >= 0) data["overshoot"] = Math.Max(0, ticks - Target);
             if (speedClamp != null) data["speed_clamped"] = speedClamp;
             // Present ONLY when the caller's number was moved, so silence means

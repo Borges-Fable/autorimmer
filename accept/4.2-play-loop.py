@@ -22,6 +22,16 @@ Checks (PASS/FAIL/WARN per check, exit 0 iff no FAIL):
   advance-invariants  from transcript result envelopes: timeout_ticks <= 60000,
                       ticks_elapsed <= 60000 + the envelope's own overshoot_bound,
                       halt_on_error never false, no two consecutive 0-tick advances
+  advance-discipline  git-bug 722c951. Tells a BLIND-ADVANCE REFUSAL
+                      (ok:false, unread-journal) from a CASUALTY HALT
+                      (ok:true, reason:"casualty") from a BLEEDOUT REFUSAL
+                      (ok:false, bleedout-deadline) from any other early
+                      return, and audits what the loop did about each:
+                      any blind-advance refusal FAILs, advancing with zero
+                      `journal` ops FAILs (m1-20260831's 27-to-0 shape),
+                      re-advancing straight off a casualty halt FAILs, and
+                      every escape (`unread_ok` / `through_casualties`) is
+                      surfaced with its reason for the human gate
   transcript-journal  every journal action/dev verb appears among transcript ops,
                       with journal count <= transcript count per op — minus the
                       lines a composite verb declares via caused_seqs, which are
@@ -82,6 +92,140 @@ def checklist_item_ids(repo):
 def daily_item_ids(repo):
     text = (repo / "checklists" / "daily.md").read_text(encoding="utf-8")
     return set(re.findall(r"^### +(\S+)", text, re.M))
+
+
+def transcript_steps(tr):
+    """Every command dir in order as (name, op, cmd, res). op comes from
+    cmd.json when it is there and from the directory name otherwise, because a
+    client that died before writing cmd.json still left the directory — and
+    which op it WAS is the thing the adjacency rules below turn on."""
+    out = []
+    for d in sorted(tr.iterdir()):
+        if not d.is_dir():
+            continue
+        m = re.fullmatch(r"\d+-(.+)", d.name)
+        if not m:
+            continue
+        cmd = res = None
+        for fn, slot in (("cmd.json", "cmd"), ("result.json", "res")):
+            p = d / fn
+            if p.is_file():
+                try:
+                    v = json.loads(p.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    v = None
+                if slot == "cmd":
+                    cmd = v
+                else:
+                    res = v
+        op = (cmd or {}).get("op") or m.group(1)
+        out.append((d.name, op, cmd, res))
+    return out
+
+
+def advance_discipline(tr):
+    """git-bug 722c951 — THE DISCRIMINATOR.
+
+    `advance` now has three distinguishable early returns that all used to be
+    "an advance came back", and the whole point of the issue is that the loop's
+    response to each is different:
+
+      * BLIND-ADVANCE REFUSAL — ok:false, error.code "unread-journal". NO TICKS
+        RAN. The loop tried to advance while the previous advance's journal
+        delta was unread. This is m1-20260831's exact failure and it is a
+        compliance FAIL of the loop, not of the mod: PLAY-LOOP §read step 1 is
+        unconditional, and the mod is only saying so out loud.
+      * BLEEDOUT REFUSAL — ok:false, error.code "bleedout-deadline". NO TICKS
+        RAN. WARN, not FAIL, and the split is deliberate: the loop could not
+        have known this without running a pathfinder itself, so being told is
+        the mod doing its job. What matters is what happened next, which is the
+        human gate's read — the reason and the pawn are in error.detail.
+      * CASUALTY HALT — ok:true, data.reason "casualty". Ticks DID run and
+        stopped at the downing. The loop must DO something before it advances
+        again; re-advancing straight off one is OUT-1's failure with the halt
+        added, and that is mechanical, so it FAILs here.
+
+    Plus the check M1 could not have failed because nothing measured it: 27
+    advances against ZERO `journal` calls. Any advancing at all with no journal
+    op in the transcript is the shape, escape or no escape.
+    """
+    steps = transcript_steps(tr)
+    if not steps:
+        report("WARN", "advance-discipline", "no command dirs in transcript — skipped")
+        return
+
+    kinds = {}
+    problems = []
+    escapes = []
+    journal_ops = sum(1 for _, op, _, _ in steps if op == "journal")
+    n_adv = 0
+
+    for i, (name, op, cmd, res) in enumerate(steps):
+        if op != "advance":
+            continue
+        n_adv += 1
+        args = (cmd or {}).get("args") or {}
+        # The escape is declared in the ARGS and echoed on the DATA. Read both:
+        # args alone misses an envelope replayed from elsewhere, data alone
+        # misses an advance whose result never came back.
+        data = (res or {}).get("data") or {}
+        for key in ("unread_ok", "through_casualties"):
+            why = args.get(key) or data.get(key)
+            if why:
+                escapes.append(f"{name}: {key}={why!r}")
+
+        if res is None:
+            kinds["no-result"] = kinds.get("no-result", 0) + 1
+            continue
+        if res.get("ok") is False:
+            code = ((res.get("error") or {}).get("code")) or "?"
+            kinds[f"refused:{code}"] = kinds.get(f"refused:{code}", 0) + 1
+            detail = ((res.get("error") or {}).get("detail")) or ""
+            if code == "unread-journal":
+                problems.append(
+                    f"{name}: ADVANCED BLIND — the mod refused with unread-journal "
+                    f"({detail[:160]})")
+            elif code == "bleedout-deadline":
+                report("WARN", "advance-discipline",
+                       f"{name}: bleedout-deadline refusal — {detail[:200]}")
+            continue
+
+        reason = data.get("reason")
+        kinds[f"halt:{reason}"] = kinds.get(f"halt:{reason}", 0) + 1
+        if reason != "casualty":
+            continue
+        halted = data.get("halted_on") or {}
+        who = halted.get("pawn", "?")
+        # The response test. The next command must not be another advance: a
+        # casualty halt with nothing in between is the loop being told a
+        # colonist went down and immediately burning more time.
+        nxt = steps[i + 1] if i + 1 < len(steps) else None
+        if nxt is None:
+            report("WARN", "advance-discipline",
+                   f"{name}: casualty halt on {who} was the LAST command — the run ended "
+                   "there, which is a legitimate stop but is not a response")
+        elif nxt[1] == "advance":
+            problems.append(
+                f"{name}: casualty halt on {who} (tick {halted.get('tick')}) and the very "
+                f"next command was {nxt[0]} — the loop rode past it")
+
+    if n_adv and journal_ops == 0:
+        problems.append(
+            f"{n_adv} advances and ZERO `journal` calls — m1-20260831's shape exactly "
+            "(27 to 0), and the run that produced it lost two colonists to news it was "
+            "handed and never read")
+
+    for e in escapes:
+        report("WARN", "advance-discipline", "escape used — " + e)
+
+    tally = ", ".join(f"{k} {v}" for k, v in sorted(kinds.items())) or "none"
+    if problems:
+        report("FAIL", "advance-discipline", "; ".join(problems) + f" [{tally}]")
+    elif n_adv:
+        report("PASS", "advance-discipline",
+               f"{n_adv} advances, {journal_ops} journal calls, {len(escapes)} escapes [{tally}]")
+    else:
+        report("WARN", "advance-discipline", "no advances in transcript")
 
 
 def audit(run_dir, repo, journal_path=None, transcript_dir=None):
@@ -301,8 +445,10 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
             report("PASS", "advance-invariants", f"{len(advances)} advances within policy")
         else:
             report("WARN", "advance-invariants", "no advance envelopes found in transcript")
+        advance_discipline(Path(transcript_dir))
     else:
         report("WARN", "advance-invariants", "no transcript dir given — skipped")
+        report("WARN", "advance-discipline", "no transcript dir given — skipped")
 
     # -- transcript-journal + zero-red-errors (need the journal) -----------
     if journal_path and Path(journal_path).is_file():
@@ -396,7 +542,15 @@ def build_fixture(root, repo):
 
     tr = root / "transcripts" / "selftest-run"
     for i, (op, args, data) in enumerate([
-        ("advance", {"until": {"letter": True}, "timeout_ticks": 60000}, {"reason": "letter", "ticks_elapsed": 41000}),
+        # A `journal` read BEFORE the first advance, and one after every
+        # advance that produced anything. git-bug 722c951 made that the mod's
+        # rule; the clean fixture is the shape a compliant run has, so it has
+        # to carry the reads or `advance-discipline` would be asserting on a
+        # fixture nobody could actually produce.
+        ("journal", {"since_seq": 0}, {"count": 2, "read_watermark": 2, "unread_after": 0}),
+        ("advance", {"until": {"letter": True}, "timeout_ticks": 60000},
+         {"reason": "letter", "ticks_elapsed": 41000, "journal_unread": 1}),
+        ("journal", {"since_seq": 2}, {"count": 1, "read_watermark": 3, "unread_after": 0}),
         ("designate", {"kind": "harvest"}, {}),
         # A timeout advance that lands PAST the cap by less than the bound the
         # envelope itself publishes. This is legal — the stop check is per
@@ -410,7 +564,8 @@ def build_fixture(root, repo):
         (d / "result.json").write_text(json.dumps({"id": f"c{i}", "op": op, "ok": True, "data": data}), encoding="utf-8")
     (tr / "log.ndjson").write_text(
         "\n".join(json.dumps({"op": op, "ok": True})
-                  for op in ("advance", "designate", "advance", "dev:starter-kit")) + "\n",
+                  for op in ("journal", "advance", "journal", "designate", "advance",
+                             "dev:starter-kit")) + "\n",
         encoding="utf-8")
 
     journal = root / "journal.ndjson"
@@ -429,6 +584,67 @@ def build_fixture(root, repo):
          "payload": {"verb": "dev:starter-kit", "step": "starter-kit", "caused_seqs": [4, 5]}},
     ]) + "\n", encoding="utf-8")
     return run, journal, tr
+
+
+def strip_journal_ops(tr):
+    """Delete every `journal` step, leaving the advances with nothing read
+    between them — m1-20260831's 27-advances-to-zero-journal-calls shape."""
+    import shutil
+    for d in list(tr.iterdir()):
+        if d.is_dir() and d.name.endswith("-journal"):
+            shutil.rmtree(d)
+    log = tr / "log.ndjson"
+    lines = [l for l in log.read_text(encoding="utf-8").splitlines()
+             if l.strip() and json.loads(l).get("op") != "journal"]
+    log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def ride_past_casualty(tr):
+    """Advance 002 halts on an own-faction downing; the very next command is
+    another advance instead of a response."""
+    (tr / "002-advance" / "result.json").write_text(json.dumps(
+        {"id": "c2", "op": "advance", "ok": True,
+         "data": {"reason": "casualty", "ticks_elapsed": 1837,
+                  "halted_on": {"kind": "casualty", "event": "downed", "pawn": "Table",
+                                "pawn_id": 4211, "player_faction": True,
+                                "pawn_kind": "colonist", "tick": 214599}}}), encoding="utf-8")
+    src = tr / "003-journal"
+    dst = tr / "003-advance"
+    src.rename(dst)
+    (dst / "cmd.json").write_text(json.dumps(
+        {"id": "c3", "op": "advance", "args": {"ticks": 2500}}), encoding="utf-8")
+    (dst / "result.json").write_text(json.dumps(
+        {"id": "c3", "op": "advance", "ok": True,
+         "data": {"reason": "ticks", "ticks_elapsed": 2500}}), encoding="utf-8")
+
+
+def escape_fixture(tr):
+    """An advance carrying both per-call escapes. Not a FAIL — the escape is
+    legal by design — but it must never pass in SILENCE, so it is asserted as
+    a WARN naming the reason. An opt-out nobody can see in the audit is the
+    silent bypass the issue exists to prevent."""
+    why = "burning 3 days unattended to reach the caravan window"
+    (tr / "005-advance" / "cmd.json").write_text(json.dumps(
+        {"id": "c5", "op": "advance",
+         "args": {"ticks": 60000, "unread_ok": why, "through_casualties": why}}), encoding="utf-8")
+    (tr / "005-advance" / "result.json").write_text(json.dumps(
+        {"id": "c5", "op": "advance", "ok": True,
+         "data": {"reason": "ticks", "ticks_elapsed": 60000,
+                  "unread_ok": why, "through_casualties": why}}), encoding="utf-8")
+    return why
+
+
+def bleedout_fixture(tr):
+    """A bleedout-deadline refusal. WARN, not FAIL: the loop could not have
+    known without running a pathfinder itself, so being told is the mod doing
+    its job — but the pawn and both numbers must reach the audit."""
+    (tr / "005-advance" / "result.json").write_text(json.dumps(
+        {"id": "c5", "op": "advance", "ok": False,
+         "error": {"code": "bleedout-deadline",
+                   "detail": "Captain bleeds out in 9040 ticks and the nearest capable "
+                             "rescuer needs 12100 ticks — 3060 ticks short. "
+                             "bleedout_ticks=9040 rescue_ticks=12100 margin_ticks=-3060"}}),
+        encoding="utf-8")
 
 
 def selftest(repo):
@@ -474,19 +690,42 @@ def selftest(repo):
                 "threats": {"hostiles": 6}}), encoding="utf-8"),
              "final-undrafted"),
             ("two 0-tick advances back to back",
-             lambda: [(tr / "003-advance" / "result.json").write_text(json.dumps(
-                {"id": "c3", "op": "advance", "ok": True,
+             lambda: [(tr / "005-advance" / "result.json").write_text(json.dumps(
+                {"id": "c5", "op": "advance", "ok": True,
                  "data": {"reason": "dialog", "ticks_elapsed": 0}}), encoding="utf-8"),
-                (tr / "001-advance" / "result.json").write_text(json.dumps(
-                    {"id": "c1", "op": "advance", "ok": True,
+                (tr / "002-advance" / "result.json").write_text(json.dumps(
+                    {"id": "c2", "op": "advance", "ok": True,
                      "data": {"reason": "dialog", "ticks_elapsed": 0}}), encoding="utf-8")],
              "advance-invariants"),
             # cmd.json on disk with no result.json: rwa writes the command
             # before dispatching, so this shape means the client died mid-call
             # and the advance ran unobserved. FAIL, not WARN.
             ("the client died mid-call",
-             lambda: (tr / "003-advance" / "result.json").unlink(),
+             lambda: (tr / "005-advance" / "result.json").unlink(),
              "advance-invariants"),
+            # ---- git-bug 722c951: the three early returns, told apart -------
+            # A BLIND ADVANCE. The mod refused; no ticks ran. The FAIL is on
+            # the LOOP — PLAY-LOOP §read step 1 is unconditional and it was
+            # skipped — and this is m1-20260831's exact failure, now
+            # mechanically detectable for the first time.
+            ("an advance the mod refused as blind",
+             lambda: (tr / "005-advance" / "result.json").write_text(json.dumps(
+                {"id": "c5", "op": "advance", "ok": False,
+                 "error": {"code": "unread-journal",
+                           "detail": "the previous advance journaled 4 event(s) that no "
+                                     "`journal` call has read (seq 125..128; types: downed 1, "
+                                     "letter 1, alert_on 2). unread=4"}}), encoding="utf-8"),
+             "advance-discipline"),
+            # 27 advances, ZERO journal calls. The number that named the M1
+            # failure, and nothing in this auditor could see it until now.
+            ("advances with no journal call at all",
+             lambda: strip_journal_ops(tr),
+             "advance-discipline"),
+            # Told a colonist went down, and the very next command is more
+            # time. OUT-1's failure with the halt already fired.
+            ("a casualty halt ridden straight past",
+             lambda: ride_past_casualty(tr),
+             "advance-discipline"),
         ]:
             # rebuild clean, then break one thing
             for p in (root / "RUNS", root / "transcripts"):
@@ -501,6 +740,40 @@ def selftest(repo):
             if expect not in got:
                 failures.append(f"mutation '{label}' did not FAIL {expect} (FAILs: {sorted(got)})")
             print(f"-- mutation '{label}' -> {expect}: {'ok' if expect in got else 'MISSED'}\n")
+
+        # ---- git-bug 722c951: the two shapes that must SURFACE, not FAIL ----
+        #
+        # A legal escape and a bleedout refusal are both allowed. What is NOT
+        # allowed is either of them passing in silence, so these are asserted
+        # on the WARN line and on its TEXT — a check that only counted FAILs
+        # would let an escape through with nobody able to read its reason,
+        # which is the silent bypass the issue is about.
+        print("== selftest: escapes and bleedout refusals must SURFACE ==")
+        for label, mutate, needle in [
+            ("both escapes on one advance", escape_fixture,
+             "burning 3 days unattended"),
+            ("a bleedout-deadline refusal", bleedout_fixture,
+             "bleedout_ticks=9040"),
+        ]:
+            for p in (root / "RUNS", root / "transcripts"):
+                if p.exists():
+                    import shutil
+                    shutil.rmtree(p)
+            run, journal, tr = build_fixture(root, repo)
+            mutate(tr)
+            results = []
+            audit(run, repo, journal, tr)
+            warns = [d for s, c, d in results
+                     if s == "WARN" and c == "advance-discipline"]
+            hit = any(needle in d for d in warns)
+            fails = {c for s, c, _ in results if s == "FAIL"}
+            if not hit:
+                failures.append(
+                    f"'{label}' produced no advance-discipline WARN naming {needle!r} "
+                    f"(warns: {warns})")
+            if "advance-discipline" in fails:
+                failures.append(f"'{label}' FAILed advance-discipline; it is legal, not a defect")
+            print(f"-- '{label}' -> WARN naming {needle!r}: {'ok' if hit else 'MISSED'}\n")
 
     if failures:
         print("SELFTEST FAIL:", *failures, sep="\n  ")

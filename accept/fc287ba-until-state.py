@@ -155,6 +155,41 @@ def send(op, args=None, timeout=240):
                       "detail": "no results/%s.json within %ss" % (cid, timeout)}}
 
 
+# ---------------------------------------------- git-bug 722c951: the escape --
+#
+# `advance` has TWO new default-on guards, and both are right for a play loop
+# and wrong for a fixture harness:
+#
+#   * it REFUSES (ok:false, error.code "unread-journal") when the previous
+#     advance journaled events that no `journal` call has read, and
+#   * it HALTS (reason:"casualty") when an own-faction pawn goes down or dies
+#     while time is running.
+#
+# This suite is not a play loop. It advances to MOVE GAME STATE so the next
+# assertion has something to assert on, it never reads the journal in between,
+# and its advances are the SUBJECT — this suite is about `until`, and a
+# refusal before the predicate is ever armed would test nothing. Without an
+# opt-out the second advance onwards would come back refused and every check
+# below would be measuring the refusal instead of the thing it names.
+#
+# So the opt-out lives HERE, in ONE wrapper, and not at the call sites: a
+# `unread_ok` sprinkled inline is indistinguishable to the next reader from one
+# somebody added to get a red check green. The reason string names this file, so
+# `journal --types action` on the bench says which harness turned the guard off
+# and why. Both escapes are per-call and journaled as an act by the mod
+# (session 13's threat-pardon precedent).
+ESCAPE = ("accept/fc287ba-until-state.py: fixture harness, not a play loop — it advances to move "
+          "game state and asserts on the result, and does not read the journal "
+          "between advances")
+
+
+def advance(args=None, **kw):
+    a = dict(args or {})
+    a.setdefault("unread_ok", ESCAPE)
+    a.setdefault("through_casualties", ESCAPE)
+    return send("advance", a, **kw)
+
+
 def dig(obj, path, default=None):
     cur = obj
     for part in path.split("."):
@@ -451,31 +486,31 @@ def phase0():
     bad_args("0.5d", "the near-miss spelling `layout` is refused", e, "did you mean")
 
     # fc287ba's own version of the same class, in the `until` parse.
-    e = send("advance", {"until": {"conditon": {"path": "time.hour", "op": ">=", "value": 6}}})
+    e = advance({"until": {"conditon": {"path": "time.hour", "op": ">=", "value": 6}}})
     bad_args("0.6a", "a MISSPELLED matcher is refused, not silently ignored", e,
              "unknown key 'until.conditon'")
-    e = send("advance", {"until": {"condition": {"path": "time.hour", "op": ">=", "value": 6},
+    e = advance({"until": {"condition": {"path": "time.hour", "op": ">=", "value": 6},
                                    "layout": "ly-1"}})
     bad_args("0.6b", "two matchers in one advance is a refusal", e, "ONE matcher")
-    e = send("advance", {"until": {"condition": {"path": "resources.food_dayz",
+    e = advance({"until": {"condition": {"path": "resources.food_dayz",
                                                  "op": "<", "value": 3}}})
     bad_args("0.6c", "a path that does not resolve is refused AT ARM TIME", e, "food_dayz")
     contains("0.6d", "…and names the keys that section really publishes", e,
              "error.detail", "food_days")
-    e = send("advance", {"until": {"condition": {"path": "changed.since",
+    e = advance({"until": {"condition": {"path": "changed.since",
                                                  "op": "<", "value": 3}}})
     bad_args("0.6e", "`changed` is not a predicate section", e, "changed")
-    e = send("advance", {"until": {"condition": {"path": "colonists[*].mood_pct",
+    e = advance({"until": {"condition": {"path": "colonists[*].mood_pct",
                                                  "op": "<", "value": 50}}})
     bad_args("0.6f", "the issue's own example path is refused, because it is wrong", e,
              "not a list")
-    e = send("advance", {"until": {"condition": {"path": "time.season",
+    e = advance({"until": {"condition": {"path": "time.season",
                                                  "op": "<", "value": 3}}})
     bad_args("0.6g", "`<` on a string is refused rather than coerced", e, "not a number")
-    e = send("advance", {"until": {"layout": "ly-nope-999"}})
+    e = advance({"until": {"layout": "ly-nope-999"}})
     bad_args("0.6h", "an unknown layout id is refused before the clock is touched", e,
              "no layout")
-    e = send("advance", {"until": {"condition": {"path": "time.hour", "op": ">=", "value": 6},
+    e = advance({"until": {"condition": {"path": "time.hour", "op": ">=", "value": 6},
                                    "every_frames": 9999}})
     bad_args("0.6i", "an out-of-range cadence is refused", e, "every_frames")
 
@@ -747,7 +782,7 @@ def phase3():
     # `hour >= 0` is true always. With the edge required it can NEVER fire, so
     # the advance must exit on its own timeout — and say that it was already
     # true when it was armed, which is the whole diagnosis.
-    e = send("advance", {"until": {"condition": {"path": "time.hour", "op": ">=", "value": 0}},
+    e = advance({"until": {"condition": {"path": "time.hour", "op": ">=", "value": 0}},
                          "timeout_ticks": 400, "speed": "fast"}, timeout=300)
     S["edge_true"] = e
     shape("3.1a", "advance", e, "data.until", dict)
@@ -768,7 +803,7 @@ def phase3():
              dig(e, "data.until.frames"), OFF))
 
     # ---- (b) the SAME predicate with edge:false halts at once ---------------
-    e = send("advance", {"until": {"condition": {"path": "time.hour", "op": ">=", "value": 0,
+    e = advance({"until": {"condition": {"path": "time.hour", "op": ">=", "value": 0,
                                                  "edge": False}},
                          "timeout_ticks": 20000, "speed": "fast"}, timeout=300)
     eq("3.2a", "…and with edge:false the same predicate halts immediately", e,
@@ -788,7 +823,7 @@ def phase3():
     target = (hour + 1) % 24
     print("  %sadvancing until hour %s (it is %s) — no tick count is passed%s"
           % (DIM, target, hour, OFF))
-    e = send("advance", {"until": {"condition": {"path": "time.hour", "op": "==",
+    e = advance({"until": {"condition": {"path": "time.hour", "op": "==",
                                                  "value": target}},
                          "timeout_ticks": 6000, "speed": "superfast"}, timeout=600)
     S["clock"] = e
@@ -858,7 +893,7 @@ def phase4():
     print("  %sadvancing until ly=%s is built. NO TICK COUNT IS PASSED — only a "
           "timeout bound.%s" % (DIM, lid, OFF))
     t0 = time.time()
-    e = send("advance", {"until": {"layout": lid}, "timeout_ticks": 200000,
+    e = advance({"until": {"layout": lid}, "timeout_ticks": 200000,
                          "speed": "superfast"}, timeout=1800)
     S["build"] = e
     eq("4.4a", "the advance halted on the LAYOUT, not on a timeout", e, "data.reason", "layout")
@@ -921,7 +956,7 @@ def phase5():
           "a non-empty shortfall[]", sf)
 
     print("  %sadvancing until ly=%s finishes, which it never will%s" % (DIM, lid, OFF))
-    e = send("advance", {"until": {"layout": lid}, "timeout_ticks": 4000,
+    e = advance({"until": {"layout": lid}, "timeout_ticks": 4000,
                          "speed": "superfast"}, timeout=600)
     eq("5.3a", "a predicate that is never true exits on the TIMEOUT, not by hanging",
        e, "data.reason", "timeout")

@@ -6,6 +6,23 @@ wrote and compiled this and never launched the game.
 Every step is one protocol envelope. Write it to `commands/<id>.json` and read
 `results/<id>.json`, or use the `rwa` line beside it — they are the same call.
 
+**Every `advance` below needs the two per-call escapes** (git-bug `722c951`).
+`advance` now refuses with `error.code:"unread-journal"` when the previous
+advance journaled events no `journal` call has read, and halts with
+`reason:"casualty"` on an own-faction downing or death. Both are right for a
+play loop and wrong for a scripted fixture, which advances to move state and
+never reads the journal in between — so add to every advance envelope below:
+
+```json
+"unread_ok": "<this file>: fixture, not a play loop",
+"through_casualties": "<this file>: fixture, not a play loop"
+```
+
+or `--unread_ok:str '<why>' --through_casualties:str '<why>'` on the `rwa`
+line. The reason is REQUIRED and non-empty, and the mod journals it as an act.
+The `.py`/`.ps1` twin of this file does it in one `advance()` wrapper; by hand
+it has to go on each call. Nothing else about the steps changes.
+
 **Preconditions.** A loaded colony on `_RimWorld-Agent`; `devMode` on for the
 `dev:*` staging in D; no force-pausing window up (`rwa status`); and a def with
 at least **three** loose or stockpiled stacks on the map, so a re-order is

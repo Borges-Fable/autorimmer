@@ -42,6 +42,63 @@ namespace AutoRimmer
 
         public static long CurrentSeq => Interlocked.Read(ref seq);
 
+        // ==================================================== the read watermark ==
+        // git-bug 722c951. THE HIGHEST SEQ THIS BENCH HAS ACTUALLY HANDED OUT.
+        //
+        // The journal already assigns every event a monotonic `seq` and already
+        // serves deltas by `since_seq`; what it did not do was REMEMBER what it
+        // served. That one long is the whole mechanism behind
+        // `advance`'s `unread-journal` refusal — see TimeDriver.Start.
+        //
+        // ONE GLOBAL WATERMARK, NOT PER CLIENT, AND THAT IS AN HONEST ANSWER
+        // RATHER THAN A SHORTCUT. The bridge has no client identity to key on:
+        // `Poller.ScanInbox` reads `commands/<id>.json` envelopes carrying `id`,
+        // `op` and `args` and nothing else — there is no handshake, no connect
+        // or disconnect edge, and no field a client could stamp itself with.
+        // `rwa`'s own `new_id(op)` is `<op>-<HHMMSS>-<pid4>`, which is fresh for
+        // EVERY command (each `rwa` invocation is its own process), so even the
+        // pid suffix is not a client — it is a call. Inventing a registry over
+        // that would mean inventing the identity too, and an unbounded
+        // dictionary keyed on a string the bridge never validates is a leak with
+        // no expiry edge to close it.
+        //
+        // WHAT BREAKS WHEN A SECOND CLIENT APPEARS, stated rather than
+        // discovered: the watermark is shared, so a `rwa journal` typed at a
+        // shell by a human watching the bench CLEARS the agent's obligation, and
+        // the agent's next `advance` proceeds having read nothing. That is a
+        // real hazard on this bench — the orchestrator does read the journal
+        // while a run is going. The mitigation that ships is visibility, not
+        // prevention: `journal` and the refusal both publish `read_watermark`,
+        // so a client that tracks its own last read can see the number move
+        // without it. The upgrade, when a second client is real, is an OPTIONAL
+        // `client` field on the command envelope defaulting to one name, keyed
+        // into a dictionary here — one line in `Poller.ScanInbox` and a
+        // `ConcurrentDictionary` beside this field. It is deliberately not built
+        // on speculation.
+        private static long readWatermark;
+
+        public static long ReadWatermark => Interlocked.Read(ref readWatermark);
+
+        // Monotonic max, CAS'd because `journal` runs on the poller thread
+        // (`MainThread = false`) while `advance` arms on the main thread.
+        // Returns the watermark after the call, so the verb can publish what it
+        // actually established rather than re-reading a value another thread may
+        // have moved.
+        //
+        // Monotonic and never lowered: a `journal {since_seq: 0}` re-read of old
+        // events is not evidence that the NEWER ones went unread, and letting a
+        // re-read walk the mark backwards would turn the refusal into something
+        // a caller could switch off by reading the wrong thing.
+        public static long NoteRead(long upTo)
+        {
+            while (true)
+            {
+                long cur = Interlocked.Read(ref readWatermark);
+                if (upTo <= cur) return cur;
+                if (Interlocked.CompareExchange(ref readWatermark, upTo, cur) == cur) return upTo;
+            }
+        }
+
         // Synchronous tap on every emission — (type, payload, tick, seq) —
         // fired on the EMITTING thread. TimeDriver's halt matchers hang here;
         // handlers must be cheap and thread-safe.
@@ -75,13 +132,23 @@ namespace AutoRimmer
         private static readonly object journalLock = new object();
 
         public static Dictionary<string, int> CountsSince(long since, out long lastSeq, out bool truncated)
+            => CountsRange(since, long.MaxValue, out lastSeq, out truncated);
+
+        // The same ring walk with a CEILING. `advance`'s unread refusal wants
+        // the type breakdown of ONE window — what the previous advance produced
+        // and nobody read — not of everything since the watermark, because the
+        // agent's own acts land after that window closes and would dilute the
+        // one line that matters ("downed: 1"). git-bug 722c951.
+        public static Dictionary<string, int> CountsRange(long since, long upTo,
+            out long lastSeq, out bool truncated)
         {
             var counts = new Dictionary<string, int>();
             lock (journalLock)
             {
                 lastSeq = seq;
+                long top = Math.Min(upTo, lastSeq);
                 truncated = since < lastSeq - RingSize;
-                for (long s = Math.Max(since + 1, lastSeq - RingSize + 1); s <= lastSeq; s++)
+                for (long s = Math.Max(since + 1, lastSeq - RingSize + 1); s <= top; s++)
                 {
                     var entry = ring[(int)(s % RingSize)];
                     if (entry.Item1 != s) continue;

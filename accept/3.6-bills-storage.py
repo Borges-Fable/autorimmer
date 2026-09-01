@@ -125,6 +125,40 @@ def send(op, args=None, timeout=240):
                       "detail": "no results/%s.json within %ss" % (cid, timeout)}}
 
 
+# ---------------------------------------------- git-bug 722c951: the escape --
+#
+# `advance` has TWO new default-on guards, and both are right for a play loop
+# and wrong for a fixture harness:
+#
+#   * it REFUSES (ok:false, error.code "unread-journal") when the previous
+#     advance journaled events that no `journal` call has read, and
+#   * it HALTS (reason:"casualty") when an own-faction pawn goes down or dies
+#     while time is running.
+#
+# This suite is not a play loop. It advances to MOVE GAME STATE so the next
+# assertion has something to assert on, it never reads the journal in between,
+# and its one advance exists to let a bill actually produce meals. Without an
+# opt-out the second advance onwards would come back refused and every check
+# below would be measuring the refusal instead of the thing it names.
+#
+# So the opt-out lives HERE, in ONE wrapper, and not at the call sites: a
+# `unread_ok` sprinkled inline is indistinguishable to the next reader from one
+# somebody added to get a red check green. The reason string names this file, so
+# `journal --types action` on the bench says which harness turned the guard off
+# and why. Both escapes are per-call and journaled as an act by the mod
+# (session 13's threat-pardon precedent).
+ESCAPE = ("accept/3.6-bills-storage.py: fixture harness, not a play loop — it advances to move "
+          "game state and asserts on the result, and does not read the journal "
+          "between advances")
+
+
+def advance(args=None, **kw):
+    a = dict(args or {})
+    a.setdefault("unread_ok", ESCAPE)
+    a.setdefault("through_casualties", ESCAPE)
+    return send("advance", a, **kw)
+
+
 def dig(obj, path, default=None):
     cur = obj
     for part in path.split("."):
@@ -659,7 +693,7 @@ def phase1():
         if ARGS.dry_run:
             after = before + 1
             break
-        send("advance", {"ticks": 4000})
+        advance({"ticks": 4000})
         after = count_of(MEAL_DEF)
         print("  %sadvance %d: %s = %s%s" % (DIM, i + 1, MEAL_DEF, after, OFF))
         if after > before:

@@ -145,6 +145,38 @@ function Dig {
 
 function Show { param($v) if ($null -eq $v) { 'null' } else { ($v | ConvertTo-Json -Depth 6 -Compress) } }
 
+# ------------------------------------------- git-bug 722c951: the escape ----
+#
+# `advance` has TWO new default-on guards, and both are right for a play loop
+# and wrong for a fixture harness:
+#
+#   * it REFUSES (ok:false, error.code "unread-journal") when the previous
+#     advance journaled events that no `journal` call has read, and
+#   * it HALTS (reason:"casualty") when an own-faction pawn goes down or dies
+#     while time is running.
+#
+# This suite is not a play loop. Its advances exist to make dialogs arrive and to
+# prove an advance halts on one,
+# and it never reads the journal in between. Without an opt-out every advance
+# after the first that journaled anything would come back refused and every
+# check below would be measuring the refusal instead of the thing it names.
+#
+# So the opt-out lives HERE, in ONE wrapper, and not at the call sites: an
+# inline `unread_ok` is indistinguishable to the next reader from one somebody
+# added to get a red check green. The reason string names this file, so
+# `journal --types action` on the bench says which harness turned the guard off
+# and why. Both escapes are per-call and journaled as an act by the mod
+# (session 13's threat-pardon precedent).
+$script:Escape = "accept/3.5-dialog-verbs.ps1: fixture harness, not a play loop - it advances to move game state and asserts on the result, and does not read the journal between advances"
+
+function Send-Advance {
+    param([hashtable]$Args = @{}, [int]$TimeoutSec = 120)
+    $a = $Args.Clone()
+    if (-not $a.ContainsKey('unread_ok')) { $a['unread_ok'] = $script:Escape }
+    if (-not $a.ContainsKey('through_casualties')) { $a['through_casualties'] = $script:Escape }
+    return Send-Cmd advance $a $TimeoutSec
+}
+
 # ------------------------------------------------------------------- asserts --
 
 function Check {
@@ -365,7 +397,7 @@ function Phase0 {
     #      One tick, deliberately: it is the smallest budget that still produces
     #      a real (non-refused) advance envelope, and it is taken BEFORE phase
     #      1's double-read proof, which needs the clock still.
-    $e = Send-Cmd advance @{ ticks = 1; max_tps = 400 }
+    $e = Send-Advance @{ ticks = 1; max_tps = 400 }
     Shape '0.6a' 'advance' $e 'data.reason'
     Shape '0.6b' 'advance' $e 'data.ticks_elapsed' 'number'
     Absent '0.6c' 'advance does NOT publish `data.ticks` (4.8g used to read it)' $e 'data.ticks'
@@ -698,7 +730,7 @@ function Phase3 {
         ((Dig $stage 'ok') -eq $true) `
         ("the incident verb itself refused: code=$(Dig $stage 'error.code') detail=$(Dig $stage 'error.detail'). That is a FIXTURE problem (devMode, or the incident cannot target this map), not a 3.5 failure.")
         for ($i = 0; $i -lt 8; $i++) {
-            $a = Send-Cmd advance @{ ticks = 2500; max_tps = 400 }
+            $a = Send-Advance @{ ticks = 2500; max_tps = 400 }
             if ((Dig $a 'data.reason') -eq 'dialog') {
                 Note '3.1x' 'the advance HALTED on a dialog - clearing it with dialog-dismiss, which is exactly what this spec exists to do'
                 Send-Cmd dialog-dismiss @{ all = $true } | Out-Null
@@ -913,7 +945,7 @@ function Phase4 {
         Precondition '4.3s' 'dev:incident {def:"VisitorGroup"} was accepted' `
         ((Dig $stage 'ok') -eq $true) `
         ("the incident verb itself refused: code=$(Dig $stage 'error.code') detail=$(Dig $stage 'error.detail'). FIXTURE problem, not a 3.5 failure.")
-        Send-Cmd advance @{ ticks = 600; max_tps = 400 } | Out-Null
+        Send-Advance @{ ticks = 600; max_tps = 400 } | Out-Null
         $e = Send-Cmd interactions
         $letters = @(Dig $e 'data.letters')
         $choice = @($letters | Where-Object { $_.kind -eq 'choice' -and @($_.options).Count -ge 1 })
@@ -952,7 +984,7 @@ function Phase4 {
     #     `advance` is what drives that, so advance until something halts.
     $wedged = $false
     for ($i = 0; $i -lt 4 -and -not $wedged; $i++) {
-        $a = Send-Cmd advance @{ ticks = 5000; max_tps = 400 }
+        $a = Send-Advance @{ ticks = 5000; max_tps = 400 }
         if ((Dig $a 'data.reason') -eq 'dialog') {
             $wedged = $true
             Eq '4.6a' '1.7 halted the advance on a dialog' $a 'data.reason' 'dialog'
@@ -986,7 +1018,7 @@ function Phase4 {
 
         # THE ACCEPTANCE LINE FROM AMENDMENT #2, in its own words: after the
         # dialog is answered, the next advance RUNS ITS FULL BUDGET.
-        $a = Send-Cmd advance @{ ticks = 500; max_tps = 400 }
+        $a = Send-Advance @{ ticks = 500; max_tps = 400 }
         Eq '4.8f' 'THE POINT OF THIS SPEC: the next advance runs its FULL BUDGET' $a 'data.reason' 'ticks'
         # THE KEY IS `ticks_elapsed`. TimeDriver.BuildData emits
         # `["ticks_elapsed"] = ticks` and has never emitted `ticks`, so the

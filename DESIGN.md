@@ -2305,3 +2305,123 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `seek_mod_missing` name a mod that stopped answering, and `flee_risk` names
   every violence-capable pawn whose response has fallen back to `Flee`.
   `b1b3060`.
+- 2026-09-01 (session 21) — **`advance` refuses on an unread journal delta, and
+  the alternative — attaching the delta to the advance result — was costed and
+  rejected because IT IS WHAT ALREADY FAILED.** `722c951` asked for both to be
+  priced and one chosen. The refusal wins on evidence, not on bytes: run
+  `m1-20260831` step 148 returned `journal_seq:[125,128]`, so the advance result
+  ALREADY CARRIED the news that Table was down, and the run advanced five more
+  times while he bled for 11,335 ticks. Attaching the events themselves is the
+  same fix, larger, and an echo a caller may ignore is what the failure was. The
+  bytes are the second argument and they are not small: measured across 24
+  session journals on this bench, an event averages **243 bytes** and the longest
+  single line is **4,416**; the densest sustained run (`20260901T180111`) is 166
+  events / 54,397 bytes over 76,635 ticks, i.e. **~1,775 bytes per 2,500 ticks
+  and ~42 KB for a 60,000-tick advance**, while a raid burst put **20,928 bytes
+  in 102 ticks** (`20260901T163220`). Against that, 67 real `advance` envelopes
+  measure **698–1,383 bytes**: attaching would grow every advance result by
+  15–60x typically, on every call whether or not anything happened, bounded in
+  the tail only by the `journal` verb's own 2,000-event cap (~8.8 MB). So:
+  refuse, and the delta stays in the verb built to page it. **The window that
+  blocks is the PREVIOUS ADVANCE's delta, not "any unread event".** The issue's
+  own question is "since the last advance", and the distinction is load-bearing:
+  events emitted while TIME RAN are news nobody saw, while events emitted while
+  the agent is AT THE WHEEL are its own acts, each of which already returned a
+  result envelope. The play loop is read -> think -> ACT -> advance and every
+  mutating verb journals an `action` row, so blocking on those would charge a
+  `journal` round trip to every turn that acted — friction with no safety in it,
+  and friction is what makes a run leave the escape hatch on. Consequences
+  stated rather than discovered: the first advance of a session is never refused
+  (nothing has run unobserved), and an advance that journaled nothing creates no
+  obligation, so a quiet colony never pays. `722c951`.
+- 2026-09-01 (session 21) — **A "client" is the whole bench: ONE global read
+  watermark, because the bridge has no client identity to key on and inventing
+  one would mean inventing the registry too.** `722c951`'s scope says "per-client
+  watermark". Investigated rather than assumed: `Poller.ScanInbox` reads
+  `commands/<id>.json` envelopes carrying `id`, `op` and `args` and nothing else
+  — no handshake, no connect or disconnect edge, no field a client could stamp
+  itself with — and `rwa`'s own `new_id(op)` is `<op>-<HHMMSS>-<pid4>`, fresh for
+  every COMMAND, because each `rwa` invocation is its own process. Even the pid
+  suffix names a call, not a client. A dictionary keyed on a string the bridge
+  never validates also has no expiry edge, so it is a leak with no way to close
+  it. **What breaks with a second client, stated:** the watermark is shared, so a
+  `rwa journal` typed at a shell by a human watching the bench discharges the
+  agent's obligation and its next advance proceeds having read nothing — a real
+  hazard here, since the orchestrator does read the journal mid-run. The
+  mitigation that ships is VISIBILITY, not prevention: `journal` publishes
+  `read_watermark`/`watermark_was`/`watermark_moved` and every advance echoes
+  `journal_read_watermark`, so a client tracking its own last read can see the
+  number move without it. The upgrade, when a second client is real, is an
+  OPTIONAL `client` field on the envelope defaulting to one name — one line in
+  `Poller.ScanInbox` and a dictionary beside `Journal.readWatermark`. Not built
+  on speculation. Also settled: only the `journal` verb moves the mark, and it
+  moves to `last_seq` for an unfiltered untruncated read and to the highest seq
+  actually RETURNED otherwise, so `journal {types:["letter"]}` does not discharge
+  a `downed` it never asked for; a direct `cat` of the file moves nothing,
+  because the bytes are the same and the mod cannot see a shell. `722c951`.
+- 2026-09-01 (session 21) — **The escape hatch is three controls and no fourth,
+  and what it costs is that the discipline becomes optional — so the controls are
+  the whole design, not a footnote to it.** `advance {unread_ok:"<why>"}` and
+  `advance {through_casualties:"<why>"}`, per `722c951`'s requirement that the
+  bypass be deliberate and journaled (session 13's `threat-pardon` precedent: the
+  decision must be a recorded ACT, not a silent exemption). The honest statement
+  of the cost is that the escape IS the guard made optional: a run that passes it
+  on every advance has exactly the mod it had before this issue, and no amount of
+  refusal design prevents that. Three controls make it expensive instead of
+  impossible. **(1) PER-CALL, never a mode** — there is no session flag, no
+  config key and no environment variable, so "turn it off and forget" is not
+  spellable; and `unread_ok` deliberately does NOT move the watermark, so it buys
+  one call and the next advance asks again. Three in-game days of riding past a
+  delta costs three separate journaled admissions. **(2) A REQUIRED, NON-EMPTY
+  REASON STRING** — empty, whitespace and non-string are all `bad-args`, so the
+  argument cannot degrade into a bare boolean, and the reason is what a
+  post-mortem actually reads. **(3) A GREPPABLE ROW** — one `action` event per
+  advance carrying `verb:"advance"`, `step:"escape"`, the reasons and a
+  `bypassed` list naming what it actually overrode, plus an envelope echo
+  (`unread_ok`/`through_casualties`/`escaped`) so a transcript-only audit sees it
+  too. `accept/4.2-play-loop.py`'s `advance-discipline` surfaces every one as a
+  WARN with its reason, and the selftest asserts THAT rather than only asserting
+  FAILs — an opt-out nobody can see in the audit is the silent bypass this issue
+  exists to prevent. **Are three enough? Not on their own.** What they buy is
+  detectability, and the missing control is a consequence: nothing here FAILS a
+  run for standing on the escape. The two additions worth making, when there is
+  evidence to set them against, are a per-run BUDGET (N escaped advances, then
+  the mod refuses the escape itself) and a hard `advance-discipline` FAIL above a
+  fraction of escaped advances. Both need a threshold, no number is defensible
+  yet, and a guessed threshold is the thing this project keeps deleting — so the
+  measurement ships first and the wall waits for the M1 re-run's numbers.
+  `722c951`.
+- 2026-09-01 (session 21) — **The casualty halt filters on FACTION and the bleed
+  refusal fires on `too-slow` and nothing else: one is about who fell, the other
+  is about whether a decision exists.** For the halt, `Verse/Faction.IsPlayer`
+  (`def.isPlayer`) is the game's own "mine", resolved on the MAIN thread by the
+  emitting hook and carried in the `downed`/`death` payload as `player`, because
+  `TimeDriver.Notice` is documented "any thread, called synchronously from
+  Journal.Emit" and may not touch Verse to ask for itself. Deliberately NOT
+  `Verse/Pawn.IsColonist` — `Faction.IsPlayer && RaceProps.Humanlike && (!IsSlave
+  || guest.SlaveIsSecure)` — which excludes an INSECURE slave, whose downing is
+  precisely a casualty somebody must look at; `kind` (colonist|slave|animal|mech)
+  rides beside it so the narrower reading is the caller's to take rather than the
+  mod's to impose. A hostile downing halts nothing: that is the advance working,
+  and stopping on it would make every fight a wedge. Both hooks are on the
+  TRANSITION (`Pawn_HealthTracker.MakeDowned`, `SetDead`), so a pawn already down
+  when an advance starts emits neither and the halt cannot re-fire for the same
+  pawn. For the refusal (`40ed42f` part 3), the verdict comes from `triage`'s own
+  row — `CasualtyRow` is extracted so the verb and the refusal share one pathfind
+  and one comparison — and **`no-rescuer`, `no-path` and `no-deadline` do NOT
+  refuse.** The refusal exists to force ONE decision into the open, "this pawn
+  dies unless you act", and that decision only exists when there is a TIMING
+  question. Where nobody can reach the patient at all, no act clears the
+  condition, the next advance would refuse identically, and a ten-day unattended
+  run stops dead on a state it cannot fix — a wall, not a guard. **Not
+  hypothetical:** on a bare `--quicktest` map there is no bed, so
+  `TakeToBedGate` -> `HealthAIUtility.CanRescueNow` -> `WantsToBeRescued` answers
+  `no-bed` for every colonist and EVERY verdict is `no-rescuer` with a null
+  margin (orchestrator bench pass, `accept/runs/s21-20260901/`). The casualty is
+  not lost by staying quiet: the advance HALTED when they went down, the clock is
+  in every `pawn` read, and `triage` names the gate that refused each candidate —
+  `no-bed` says build a bed, which is an act, where "refuse to advance" says
+  nothing. `WantsToBeRescued`'s first two clauses (`!Downed`, `InBed()`) also put
+  a standing bleeder and a bedded bleeder outside this refusal, correctly: a
+  patient in bed whose DOCTOR cannot arrive in time is a different comparison
+  (tend travel, not rescue travel) and is not claimed. `722c951`, `40ed42f`.

@@ -293,6 +293,61 @@ every 204 ticks whatever the cadence says. And a halt can be one cadence window
 late by construction — at Ultrafast a frame is up to 30 ticks, so 15 frames
 bounds the lateness at ~450 ticks.
 
+## `advance` refuses, and halts, by default (git-bug 722c951 / 40ed42f)
+
+Three behaviours that are NOT `until` matchers and are not opt-in. They are why
+`rwa advance` can come back `ok:false` on a bench that is perfectly healthy.
+
+| what | code / reason | it means |
+|---|---|---|
+| refusal | `error.code: "unread-journal"` | the PREVIOUS advance journaled events that no `journal` call has read. No ticks ran. |
+| refusal | `error.code: "bleedout-deadline"` | a bleeding own-faction pawn dies sooner than the nearest capable rescuer can reach them. No ticks ran. |
+| halt | `data.reason: "casualty"` | an own-faction pawn went DOWN or DIED while time ran; the advance stopped at that tick. `halted_on` names the pawn, `pawn_id`, the event class and the tick. |
+
+The refusals are `ok:false` deliberately, and that is not the same call as a
+refused `dev:spawn-thing` returning `ok:true`: a spawn refusal is an ANSWER
+ABOUT THE WORLD, and these are the mod refusing to ACT at all. Nothing was
+armed, the clock was never touched, and a caller that branches on `ok` must land
+in its error path rather than read a `data` block and conclude time passed.
+Both details carry their numbers as `key=value` tokens — `unread=`, `seq_from=`,
+`bleedout_ticks=`, `rescue_ticks=`, `margin_ticks=` — so a script can parse what
+a human is meant to read.
+
+**Clearing the unread refusal is `rwa journal`, and nothing else.** The verb now
+publishes `read_watermark`, `watermark_was`, `watermark_moved` and
+`unread_after`, and a FILTERED read (`--types`, `--since_tick`) or a truncated
+one only moves the watermark as far as the events it actually handed over — so
+`rwa journal --types letter` does not discharge a `downed` it never asked for.
+Every advance echoes `journal_read_watermark` and `journal_unread`; a nonzero
+`journal_unread` means the next advance is blocked.
+
+```bash
+rwa journal --since_seq "$LAST" --json | jq -c '{count, read_watermark, unread_after}'
+rwa advance --until.letter true --timeout_ticks 60000 --json \
+  | jq -c '.data | {reason, ticks_elapsed, journal_unread, halted_on}'
+```
+
+**The escapes are two per-call flags, each a REQUIRED non-empty reason string**,
+each journaled as an `action` row and echoed on the result envelope:
+
+```bash
+rwa advance --ticks 60000 \
+  --unread_ok:str "burning a day unattended to reach the caravan window" \
+  --through_casualties:str "the fight is lost; riding it out is the plan"
+```
+
+`--unread_ok` bypasses ONE call and does not move the watermark, so the next
+advance asks again. `--through_casualties` covers both the casualty halt and the
+bleedout refusal. Use `:str` so a reason that happens to look numeric is not
+guessed into a number. There is no mode, no config key and no environment
+variable that turns either of these off for a session — that is the point.
+
+**`rwa replay` is deliberately faithful and does NOT inject the escapes.**
+Replaying `transcripts/m1-20260831` therefore shows the refusal firing on the
+advance after Table went down, which is the demonstration, not a defect. Add
+`--args-json` overrides to the source cmd.json if you want a replay to run
+straight through.
+
 ## Journal
 
 `rwa journal` reads `journal/<sid>.ndjson` **directly**. That file is the same

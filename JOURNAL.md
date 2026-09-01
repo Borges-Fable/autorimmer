@@ -31,8 +31,8 @@ contract and grow them additively.
 | `message` | `text` (≤500), `def` | top-of-screen messages; flash-dedupe rejections are not journaled |
 | `alert_on` | `id` (Alert class name), `label`, `priority` | see cadence note |
 | `alert_off` | `id`, `label` | label as remembered at `alert_on` |
-| `death` | `pawn`, `faction?` | every pawn death during PLAY; mapgen corpse setup is excluded; filter by `faction` |
-| `downed` | `pawn`, `faction?`, `damage?` | ditto |
+| `death` | `pawn`, `pawn_id?`, `faction?`, `player`, `kind` | every pawn death during PLAY; mapgen corpse setup is excluded. **`player` is `Faction.IsPlayer` resolved on the main thread** (git-bug 722c951): `advance`'s casualty halt runs on the emitting thread and may not touch Verse, so the faction test has to travel in the payload. `kind` is `colonist`\|`slave`\|`animal`\|`mech`\|`other`, published beside it so a consumer that wants the narrower reading has it without the mod deciding. `pawn_id` is the `thingIDNumber` — the join key that turns the news into a `rescue {pawn,target}` call |
+| `downed` | `pawn`, `pawn_id?`, `faction?`, `player`, `kind`, `damage?` | ditto, from `Pawn_HealthTracker.MakeDowned`. Both rows are on the TRANSITION, so a pawn already down when an advance starts emits neither — which is why the casualty halt cannot re-fire for the same pawn |
 | `mental_break` | `pawn`, `faction?`, `state`, `causedByMood`, `reason?` | successful starts only, during play |
 | `red_error` | `msg` (≤2000) or `msg`+`suppressed:true`, `overflow?` | per-text cap 3 per session, then one suppression marker. **The cap is a FILE policy only** — `advance {halt_on_error:true}` halts on every occurrence including the ones not written here (1.5 blocker 3), so a repeat count in the file is a floor, not a total |
 | `warning` | `msg` (≤2000), `overflow?` | first occurrence per exact text per session; repeats are LogRelay's job |
@@ -118,9 +118,28 @@ readout's own 24-frame sweep.
 ## Reading it
 
 - `journal` verb: `{"op":"journal","args":{"since_seq":N,"since_tick":T,"types":["letter"],"limit":500}}`
-  → `{file,count,truncated,last_seq,events:[…]}` (current session only;
-  `limit` caps at 2000, `truncated:true` says there is more).
+  → `{file,count,truncated,last_seq,read_watermark,watermark_was,watermark_moved,unread_after,filtered,events:[…]}`
+  (current session only; `limit` caps at 2000, `truncated:true` says there is
+  more).
 - Or tail the file directly; it is plain NDJSON with `FileShare.Read`.
+
+**THE VERB IS ALSO A COMMITMENT** (git-bug 722c951). Calling it moves a
+per-bench READ WATERMARK, and `advance` refuses (`ok:false`,
+`error.code:"unread-journal"`) while the previous advance's delta sits below it.
+Nothing else moves the watermark — not `digest.changed`, which is a count per
+type and cannot name the pawn, and not the advance's own `journal_seq` echo,
+which is precisely what run `m1-20260831` was handed and ignored. Tailing the
+file directly does NOT move it either: the file is the same bytes, but the mod
+cannot see a `cat`.
+
+How far it moves: to `last_seq` for an unfiltered, untruncated read; otherwise
+to the highest seq actually RETURNED. So `journal {types:["letter"]}` does not
+discharge a `downed` it never asked for, and `unread_after` says what is left.
+The watermark is one global value, not per client — the command envelope carries
+no client identity to key on (`Poller.ScanInbox` reads `id`/`op`/`args`, and
+`rwa`'s ids are per-CALL), so a second client reading the journal clears the
+first client's obligation. `read_watermark` is published on every read so that
+is visible rather than silent; `Journal.cs`'s header carries the upgrade path.
 
 ## Cost
 

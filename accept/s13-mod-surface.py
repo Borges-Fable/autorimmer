@@ -164,10 +164,42 @@ def send(op, args=None, timeout=300):
                                 % (cid, timeout)}}
 
 
+# ---------------------------------------------- git-bug 722c951: the escape --
+#
+# `advance` has TWO new default-on guards, and both are right for a play loop
+# and wrong for a fixture harness:
+#
+#   * it REFUSES (ok:false, error.code "unread-journal") when the previous
+#     advance journaled events that no `journal` call has read, and
+#   * it HALTS (reason:"casualty") when an own-faction pawn goes down or dies
+#     while time is running.
+#
+# This suite is not a play loop. It advances to MOVE GAME STATE so the next
+# assertion has something to assert on, it never reads the journal in between,
+# and phase 5.8 deliberately DAMAGES a pawn — so both guards would fire on a
+# harness that is not asking the colony anything. Without an opt-out the second
+# advance onwards would come back refused and every check below would be
+# measuring the refusal instead of the thing it names.
+#
+# So the opt-out lives HERE, in the ONE wrapper every advance already goes
+# through, and not at the call sites: a `unread_ok` sprinkled inline is
+# indistinguishable to the next reader from one somebody added to get a red
+# check green. The reason string names this file, so `journal --types action` on
+# the bench says which harness turned the guard off and why. Both escapes are
+# per-call and journaled as an act by the mod (session 13's threat-pardon
+# precedent).
+ESCAPE = ("accept/s13-mod-surface.py: fixture harness, not a play loop — it advances to "
+          "move game state and asserts on the result, and does not read the "
+          "journal between advances")
+
+
 def advance(args, timeout=600):
     """`advance`, remembered. Phase 8 re-runs K's two invariants over EVERY
     advance the suite made, so a bound that is right on the one advance phase 3
     inspects and wrong everywhere else cannot pass."""
+    args = dict(args)
+    args.setdefault("unread_ok", ESCAPE)
+    args.setdefault("through_casualties", ESCAPE)
     e = send("advance", args, timeout=timeout)
     S.setdefault("advances", []).append((dict(args), e))
     return e
@@ -1523,7 +1555,7 @@ def phase5():
             note("5.8", "dev:damage refused (%s) — the wake could not be staged."
                  % show(dig(e, "error.detail")))
         else:
-            send("advance", {"ticks": 60, "speed": "normal"})
+            advance({"ticks": 60, "speed": "normal"})
             e = send("threat-pardon")
             row = [c for c in as_list(dig(e, "data.candidates"))
                    if isinstance(c, dict) and c.get("id") == t2]

@@ -143,6 +143,41 @@ def note_session(op, env):
             S["session_open"] = False
 
 
+# ---------------------------------------------- git-bug 722c951: the escape --
+#
+# `advance` has TWO new default-on guards, and both are right for a play loop
+# and wrong for a fixture harness:
+#
+#   * it REFUSES (ok:false, error.code "unread-journal") when the previous
+#     advance journaled events that no `journal` call has read, and
+#   * it HALTS (reason:"casualty") when an own-faction pawn goes down or dies
+#     while time is running.
+#
+# This suite is not a play loop. It advances to MOVE GAME STATE so the next
+# assertion has something to assert on, it never reads the journal in between,
+# and its advances exist to make dialogs arrive and to prove an advance halts
+# on one. Without an
+# opt-out the second advance onwards would come back refused and every check
+# below would be measuring the refusal instead of the thing it names.
+#
+# So the opt-out lives HERE, in ONE wrapper, and not at the call sites: a
+# `unread_ok` sprinkled inline is indistinguishable to the next reader from one
+# somebody added to get a red check green. The reason string names this file, so
+# `journal --types action` on the bench says which harness turned the guard off
+# and why. Both escapes are per-call and journaled as an act by the mod
+# (session 13's threat-pardon precedent).
+ESCAPE = ("accept/3.5-dialog-verbs.py: fixture harness, not a play loop — it advances to move "
+          "game state and asserts on the result, and does not read the journal "
+          "between advances")
+
+
+def advance(args=None, **kw):
+    a = dict(args or {})
+    a.setdefault("unread_ok", ESCAPE)
+    a.setdefault("through_casualties", ESCAPE)
+    return send("advance", a, **kw)
+
+
 def dig(obj, path, default=None):
     cur = obj
     for part in path.split("."):
@@ -426,7 +461,7 @@ def phase0():
     #      One tick, deliberately: the smallest budget that still produces a
     #      real (non-refused) advance envelope, taken BEFORE phase 1's
     #      double-read proof, which needs the clock still.
-    e = send("advance", {"ticks": 1, "max_tps": 400})
+    e = advance({"ticks": 1, "max_tps": 400})
     shape("0.6a", "advance", e, "data.reason")
     shape("0.6b", "advance", e, "data.ticks_elapsed", NUM)
     absent("0.6c", "advance does NOT publish `data.ticks` (4.8g used to read it)",
@@ -860,7 +895,7 @@ def phase3():
             if not traders:
                 staged("3.1s", "TraderCaravanArrival")
             for _ in range(8):
-                a = send("advance", {"ticks": 2500, "max_tps": 400})
+                a = advance({"ticks": 2500, "max_tps": 400})
                 if dig(a, "data.reason") == "dialog":
                     note("3.1x", "the advance HALTED on a dialog — clearing it with "
                                  "dialog-dismiss, which is exactly what this spec exists to do")
@@ -1482,7 +1517,7 @@ def phase4():
         note("4.3", 'no choice letter on the stack — staging one with dev:incident '
                     '{def:"VisitorGroup"} (ChoiceLetter_AcceptVisitors) and advancing')
         staged("4.3s", "VisitorGroup")
-        send("advance", {"ticks": 600, "max_tps": 400})
+        advance({"ticks": 600, "max_tps": 400})
         choice = choice_letters()
     precondition("4.3a", "a choice letter with at least one option",
                  ARGS.dry_run or len(choice) >= 1,
@@ -1529,7 +1564,7 @@ def phase4():
     wedged = False
     if not ARGS.dry_run:
         for _ in range(4):
-            a = send("advance", {"ticks": 5000, "max_tps": 400})
+            a = advance({"ticks": 5000, "max_tps": 400})
             if dig(a, "data.reason") == "dialog":
                 wedged = True
                 eq("4.6a", "1.7 halted the advance on a dialog", a, "data.reason", "dialog")
@@ -1578,7 +1613,7 @@ def phase4():
 
         # THE ACCEPTANCE LINE FROM AMENDMENT #2, in its own words: after the
         # dialog is answered, the next advance RUNS ITS FULL BUDGET.
-        a = send("advance", {"ticks": 500, "max_tps": 400})
+        a = advance({"ticks": 500, "max_tps": 400})
         eq("4.8f", "THE POINT OF THIS SPEC: the next advance runs its FULL BUDGET",
            a, "data.reason", "ticks")
         # THE KEY IS `ticks_elapsed`. TimeDriver.BuildData emits

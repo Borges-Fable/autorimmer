@@ -51,12 +51,16 @@ namespace AutoRimmer
         }
 
         // Runs INSIDE DoSingleTick (GameComponentUtility.GameComponentTick),
-        // i.e. inside the advance loop. The only thing here is the error
-        // fixture, which has to fire from inside a tick to reproduce 1.5
-        // blocker 3 honestly.
+        // i.e. inside the advance loop. Only fixtures live here, and both are
+        // here for the same reason: they have to fire from inside a TICK to
+        // reproduce their failure honestly — 1.5 blocker 3's red error, and
+        // 722c951's own-faction downing, which halts an advance and so must
+        // happen while one is running.
         public override void GameComponentTick()
         {
             try { JournalVerbs.TickErrorFixture(); }
+            catch { }
+            try { JournalVerbs.TickCasualtyFixture(); }
             catch { }
         }
 
@@ -82,6 +86,7 @@ namespace AutoRimmer
             // Fixtures armed against the colony that just went away.
             JournalVerbs.MainMenuAtTick = -1;
             JournalVerbs.ErrorAtTick = -1;
+            JournalVerbs.DownAtTick = -1;
             var payload = new System.Collections.Generic.Dictionary<string, object>
             {
                 ["kind"] = kind,

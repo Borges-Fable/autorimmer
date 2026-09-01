@@ -104,6 +104,41 @@ def send(op, args=None, timeout=240):
                       "detail": "no results/%s.json within %ss" % (cid, timeout)}}
 
 
+# ---------------------------------------------- git-bug 722c951: the escape --
+#
+# `advance` has TWO new default-on guards, and both are right for a play loop
+# and wrong for a fixture harness:
+#
+#   * it REFUSES (ok:false, error.code "unread-journal") when the previous
+#     advance journaled events that no `journal` call has read, and
+#   * it HALTS (reason:"casualty") when an own-faction pawn goes down or dies
+#     while time is running.
+#
+# This suite is not a play loop. It advances to MOVE GAME STATE so the next
+# assertion has something to assert on, it never reads the journal in between,
+# and its advances exist to let a queued job progress far enough for the
+# honesty check to have something to read. Without an
+# opt-out the second advance onwards would come back refused and every check
+# below would be measuring the refusal instead of the thing it names.
+#
+# So the opt-out lives HERE, in ONE wrapper, and not at the call sites: a
+# `unread_ok` sprinkled inline is indistinguishable to the next reader from one
+# somebody added to get a red check green. The reason string names this file, so
+# `journal --types action` on the bench says which harness turned the guard off
+# and why. Both escapes are per-call and journaled as an act by the mod
+# (session 13's threat-pardon precedent).
+ESCAPE = ("accept/4087644-order-honesty.py: fixture harness, not a play loop — it advances to move "
+          "game state and asserts on the result, and does not read the journal "
+          "between advances")
+
+
+def advance(args=None, **kw):
+    a = dict(args or {})
+    a.setdefault("unread_ok", ESCAPE)
+    a.setdefault("through_casualties", ESCAPE)
+    return send("advance", a, **kw)
+
+
 def dig(obj, path, default=None):
     cur = obj
     for part in path.split("."):
@@ -544,7 +579,7 @@ def phase2():
 
     # An autonomous job must NOT read as ordered. Let the pawn go back to its
     # own think tree first.
-    e = send("advance", {"ticks": 2500, "max_tps": 600})
+    e = advance({"ticks": 2500, "max_tps": 600})
     e = state_of(S["A"])
     if dig(e, "data.state.job_giver") in (None, "ThinkNode_QueuedJob") \
             and not ARGS.dry_run:
@@ -727,7 +762,7 @@ def phase4():
     # calls SetForced, so an unfinished job leaves no receipt - that is the
     # point of `forced`, not a flaw in it.
     send("wear", {"pawn": S["A"], "thing": S["ap"]})
-    send("advance", {"ticks": 4000, "max_tps": 600})
+    advance({"ticks": 4000, "max_tps": 600})
     e = send("pawn", {"id": S["A"], "sections": ["apparel"]})
     worn = as_list(dig(e, "data.apparel.worn"))
     forced = [r for r in worn if r.get("forced") is True]
@@ -976,7 +1011,7 @@ def phase6():
     # ticks, so 150 would let it ARRIVE at a destination only 12 cells away,
     # start the queued job, and make 6.13 test the wrong thing. Direction is
     # all 6.12 needs.
-    send("advance", {"ticks": 60})
+    advance({"ticks": 60})
     e = state_of(S["A"])
     now = dig(e, "data.state.at")
     check("6.12", "the pawn walks to the FIRST destination first (x moves "

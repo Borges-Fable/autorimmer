@@ -84,6 +84,21 @@ seeded world at 250x250, random starting tile.
 - **Advance cap 60,000 ticks (one in-game day), every advance.** Default
   `advance --until.letter true --timeout_ticks 60000`. `halt_on_error` stays on.
   Never raise `max_tps`.
+- **Read the journal, THEN advance — and the mod enforces it now** (git-bug
+  `722c951`). `advance` refuses with `error.code:"unread-journal"` while the
+  previous advance's delta is unread, naming how many, the seq range and the
+  type breakdown. `rwa journal --since_seq <last>` clears it; the digest does
+  not, and neither does the advance's own `journal_seq` echo — that echo is
+  exactly what the last M1 run had, and ignored, while Table bled out. There is
+  a per-call escape, `--unread_ok:str "<why>"`, it is journaled as an act, and
+  **every use of it will be read in the post-mortem.** It is for a deliberate
+  unattended burn, not for a loop that finds reading tedious.
+- **An own-faction casualty STOPS the advance** (`reason:"casualty"`), and a
+  bleeding colonist nobody can reach in time REFUSES it
+  (`error.code:"bleedout-deadline"`, both numbers in the detail). Response is
+  `casualty-halt` in `triggered.md`: `triage`, then send its `act` — the exact
+  `rescue` call. `--through_casualties:str "<why>"` overrides both, per call,
+  journaled. A hostile going down never halts anything.
 - **Pre-advance undraft gate.** Before EVERY advance: if any colonist is drafted
   and `threats.hostiles` is 0 with no live response, `undraft` first.
 - **The wedge rule.** Two consecutive advances returning `ticks_elapsed: 0` END

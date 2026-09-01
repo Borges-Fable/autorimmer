@@ -36,6 +36,61 @@ namespace AutoRimmer
 
         private static string PawnFaction(Pawn p) => p?.Faction?.Name;
 
+        // ================================================== git-bug 722c951 ===
+        // THE FACTION TEST, RESOLVED ON THE MAIN THREAD AND CARRIED IN THE
+        // PAYLOAD, because the consumer cannot do it. `TimeDriver.Notice` is
+        // documented "any thread, called synchronously from Journal.Emit" and
+        // may not touch Verse at all, so the casualty halt cannot ask
+        // `pawn.Faction.IsPlayer` for itself — it reads this bool. The hook runs
+        // on the main thread inside `MakeDowned`/`SetDead`, which is the one
+        // place the question is legal to ask.
+        //
+        // `Faction.IsPlayer` is `def.isPlayer` (RimWorld/Faction.cs) — the
+        // game's own "mine", and a pure def read. Deliberately NOT `IsColonist`,
+        // which is `Faction.IsPlayer && RaceProps.Humanlike && (!IsSlave ||
+        // guest.SlaveIsSecure)` (Verse/Pawn.IsColonist): an INSECURE slave fails
+        // that test, and a rebellious slave going down is precisely a casualty
+        // somebody must look at. The issue's word is own-FACTION and this is the
+        // game's own spelling of it. `kind` is published beside it so a caller
+        // that wants the narrower reading can have it without the mod deciding
+        // for it — the standing "candidates + reasons, never bare booleans"
+        // rule.
+        private static bool PlayerFaction(Pawn p)
+        {
+            try { return p?.Faction != null && p.Faction.IsPlayer; }
+            catch { return false; }
+        }
+
+        // colonist | slave | animal | mech | other. Cheap: three def reads and
+        // two flags, no lazy-init getter among them.
+        private static string PawnKind(Pawn p)
+        {
+            try
+            {
+                if (p == null) return "other";
+                if (p.RaceProps != null && p.RaceProps.Animal) return "animal";
+                if (p.RaceProps != null && p.RaceProps.IsMechanoid) return "mech";
+                if (p.IsSlave) return "slave";
+                if (p.RaceProps != null && p.RaceProps.Humanlike) return "colonist";
+                return "other";
+            }
+            catch { return "other"; }
+        }
+
+        // The join key a caller needs to ACT on the news. Without it "Table went
+        // down" is a name, and `rescue {pawn, target}` wants an id — the M1 run's
+        // sharpest finding is that `rescue` was never called, and a downed event
+        // that cannot be turned into the call is part of why.
+        private static void StampPawn(Dictionary<string, object> payload, Pawn p)
+        {
+            payload["pawn"] = PawnName(p);
+            payload["faction"] = PawnFaction(p);
+            payload["player"] = PlayerFaction(p);
+            payload["kind"] = PawnKind(p);
+            try { if (p != null) payload["pawn_id"] = p.thingIDNumber; }
+            catch { }
+        }
+
         // All overloads funnel here. delayTicks > 0 only queues the letter; the
         // eventual arrival re-enters with delayTicks 0, so skipping the queue
         // call is what prevents double capture. Membership in the stack is the
@@ -128,11 +183,9 @@ namespace AutoRimmer
                     // corpses, and that setup noise is not play chronology.
                     if (Current.ProgramState != ProgramState.Playing) return;
                     var pawn = HealthPawn(__instance);
-                    Journal.Emit("death", new Dictionary<string, object>
-                    {
-                        ["pawn"] = PawnName(pawn),
-                        ["faction"] = PawnFaction(pawn),
-                    }, Tick());
+                    var payload = new Dictionary<string, object>();
+                    StampPawn(payload, pawn);
+                    Journal.Emit("death", payload, Tick());
                 }
                 catch { }
             }
@@ -147,11 +200,8 @@ namespace AutoRimmer
                 {
                     if (Current.ProgramState != ProgramState.Playing) return;
                     var pawn = HealthPawn(__instance);
-                    var payload = new Dictionary<string, object>
-                    {
-                        ["pawn"] = PawnName(pawn),
-                        ["faction"] = PawnFaction(pawn),
-                    };
+                    var payload = new Dictionary<string, object>();
+                    StampPawn(payload, pawn);
                     if (dinfo.HasValue && dinfo.Value.Def != null) payload["damage"] = dinfo.Value.Def.defName;
                     Journal.Emit("downed", payload, Tick());
                 }

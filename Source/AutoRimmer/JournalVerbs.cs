@@ -44,6 +44,43 @@ namespace AutoRimmer
             for (int i = 0; i < errorRepeats; i++) Log.Error(errorText);
         }
 
+        // -1 = disarmed. Same shape as `error-at`, for git-bug 722c951's
+        // casualty halt (`down-at` step). Polled from GameComponentTick, which
+        // runs INSIDE DoSingleTick, so the downing happens from inside the
+        // advance the way a real one does — a `dev:damage` issued from the
+        // protocol lands while the game is PAUSED and would prove nothing about
+        // an advance halting.
+        public static int DownAtTick = -1;
+        private static int downTargetId = -1;
+        private static bool downKill;
+
+        public static void TickCasualtyFixture()
+        {
+            if (DownAtTick < 0) return;
+            int now;
+            try { now = Find.TickManager.TicksGame; }
+            catch { return; }
+            if (now < DownAtTick) return;
+            DownAtTick = -1;
+            try
+            {
+                var map = Find.CurrentMap;
+                if (map == null) return;
+                Pawn victim = null;
+                foreach (var p in map.mapPawns.AllPawnsSpawned)
+                    if (p != null && p.thingIDNumber == downTargetId) { victim = p; break; }
+                if (victim == null || victim.Dead) return;
+                // The game's own dev-menu route, so the `downed`/`death` journal
+                // hooks see exactly what a real casualty produces —
+                // Pawn_HealthTracker.MakeDowned and SetDead, not a synthetic
+                // event. allowBleedingWounds:false keeps the fixture from
+                // starting a second, slower death the suite did not ask for.
+                if (downKill) HealthUtility.DamageUntilDead(victim, DamageDefOf.Cut);
+                else HealthUtility.DamageUntilDowned(victim, allowBleedingWounds: false);
+            }
+            catch { }
+        }
+
         // Main thread, once per frame from AgentGameComponent AFTER
         // TimeDriver.FrameStep.
         //
@@ -75,6 +112,34 @@ namespace AutoRimmer
         // Reads the CURRENT session's journal file. Off-thread: file I/O only,
         // no Verse. The file is also directly tail-able from a shell; this verb
         // exists for filtered, protocol-shaped reads (rwa journal, spec 1.4).
+        //
+        // ============ THIS VERB IS THE ONLY THING THAT CLEARS AN ADVANCE ======
+        // git-bug 722c951. Calling this moves `Journal.ReadWatermark`, and the
+        // watermark is what `advance` compares against before it will run again
+        // (TimeDriver.Start). NOTHING ELSE MOVES IT, and the two things that
+        // most look like they should are named here because M1 proves they must
+        // not:
+        //
+        //   * The ADVANCE'S OWN `journal_seq` ECHO. Run m1-20260831 step 148
+        //     returned `journal_seq:[125,128]` — the advance result CARRIED the
+        //     news that Table had gone down — and the run advanced again, five
+        //     more times, while he bled for 11,335 ticks and died. An echo the
+        //     caller can ignore is exactly what was already there.
+        //   * A DIGEST READ. `DigestVerb.ChangedSection` publishes
+        //     `Journal.CountsSince` — a COUNT PER TYPE and a `last_seq`. "downed:
+        //     1" does not name the pawn, the faction or the tick, so a digest
+        //     cannot discharge an obligation whose whole content is which
+        //     colonist it was. The M1 run made 10 digest calls and zero journal
+        //     calls.
+        //
+        // HOW FAR IT MOVES. To `last_seq` — the highest seq in the FILE, not
+        // `Journal.CurrentSeq` — when the read was unfiltered and untruncated,
+        // because only then has the caller been handed everything there was.
+        // Otherwise to the highest seq actually RETURNED, which for a
+        // `types:`-filtered or `since_tick`-filtered or limit-truncated read is
+        // as far as the caller can honestly claim to have looked. A
+        // `journal {types:["letter"]}` therefore does NOT discharge a `downed`
+        // it never asked for, and the result says so via `unread_after`.
         [Verb("journal", MainThread = false)]
         public static object Read(VerbContext ctx)
         {
@@ -89,6 +154,7 @@ namespace AutoRimmer
 
             var events = new List<object>();
             long lastSeq = 0;
+            long maxReturned = 0;
             bool truncated = false;
             using (var fs = new FileStream(Journal.CurrentFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
             using (var reader = new StreamReader(fs, Encoding.UTF8))
@@ -105,14 +171,36 @@ namespace AutoRimmer
                     if (types.Count > 0 && (!evt.TryGetValue("type", out var ty) || !(ty is string type) || !types.Contains(type))) continue;
                     if (events.Count >= limit) { truncated = true; break; }
                     events.Add(evt);
+                    if ((long)seq > maxReturned) maxReturned = (long)seq;
                 }
             }
+
+            // The watermark, per this verb's header. `filtered` is the honest
+            // predicate for "the caller asked for a subset": a `types` list or a
+            // `since_tick` floor both hide events that WERE in the window.
+            bool filtered = types.Count > 0 || sinceTick >= 0;
+            long claim = (!filtered && !truncated) ? lastSeq : maxReturned;
+            long before = Journal.ReadWatermark;
+            long after = Journal.NoteRead(claim);
+
             return new Dictionary<string, object>
             {
                 ["file"] = Journal.CurrentFile,
                 ["count"] = events.Count,
                 ["truncated"] = truncated,
                 ["last_seq"] = lastSeq,
+                // What `advance` will compare against next (git-bug 722c951).
+                // Published on EVERY read, not only when it moved, so a client
+                // can see another client move it — the shared-watermark hazard
+                // Journal's own header names.
+                ["read_watermark"] = after,
+                ["watermark_was"] = before,
+                ["watermark_moved"] = after > before,
+                // Events the journal has that this read did not hand over. Zero
+                // is the state in which `advance` will run; nonzero after a
+                // filtered read is the point of publishing it.
+                ["unread_after"] = Math.Max(0L, Journal.CurrentSeq - after),
+                ["filtered"] = filtered,
                 ["events"] = events,
             };
         }
@@ -168,6 +256,16 @@ namespace AutoRimmer
             "power_stored", "power_generator", "timeout_ticks_letter", "letter_tag",
             "drop_fixture_letters", "error_delay_ticks", "error_repeats",
             "error_text", "main_menu_delay_ticks",
+            // git-bug 722c951's `down-at` step. THIS LIST IS WHY THAT MERGE
+            // NEEDED A HUMAN: `spec/arg-names` added the guard and
+            // `spec/advance-halt` added the step, git merged both cleanly
+            // because they touch different lines, and the result would have
+            // refused every `down-at` call BEFORE any step ran — the fixture
+            // that phases 3, 4 and 5 of accept/722c951 are built on, and
+            // phase 0's own precondition. An allowlist is a declaration, and a
+            // declaration is a thing two branches can each be right about
+            // separately.
+            "down_delay_ticks", "down_pawn", "down_kill",
         };
 
         [Verb("journal-selftest")]
@@ -595,6 +693,63 @@ namespace AutoRimmer
                         target = "hostile payload attached";
                         break;
                     }
+                    case "down-at":
+                    {
+                        // git-bug 722c951's casualty halt, and it is the ONLY
+                        // way the acceptance can be driven from outside the
+                        // game. The halt is on a `downed`/`death` that happens
+                        // WHILE TIME RUNS; every existing route (`dev:damage`,
+                        // the `downed` step above) fires from the command drain
+                        // with the game paused, which produces the event but
+                        // never inside an advance. Armed here, fired from
+                        // GameComponentTick — i.e. inside DoSingleTick, inside
+                        // the advance — through the game's own
+                        // HealthUtility.DamageUntilDowned / DamageUntilDead.
+                        //
+                        // `down_pawn` is a thingIDNumber, so the SAME step
+                        // proves both halves of the faction filter: a colonist
+                        // id halts the advance, a hostile id (spawn one with
+                        // `dev:spawn-pawn`) does not. Declared as an undeclared
+                        // addition on 722c951, dev-gated like every other step
+                        // here, journaled as a `dev` event, superseded by 3.1.
+                        int delay = ctx.Args.Int("down_delay_ticks", 200);
+                        if (delay < 0 || delay > 600000)
+                            throw new VerbArgsException("down_delay_ticks must be 0..600000");
+                        if (map == null) throw new VerbArgsException("down-at needs a current map");
+                        downKill = ctx.Args.Bool("down_kill", false);
+                        Pawn victim = null;
+                        if (ctx.Args.Has("down_pawn"))
+                        {
+                            int want = ctx.Args.Int("down_pawn", -1);
+                            foreach (var p in map.mapPawns.AllPawnsSpawned)
+                                if (p != null && p.thingIDNumber == want) { victim = p; break; }
+                            if (victim == null)
+                                throw new VerbArgsException($"no spawned pawn with id {want} on this map");
+                        }
+                        else
+                        {
+                            if (colonists != null)
+                                foreach (var c in colonists) { if (!c.Downed && !c.Dead) { victim = c; break; } }
+                            if (victim == null)
+                                throw new VerbArgsException("down-at needs a standing free colonist, "
+                                    + "or an explicit down_pawn id");
+                        }
+                        downTargetId = victim.thingIDNumber;
+                        int armedAtTick = Find.TickManager.TicksGame;
+                        DownAtTick = armedAtTick + delay;
+                        target = $"{PawnSafe.Name(victim)} at tick {DownAtTick}";
+                        extras["down_at"] = new Dictionary<string, object>
+                        {
+                            ["armed_at_tick"] = armedAtTick,
+                            ["fires_at_tick"] = DownAtTick,
+                            ["pawn"] = victim.thingIDNumber,
+                            ["name"] = PawnSafe.Name(victim),
+                            ["faction"] = victim.Faction?.Name,
+                            ["player_faction"] = victim.Faction != null && victim.Faction.IsPlayer,
+                            ["kill"] = downKill,
+                        };
+                        break;
+                    }
                     case "main-menu":
                     {
                         // Arms only. It fires from the GameComponent AFTER the
@@ -615,7 +770,7 @@ namespace AutoRimmer
                         break;
                     }
                     default:
-                        throw new VerbArgsException($"unknown step '{step}' (letter|message|error|error-at|weird-result|raid|downed|break|save|stockpile|alerts|alerts-clear|colonists|power|timeout-letter|dialogs|dialogs-clear|main-menu)");
+                        throw new VerbArgsException($"unknown step '{step}' (letter|message|error|error-at|weird-result|raid|downed|down-at|break|save|stockpile|alerts|alerts-clear|colonists|power|timeout-letter|dialogs|dialogs-clear|main-menu)");
                 }
                 Journal.Emit("dev", new Dictionary<string, object>
                 {
