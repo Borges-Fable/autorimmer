@@ -61,15 +61,24 @@ to execute.
    tests only that a `isMealSource` building exists, and is silent before
    day 2. The stove build waits on 3.3; the BILL waits on 3.6 (`48f666c`) —
    log `blocked` with those ids. The read half (`bills`) works today.
-7. **Work priorities roster scan** — `pawn {id:<n>, sections:["work"]}`,
-   **one call per colonist** (N round-trips; the roster comes from `pawns`):
-   every essential work type (Doctor, Cook, Grow, Construct, Haul) covered by
-   someone capable, and no bill-relevant type checked only on its likely
-   patient. [[who-will-actually-do-it]] **Doctor is the exception to "someone
-   capable": coverage means TWO.** One doctor reads as covered right up to
-   the moment the doctor is the casualty, which is the likeliest casualty
-   there is — M1 lost both its casualties that way, to blood loss, not to the
-   animal. [[one-doctor-is-zero-doctors]]
+7. **Work coverage — CONFIRM THE MOD'S READ, do not re-derive it.**
+   `digest`'s `work_coverage` block answers this item in one call. Read
+   `work_coverage.ok`; if it is false, `work_coverage.under` names the work
+   types and the row for each carries the whole diagnosis (`floor`, `have`,
+   `capable`, `enabled`, `available`, ranked `candidates`, and
+   `enabled_but_incapable` naming the missing capacity). Repair it with
+   `work-cover {work:"<name>"}`, which promotes the best remaining capable and
+   available pawn in the game's own order and journals the decision as an act.
+   A `still_under` row means the roster cannot answer: `no-candidate` means
+   recruit or heal, `too-few-candidates` means the colony is too small, and an
+   `enabled_but_incapable` list means the fix is surgery. The floors come from
+   `WorkTypeDef.requireCapableColonist` (the game's own list, floor 1 on
+   capability) plus **Doctor at 2, on availability** — the one deviation, and
+   the reason for it is [[one-doctor-is-zero-doctors]]. This item is now a
+   read and a verdict, not a per-colonist scan: the arithmetic moved into the
+   mod (git-bug `40ed42f`). What it does NOT cover is the bill trap — no
+   bill-relevant work type checked only on its likely patient — which is still
+   yours. [[who-will-actually-do-it]]
 8. **Research: select a project** — `research-set`. The model would accept any
    project (`SetCurrentProject` checks nothing); the verb reproduces the
    widget gate, so refusal here means prerequisites, not breakage.

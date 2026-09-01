@@ -15,7 +15,7 @@ no opinion).
 | [[zzzt-letter-is-a-fire-already-burning]] | Critical | verified-in-source | a Zzzt or fire letter — act on the letter; the alert is home-scoped and late (**graduated**: `triggered.md §power-incident` + `templates/power-room`) |
 | [[quicktest-and-autostart-collide]] | Critical | verified-in-source | launching `--quicktest` on a bench whose Saves still holds `autostart.rws` — map gen fails deterministically |
 | [[orbital-trade-needs-a-beacon]] | Critical | verified-in-source | any orbital trade — no beacon means the ship sees nothing of yours, and the console alone is not enough |
-| [[one-doctor-is-zero-doctors]] | Critical | observed-at-bench | colony start and every roster change — the only doctor is a likely casualty |
+| [[one-doctor-is-zero-doctors]] | Critical | observed-at-bench | **graduated to CODE**: `digest.work_coverage` reads it at every glance and `work-cover` repairs it (git-bug `40ed42f`). The note keeps only the WHY — Doctor's floor is 2 on AVAILABILITY because `Alert_NeedDoctor.Patients` has `!item.Downed` in it |
 | [[read-every-return-or-lose-a-colonist]] | Critical | observed-at-bench | any back-to-back short advances — a narrowed read is a blind loop |
 | [[seek-off-is-a-decision-to-flee]] | Critical | verified-in-source | choosing a combat posture — `hostility_response` is decided ABOVE seek, so `Flee` beats it |
 | [[materials-are-a-standing-loop]] | Important | evan-stated | any input trending to zero — designate, don't retry the bill |
