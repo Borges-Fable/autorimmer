@@ -113,6 +113,17 @@ specific pawn is the question.
 - `max_tps` is left to the mod's thermal cap; never raise it for a
   fast-forward (the cap exists because this hardware trips — DESIGN §Time
   model, and FINDINGS §6 measured ~1392 tps at a 30fps cap anyway).
+- **Pre-advance gate — time control, checked FIRST.** Read `rwa status` and
+  look at `paused` before EVERY advance. If it is false the game has been
+  running unobserved: `pause`, then log `time-control-drift` (`triggered.md`)
+  with the SIZE of the window, then read the whole journal delta across it
+  before advancing again. A dead `rwa` client does not stop the game — the
+  mod keeps advancing toward its target through a tool error, an interrupt or
+  a timeout, and M1 lost ~60,000 ticks that way, more than once, with
+  `pause` afterwards reporting `was_advancing:true, speed_before:Ultrafast`.
+  `status` is a read of the heartbeat file and costs the game nothing. This
+  gate goes first because a running game makes every other read stale,
+  including the drafted check below.
 - **Pre-advance gate — the undraft discipline.** Before EVERY advance: if any
   colonist shows `drafted` and `threats.hostiles` is 0 with no threat being
   actively responded to, `undraft` first. Read it from the digest's colonist
@@ -325,6 +336,10 @@ imitating a live one.
    where machine rules allow.
 9. Long advances are announced when the window is watched.
 10. The session always ends with a summary — normal end, wedge, or loss.
+11. `status.paused` is read before EVERY advance; a game found running is
+    paused first, its window logged as `time-control-drift`, and its journal
+    delta read before the next advance. The agent owns time only while its
+    client lives.
 
 ## Acceptance (4.3 exercises this; the mechanical half is scripted)
 
