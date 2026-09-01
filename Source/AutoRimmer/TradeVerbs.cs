@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using RimWorld;
 using Verse;
 using Verse.AI;
+using Verse.AI.Group;
 
 namespace AutoRimmer
 {
@@ -59,8 +60,11 @@ namespace AutoRimmer
     // `TradeSession.Close()` has ZERO callers in the whole tree, and
     // `TradeSession.SetupWith` has exactly ONE — `RimWorld/Dialog_Trade`'s
     // constructor. The WINDOW owned the lifecycle. With no window, this file
-    // owns it: every exit path (`trade-confirm`, `trade-cancel`, and a
-    // `trade-start` that finds a session already open) closes it explicitly.
+    // owns it: `trade-confirm` and `trade-cancel` close it explicitly on
+    // every exit path. `trade-start` does NOT close a session it finds already
+    // open — it REFUSES with gate `session-open` and leaves the existing deal
+    // intact, because silently discarding a deal the caller may still be
+    // building is a worse answer than making them say `trade-cancel`.
     // `Close()` is `trader = null;` and nothing else, so `deal`,
     // `playerNegotiator` and `giftMode` are left set — which is why "cancel
     // leaves state untouched" is DEFINED below in terms of the game world, not
@@ -94,6 +98,19 @@ namespace AutoRimmer
     // non-goals rule caravans and settlements out for v1, and nothing in this
     // file — including its convenience helpers — touches it. The traders here
     // are map pawns and passing ships, through TradeSession.
+    //
+    // ============ A GATE THAT THREW HAS NOT PASSED =========================
+    // Every widget gate below is read inside a try, because a modded `ITrader`
+    // or `Tradeable` getter can throw (several vanilla ones already NRE with no
+    // session — `Tradeable.TraderWillTrade` dereferences `TradeSession.trader`
+    // directly). The catch used to leave the PERMISSIVE default in place, which
+    // silently converted "this gate could not be evaluated" into "this gate
+    // passed" and let the verb EXECUTE past a refusal it should have made —
+    // `traderHasSilver = true` on a throwing getter skipping the
+    // `trader-short-funds` refusal entirely. Every one of them now refuses with
+    // `gate-unreadable` (per item, in `trade-set`) and names the exception.
+    // Refusing is the only answer a verb can honestly give about a precondition
+    // it could not read.
     internal static partial class PawnActs
     {
         public const int TradeableCap = 60;
@@ -164,6 +181,17 @@ namespace AutoRimmer
                     new Dictionary<string, object> { ["session"] = SessionHead() });
 
             var negotiator = TradeNegotiatorArg(map, ctx.Args);
+
+            // ---- gate 0: the negotiator is a pawn the player could have
+            // right-clicked with at all. The auto-picker applies its own
+            // filters, but an EXPLICIT `negotiator` goes straight to
+            // Dev.PawnArg, which resolves ANY pawn on the map — a downed
+            // colonist, a prisoner, a mechanoid, a raider. `dev:*` may bypass a
+            // widget gate; `trade-start` may not, so the gate runs on both
+            // paths and the auto-picked pawn simply always passes it.
+            var negGate = NegotiatorGate(V, map, negotiator);
+            if (negGate != null) return negGate;
+
             var trader = TraderArg(map, ctx.Args, out string traderKindLabel, out Pawn traderPawn);
 
             // ---- gate 1: CanTradeNow (also silences SetupWith's Log.Warning)
@@ -209,8 +237,14 @@ namespace AutoRimmer
                         + " cannot reach the trader");
 
                 // ---- gate 4: dismissed ----------------------------------
-                bool dismissed = false;
-                try { dismissed = traderPawn.mindState.traderDismissed; } catch { }
+                bool dismissed;
+                try { dismissed = traderPawn.mindState.traderDismissed; }
+                catch (Exception e)
+                {
+                    return GateUnreadable(V, "trader-dismissed",
+                        "RimWorld/FloatMenuOptionProvider_Trade.GetOptionsFor reads "
+                        + "clickedPawn.mindState.traderDismissed", e);
+                }
                 if (dismissed)
                     return TradeRefuse(V, "trader-dismissed",
                         "RimWorld/FloatMenuOptionProvider_Trade.GetOptionsFor -> \"TraderDismissed\" "
@@ -219,8 +253,14 @@ namespace AutoRimmer
             }
 
             // ---- gate 5: title/permit --------------------------------------
-            AcceptanceReport tradeWith = AcceptanceReport.WasAccepted;
-            try { tradeWith = negotiator.CanTradeWith(trader.Faction, trader.TraderKind); } catch { }
+            AcceptanceReport tradeWith;
+            try { tradeWith = negotiator.CanTradeWith(trader.Faction, trader.TraderKind); }
+            catch (Exception e)
+            {
+                return GateUnreadable(V, "can-trade-with",
+                    "RimWorld/FloatMenuOptionProvider_Trade.GetOptionsFor -> "
+                    + "RimWorld/FactionUtility.CanTradeWith(faction, traderKind)", e);
+            }
             if (!tradeWith.Accepted)
                 return TradeRefuse(V, "cannot-trade-with",
                     "RimWorld/FloatMenuOptionProvider_Trade.GetOptionsFor -> \"CannotTrade\" + "
@@ -277,11 +317,15 @@ namespace AutoRimmer
         // ====================================================================
         // trade {filter?, action_only?, cap?}
         //
-        // The session summary: tradeables, prices, silver on both sides. Pure
-        // read — the ONE thing it calls that is not a plain field read is
-        // `TradeDeal.UpdateCurrencyCount()`, which `Dialog_Trade
-        // .DoWindowContents` runs on EVERY FRAME the window is up, so the
-        // player's own view is continuously recomputed the same way.
+        // The session summary: tradeables, prices, silver on both sides. A
+        // PURE READ — it calls nothing but the `Tradeable` getters, and
+        // deliberately does NOT call `TradeDeal.UpdateCurrencyCount()` even
+        // though `Dialog_Trade.DoWindowContents` runs that every frame the
+        // window is up. An observer never mutates: the silver row it reports is
+        // therefore whatever the last `trade-set` / `trade-confirm` left, which
+        // is the honest answer. `trade-set` and `trade-confirm` each call
+        // `UpdateCurrencyCount()` themselves, so a `trade` read taken after
+        // either one is current.
         //
         // `Tradeable`'s price getters read the STATIC session unguarded (e.g.
         // `public virtual bool TraderWillTrade => TradeSession.trader.TraderKind
@@ -409,8 +453,15 @@ namespace AutoRimmer
                 }
 
                 // Gate 1.
-                bool willTrade = true;
-                try { willTrade = tr.TraderWillTrade; } catch { }
+                bool willTrade;
+                try { willTrade = tr.TraderWillTrade; }
+                catch (Exception e)
+                {
+                    rejected.Add(RejectUnreadable(tr, "trader-will-trade",
+                        "RimWorld/TradeUI.DrawTradeableRow reads trad.TraderWillTrade; "
+                        + "RimWorld/Tradeable.TraderWillTrade dereferences TradeSession.trader", e));
+                    continue;
+                }
                 if (!willTrade)
                 {
                     rejected.Add(Reject(tr, "trader-will-not-trade",
@@ -425,7 +476,7 @@ namespace AutoRimmer
                 // Gate 2.
                 if (ModsConfig.IdeologyActive)
                 {
-                    bool slaveryRefused = false;
+                    bool slaveryRefused;
                     try
                     {
                         slaveryRefused =
@@ -434,7 +485,13 @@ namespace AutoRimmer
                                     TradeSession.playerNegotiator.Named(HistoryEventArgsNames.Doer))
                                 .DoerWillingToDo();
                     }
-                    catch { }
+                    catch (Exception e)
+                    {
+                        rejected.Add(RejectUnreadable(tr, "negotiator-will-trade-slaves",
+                            "RimWorld/TransferableUIUtility.TradeIsPlayerSellingToSlavery + "
+                            + "HistoryEvent(SoldSlave).DoerWillingToDo()", e));
+                        continue;
+                    }
                     if (slaveryRefused)
                     {
                         rejected.Add(Reject(tr, "negotiator-will-not-trade-slaves",
@@ -448,8 +505,15 @@ namespace AutoRimmer
                 }
 
                 // Gate 3.
-                bool interactive = true;
-                try { interactive = tr.Interactive; } catch { }
+                bool interactive;
+                try { interactive = tr.Interactive; }
+                catch (Exception e)
+                {
+                    rejected.Add(RejectUnreadable(tr, "interactive",
+                        "RimWorld/TransferableUIUtility.DoCountAdjustInterface opens with "
+                        + "`if (!trad.Interactive || readOnly)`", e));
+                    continue;
+                }
                 if (!interactive)
                 {
                     rejected.Add(Reject(tr, "not-interactive",
@@ -530,7 +594,12 @@ namespace AutoRimmer
         // Atomic: `TradeDeal.TryExecute` resolves EVERY tradeable or none, and
         // its own validation errors are surfaced verbatim.
         //
-        // THREE PRE-CHECKS, in the widget's own order:
+        // THREE PRE-CHECKS. THEY RUN 3, THEN 1, THEN 2 — the numbering below
+        // is the widget's, the order is this verb's, and they differ on
+        // purpose: the cheapest and most likely refusal (the trader has left)
+        // is made before the deal is walked, and neither reordering changes an
+        // outcome because all three refuse without transacting. Read the code's
+        // own "Pre-check N" comments for what actually runs where.
         //  1. The NRE guard (trap 1) — the exact negation of TryExecute's
         //     cannot-afford condition, so that branch is unreachable. The
         //     refusal carries the game's own "MessageColonyCannotAfford".
@@ -542,7 +611,7 @@ namespace AutoRimmer
         //     confirmation is reproduced as an ARGUMENT: default false refuses,
         //     `allow_trader_short_funds:true` is the headless "Confirm".
         //  3. `ITrader.CanTradeNow`, re-read: a session opened before an
-        //     `advance` can outlive the caravan that opened it.
+        //     `advance` can outlive the caravan that opened it. RUNS FIRST.
         //
         // AND THE SESSION IS CLOSED ON EVERY EXIT PATH, because
         // `TradeSession.Close()` has no vanilla caller — the window used to own
@@ -642,8 +711,22 @@ namespace AutoRimmer
             }
 
             // Pre-check 2 — the confirmation modal, as an argument.
-            bool traderHasSilver = true;
-            try { traderHasSilver = deal.DoesTraderHaveEnoughSilver(); } catch { }
+            // This one is the reason the whole family was fixed: a `true`
+            // default here meant a throwing modded ITrader skipped the
+            // trader-short-funds refusal and went straight to TryExecute.
+            bool traderHasSilver;
+            try { traderHasSilver = deal.DoesTraderHaveEnoughSilver(); }
+            catch (Exception e)
+            {
+                var dg = GateUnreadable(V, "trader-has-enough-silver",
+                    "RimWorld/Dialog_Trade.DoWindowContents gates execution on "
+                    + "TradeSession.deal.DoesTraderHaveEnoughSilver()", e);
+                dg["planned"] = planned;
+                dg["session"] = SessionHead();
+                dg["note"] = "NOTHING was transacted and the session is STILL OPEN. "
+                    + "TradeDeal.TryExecute was NOT called.";
+                return dg;
+            }
             if (!traderHasSilver && !allowShort)
             {
                 var d1 = TradeRefuse(V, "trader-short-funds",
@@ -1031,6 +1114,29 @@ namespace AutoRimmer
             try { return tr.CountHeldBy(t); } catch { return 0; }
         }
 
+        // A widget gate that THREW is not a widget gate that PASSED. Both of
+        // these refuse rather than fall through to the permissive default; see
+        // the file header.
+        private static Dictionary<string, object> GateUnreadable(string verb, string gate,
+            string cite, Exception e)
+            => TradeRefuse(verb, "gate-unreadable", cite,
+                "the '" + gate + "' widget gate could not be read: " + e.GetType().Name + ": "
+                + Journal.Truncate(e.Message, 200) + ". A gate that throws has NOT passed, so the verb "
+                + "refuses rather than executing on an unread precondition. This is almost always a "
+                + "modded ITrader or Tradeable whose getter assumes the trade window is on the stack.",
+                new Dictionary<string, object> { ["unreadable_gate"] = gate });
+
+        private static Dictionary<string, object> RejectUnreadable(Tradeable tr, string gate,
+            string cite, Exception e)
+        {
+            var d = Reject(tr, "gate-unreadable", cite,
+                "the '" + gate + "' widget gate could not be read: " + e.GetType().Name + ": "
+                + Journal.Truncate(e.Message, 200) + ". A gate that throws has NOT passed, so this item "
+                + "was left untouched rather than set past an unread precondition.");
+            d["unreadable_gate"] = gate;
+            return d;
+        }
+
         private static Dictionary<string, object> Reject(Tradeable tr, string gate, string cite, string reason)
             => new Dictionary<string, object>
             {
@@ -1112,6 +1218,91 @@ namespace AutoRimmer
         // among those who pass the gates, because that is the pawn a player
         // sends and the price improvement is real — reported either way so the
         // choice is never silent.
+        // `RimWorld/FloatMenuMakerMap.ShouldGenerateFloatMenuForPawn` plus the
+        // one clause of `RimWorld/FloatMenuOptionProvider.SelectedPawnValid`
+        // that `FloatMenuOptionProvider_Trade` does not opt out of. Right-click
+        // produces NO trade option at all for a pawn that fails these, so
+        // neither may this verb. Returns null when the negotiator is fine.
+        //
+        // What is deliberately NOT reproduced, and why: vanilla has no
+        // player-faction clause on this path — the float menu is built from
+        // `Find.Selector.SelectedPawns` and `FloatMenuOptionProvider_Trade
+        // .GetOptionsFor` never asks whose faction the negotiator is in. So a
+        // prisoner or a guest is refused here only if they fail a real clause
+        // above. The AUTO-PICKER is stricter (it walks
+        // `map.mapPawns.FreeColonistsSpawned`), which is a choice about who to
+        // pick, not a gate; an explicit `negotiator` gets the widget's rules,
+        // exactly as DESIGN's action model requires.
+        private static Dictionary<string, object> NegotiatorGate(string verb, Map map, Pawn negotiator)
+        {
+            const string SGC = "RimWorld/FloatMenuMakerMap.ShouldGenerateFloatMenuForPawn";
+
+            bool dead = false, downed = false, offMap = false, mech = false, deathresting = false;
+            try { dead = negotiator.Dead; } catch { }
+            try { downed = negotiator.Downed; } catch { }
+            try { offMap = negotiator.Map != map; } catch { offMap = true; }
+            try { mech = negotiator.RaceProps != null && negotiator.RaceProps.IsMechanoid; } catch { }
+            try { deathresting = ModsConfig.BiotechActive && negotiator.Deathresting; } catch { }
+
+            string who = WorldSafe.Safe(() => negotiator.LabelShortCap.ToString());
+
+            if (dead || offMap)
+                return TradeRefuse(verb, "negotiator-not-on-map",
+                    SGC + " returns false when `pawn.Map != Find.CurrentMap`, so a right-click "
+                    + "produces no float menu for it at all",
+                    who + (dead ? " is dead" : " is not on the current map")
+                    + " and cannot be given an order");
+
+            if (downed)
+                return TradeRefuse(verb, "negotiator-downed",
+                    SGC + " returns \"IsIncapped\".Translate(...) when `pawn.Downed`",
+                    WorldSafe.Safe(() => "IsIncapped".Translate(negotiator.LabelCap, negotiator).ToString())
+                        ?? (who + " is incapable of doing that right now"));
+
+            if (deathresting)
+                return TradeRefuse(verb, "negotiator-deathresting",
+                    SGC + " returns \"IsDeathresting\".Translate(...) when "
+                    + "`ModsConfig.BiotechActive && pawn.Deathresting`",
+                    WorldSafe.Safe(() => "IsDeathresting".Translate(negotiator.Named("PAWN")).ToString())
+                        ?? (who + " is deathresting"));
+
+            if (mech)
+                return TradeRefuse(verb, "negotiator-mechanoid",
+                    "RimWorld/FloatMenuOptionProvider.SelectedPawnValid returns false when "
+                    + "`!MechanoidCanDo && pawn.RaceProps.IsMechanoid`, and "
+                    + "RimWorld/FloatMenuOptionProvider_Trade does not override MechanoidCanDo "
+                    + "(the base default is false)",
+                    who + " is a mechanoid; the trade option is never offered for one");
+
+            // `lord.AllowsFloatMenu(pawn)` — a pawn inside a ritual or a party
+            // lord job has no float menu at all.
+            try
+            {
+                var lord = negotiator.GetLord();
+                if (lord != null)
+                {
+                    var report = lord.AllowsFloatMenu(negotiator);
+                    if (!report.Accepted)
+                        return TradeRefuse(verb, "negotiator-lord-refuses",
+                            SGC + " returns `lord.AllowsFloatMenu(pawn)` when the pawn has a lord",
+                            string.IsNullOrEmpty(report.Reason)
+                                ? who + " is committed to a group activity and takes no orders right now"
+                                : report.Reason);
+                }
+            }
+            catch (Exception e)
+            {
+                return GateUnreadable(verb, "lord-allows-float-menu", SGC + " -> Lord.AllowsFloatMenu", e);
+            }
+
+            return null;
+        }
+
+        // NOTE: an explicit `negotiator` resolves through `Dev.PawnArg`, which
+        // accepts ANY pawn on the map — none of the filters below apply to it.
+        // `NegotiatorGate` above is what makes that safe; do not move the
+        // widget gates into this picker, because then the explicit path would
+        // skip them again.
         private static Pawn TradeNegotiatorArg(Map map, VerbArgs args)
         {
             if (args.Has("negotiator"))
