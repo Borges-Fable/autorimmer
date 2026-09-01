@@ -1902,6 +1902,20 @@ def cmd_place_layout(opts, root, tokens):
         roof_env = send(root, "area", {"kind": "build-roof", "op": "add",
                                        "cells": roof_cells}, opts, h, t)
 
+    # A FAILED envelope gets the standard treatment, not this command's summary.
+    # The summary reads the mod's own `preflight` block, and on a bad-args or an
+    # unknown-op there is no such block — so it would print "preflight FAILED,
+    # checked None" about a preflight that never ran, which is a confident lie
+    # about the wrong thing. Same shape as main()'s own failure path, advice
+    # line included.
+    if not env.get("ok"):
+        adv = (env.get("rwa") or {}).get("advice")
+        code = env_exit(env)
+        emit(env, opts)
+        if adv and not want_json(opts):
+            print(adv, file=sys.stderr)
+        return code
+
     if not want_json(opts):
         pre = data.get("preflight") or {}
         lines = [
@@ -1929,9 +1943,7 @@ def cmd_place_layout(opts, root, tokens):
                             "<=320 cells roofs itself next tick anyway."))
         if roof_env is not None and not roof_env.get("ok"):
             lines.append(f"  roof call FAILED: {(roof_env.get('error') or {}).get('detail')}")
-        code = env_exit(env)
-        emit(env, opts, pretty_body="\n".join(lines))
-        return code
+        return emit(env, opts, pretty_body="\n".join(lines))
     return emit(env, opts)
 
 
