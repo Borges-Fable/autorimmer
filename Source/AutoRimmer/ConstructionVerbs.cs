@@ -88,11 +88,56 @@ namespace AutoRimmer
         public const string StateReady = "ready";
         public const string StateInProgress = "in-progress";
         public const string StateBlocked = "blocked";
+        // The two TERMINAL tokens, borrowed from `Placements` rather than
+        // redeclared, so a layout rollup speaks one vocabulary and not two
+        // (git-bug 36999fd). A live element is one of the four above; a
+        // resolved one is `built` or `cancelled`, and telling those apart is
+        // exactly what a rect-scoped read cannot do, because both are empty
+        // ground.
+        public const string StateBuilt = Placements.StateBuilt;
+        public const string StateCancelled = Placements.StateCancelled;
+        // The seventh token, and it means "not measured". A live element past
+        // `scan_cap` gets no `Frame.WorkToBuild` and no cost list, so it has no
+        // finer state, and reporting it as `ready` would be a measurement this
+        // call did not make. `scan_more` counts them.
+        public const string StateUnscanned = "unscanned";
+        // A placement id this layout still names that the placement table no
+        // longer holds. See Layouts.Progress.
+        public const string StateUnknown = "unknown";
 
         [Verb("construction")]
         public static object Construction(VerbContext ctx)
         {
             var a = ctx.Args;
+
+            // ------------------------------------------- WHICH QUESTION -----
+            // git-bug 36999fd, and this pair is the whole of it.
+            //
+            // `--layout_id ly-1` used to fall through every branch below and
+            // answer WHOLE-MAP, with `ok:true` and `rect_source:"whole-map"`
+            // as the only tell. That is 7382bdd's silent-argument class, and it
+            // is worse on this verb than on the ones that issue banks, because
+            // the fallback is not a harmless default — it is a DIFFERENT
+            // QUESTION, answered confidently. It was right on the M2 run only
+            // because those 22 blueprints were the only ones on the map.
+            a.NearMiss("layout_id", "layoutid", "layout", "ly_id");
+            if (a.Has("layout_id"))
+            {
+                // A PRECEDENCE RULE WOULD BE THE SAME BUG ONE LAYER IN. Two
+                // scopes in one call are two questions, and picking one of them
+                // silently is what this branch exists to stop.
+                string clash = a.Has("rect") ? "rect"
+                    : a.Has("around") ? "around"
+                    : a.Has("id") ? "id"
+                    : a.Has("placement_id") ? "placement_id"
+                    : null;
+                if (clash != null)
+                    throw new VerbArgsException(
+                        $"'layout_id' and '{clash}' are two different scopes and this verb answers "
+                        + "one question per call. A layout's elements are not the same set as its "
+                        + "rect — a rect catches anything else standing on that ground — so there "
+                        + "is no precedence rule that would not be a guess. Ask twice.");
+            }
 
             // ---------------------------------------- one placement id ------
             // The completion answer, and the only mode that can distinguish
@@ -121,6 +166,165 @@ namespace AutoRimmer
             if (cap < 1 || cap > 500) throw new VerbArgsException("cap must be 1..500");
             int scanCap = a.Int("scan_cap", ScanCap);
             if (scanCap < 1 || scanCap > 5000) throw new VerbArgsException("scan_cap must be 1..5000");
+
+            // ------------------------------------------------ one layout ----
+            // THE SCOPE `place-layout` CREATED AND NOTHING COULD ANSWER.
+            // `place-layout` mints an `ly-N`, `cancel-layout` takes one, and
+            // until now the verb whose whole job is reporting build progress
+            // could not be asked about one — leaving the caller to poll 22
+            // placement ids one at a time or to pass the layout's rect, which
+            // is not the same set.
+            //
+            // The headline counts come from `Layouts.Progress`, which is
+            // UNCAPPED and cheap; only the per-element DETAIL is capped, the
+            // way the rect path caps it and for the same reason
+            // (`Frame.WorkToBuild` is a GetStatValueAbstract per frame). So
+            // `done` and `unresolved` are never a floor, which matters because
+            // `advance {until:{layout}}` halts on exactly those numbers.
+            if (a.Has("layout_id"))
+            {
+                string wanted = a.StrReq("layout_id");
+                var record = Layouts.Get(wanted)
+                    ?? throw new VerbArgsException(UnknownLayout(wanted));
+
+                var progress = Layouts.Progress(record);
+                var index = WorkerIndex(map);
+                var layoutRows = new List<object>();
+                var layoutByState = new Dictionary<string, int>();
+                var layoutMissing = new Dictionary<ThingDef, int>();
+                int lBlueprints = 0, lFrames = 0, lScanned = 0, lScanMore = 0, lOffMap = 0;
+                float lWorkLeft = 0f;
+
+                for (int i = 0; i < record.PlacementIds.Count; i++)
+                {
+                    string pid = record.PlacementIds[i];
+                    var p = Placements.Get(pid);
+                    if (p == null)
+                    {
+                        Bump(layoutByState, StateUnknown);
+                        if (layoutRows.Count < cap)
+                            layoutRows.Add(new Dictionary<string, object>
+                            {
+                                ["placement_id"] = pid,
+                                ["state"] = StateUnknown,
+                                ["resolved"] = true,
+                                ["detail"] = "this layout names the id and the session's placement "
+                                    + "table no longer holds it — evicted past its 2000-entry cap, "
+                                    + "or rolled back",
+                            });
+                        continue;
+                    }
+
+                    string pstate = Placements.StateOf(p, out var bp, out var fr, out _);
+                    var live = bp ?? fr;
+                    var row = Placements.Answer(p);
+                    row["resolved"] = live == null;
+
+                    if (live == null)
+                    {
+                        row["kind"] = null;
+                        Bump(layoutByState, pstate);
+                        if (layoutRows.Count < cap) layoutRows.Add(row);
+                        continue;
+                    }
+
+                    if (live is Frame) lFrames++; else lBlueprints++;
+                    var pmap = Placements.MapOf(p);
+                    if (pmap != map)
+                    {
+                        // Its live look already answered against its OWN map;
+                        // only the detail is skipped, because `Item` reads this
+                        // map's worker index and enroute manager.
+                        lOffMap++;
+                        row["kind"] = Placements.KindOf(live);
+                        row["state"] = StateUnscanned;
+                        row["detail"] = "this placement is on map " + p.MapId
+                            + ", not the current one, so its detail was not read";
+                        Bump(layoutByState, StateUnscanned);
+                        if (layoutRows.Count < cap) layoutRows.Add(row);
+                        continue;
+                    }
+
+                    if (lScanned >= scanCap)
+                    {
+                        lScanMore++;
+                        row["kind"] = Placements.KindOf(live);
+                        row["state"] = StateUnscanned;
+                        Bump(layoutByState, StateUnscanned);
+                        if (layoutRows.Count < cap) layoutRows.Add(row);
+                        continue;
+                    }
+                    lScanned++;
+
+                    var item = Item(map, live, index);
+                    // The finer live state REPLACES `blueprint`/`frame`: those
+                    // two say what the thing is, and the caller asked how it is
+                    // going. `kind` keeps the thing.
+                    row["state"] = item["state"];
+                    row["kind"] = item["kind"];
+                    // NOT `thing_id`, which `Answer` already owns and which
+                    // means the thing that RESULTED. This is the blueprint or
+                    // frame standing there now.
+                    row["constructible_id"] = item["id"];
+                    row["footprint"] = item["footprint"];
+                    row["materials"] = item["materials"];
+                    row["missing"] = item["missing"];
+                    row["blocking"] = item["blocking"];
+                    row["blocking_is_pawn"] = item["blocking_is_pawn"];
+                    if (item.ContainsKey("blocking_haulable"))
+                        row["blocking_haulable"] = item["blocking_haulable"];
+                    row["worker"] = item["worker"];
+                    row["work_total"] = item["work_total"];
+                    if (item.ContainsKey("work_done"))
+                    {
+                        row["work_done"] = item["work_done"];
+                        row["work_left"] = item["work_left"];
+                        row["percent"] = item["percent"];
+                        if (item["work_left"] is double wl) lWorkLeft += (float)wl;
+                    }
+
+                    Bump(layoutByState, item["state"] as string ?? StateReady);
+                    if (item["missing"] is List<object> miss)
+                        foreach (var m in miss)
+                            if (m is Dictionary<string, object> md
+                                && md["def"] is string defName
+                                && md["count"] is int c)
+                            {
+                                var td = DefDatabase<ThingDef>.GetNamedSilentFail(defName);
+                                if (td == null) continue;
+                                layoutMissing[td] =
+                                    layoutMissing.TryGetValue(td, out var have) ? have + c : c;
+                            }
+                    if (layoutRows.Count < cap) layoutRows.Add(row);
+                }
+
+                var layoutData = progress.Out();
+                // `rect_source` names the question that was answered, so an
+                // envelope says which one it is even when the numbers happen to
+                // agree with another scope's.
+                layoutData["rect_source"] = "layout";
+                layoutData["rect"] = Footprint.Out(record.Rect);
+                layoutData["name"] = record.Name;
+                layoutData["mode"] = record.Mode;
+                layoutData["placed_tick"] = record.Tick;
+                layoutData["journal_seq"] = record.JournalSeq == 0 ? (object)null : record.JournalSeq;
+                layoutData["cancelled_seq"] =
+                    record.CancelledSeq == 0 ? (object)null : record.CancelledSeq;
+                layoutData["blueprints"] = lBlueprints;
+                layoutData["frames"] = lFrames;
+                layoutData["by_state"] = Counts(layoutByState);
+                layoutData["work_left_total"] = Math.Round(lWorkLeft, 1);
+                layoutData["missing"] = MissingRows(map, layoutMissing);
+                layoutData["items"] = layoutRows;
+                layoutData["listed"] = layoutRows.Count;
+                layoutData["cap"] = cap;
+                layoutData["more"] = Math.Max(0, progress.Total - layoutRows.Count);
+                layoutData["scanned"] = lScanned;
+                layoutData["scan_cap"] = scanCap;
+                layoutData["scan_more"] = lScanMore;
+                if (lOffMap > 0) layoutData["off_map"] = lOffMap;
+                return layoutData;
+            }
 
             // ---------------------------------------------- one thing id ------
             if (a.Has("id"))
@@ -183,7 +387,7 @@ namespace AutoRimmer
                 var item = Item(map, t, workerIndex);
                 if (t is Frame) frames++; else blueprints++;
                 string state = item["state"] as string ?? StateReady;
-                byState[state] = byState.TryGetValue(state, out var n) ? n + 1 : 1;
+                Bump(byState, state);
                 if (item.TryGetValue("work_left", out var wl) && wl is double d)
                     workLeftTotal += (float)d;
                 if (item["missing"] is List<object> miss)
@@ -199,23 +403,8 @@ namespace AutoRimmer
                 if (rows.Count < cap) rows.Add(item);
             }
 
-            var missingOut = new List<object>();
-            foreach (var kv in missingTotal)
-                missingOut.Add(new Dictionary<string, object>
-                {
-                    ["def"] = kv.Key.defName,
-                    ["count"] = kv.Value,
-                    // The number the agent actually needs to act on: what is in
-                    // STOCKPILES. map.resourceCounter walks SlotGroup haul
-                    // destinations, so goods lying on unzoned ground read as
-                    // ZERO — DigestVerb's header states the same caveat and it
-                    // matters more here, because "we have no steel" and "the
-                    // steel is not in a stockpile" are different problems.
-                    ["in_stockpiles"] = Stored(map, kv.Key),
-                });
-
-            var byStateOut = new Dictionary<string, object>();
-            foreach (var kv in byState) byStateOut[kv.Key] = kv.Value;
+            var missingOut = MissingRows(map, missingTotal);
+            var byStateOut = Counts(byState);
 
             return new Dictionary<string, object>
             {
@@ -294,6 +483,56 @@ namespace AutoRimmer
         }
 
         // ------------------------------------------------------------ items --
+
+        private static void Bump(Dictionary<string, int> counts, string key)
+            => counts[key] = counts.TryGetValue(key, out var n) ? n + 1 : 1;
+
+        private static Dictionary<string, object> Counts(Dictionary<string, int> counts)
+        {
+            var d = new Dictionary<string, object>();
+            foreach (var kv in counts) d[kv.Key] = kv.Value;
+            return d;
+        }
+
+        // The def -> shortfall rollup, shared by the rect scope and the layout
+        // scope so the two cannot answer differently about the same material.
+        private static List<object> MissingRows(Map map, Dictionary<ThingDef, int> missing)
+        {
+            var rows = new List<object>();
+            foreach (var kv in missing)
+                rows.Add(new Dictionary<string, object>
+                {
+                    ["def"] = kv.Key.defName,
+                    ["count"] = kv.Value,
+                    // The number the agent actually needs to act on: what is in
+                    // STOCKPILES. map.resourceCounter walks SlotGroup haul
+                    // destinations, so goods lying on unzoned ground read as
+                    // ZERO — DigestVerb's header states the same caveat and it
+                    // matters more here, because "we have no steel" and "the
+                    // steel is not in a stockpile" are different problems.
+                    ["in_stockpiles"] = Stored(map, kv.Key),
+                });
+            return rows;
+        }
+
+        // The refusal for an id this session does not know, in
+        // `cancel-layout`'s own words plus the enumeration — because "no layout
+        // 'ly-7'" with no list is a dead end, and the ids are three lines away.
+        private static string UnknownLayout(string wanted)
+        {
+            var known = Layouts.All();
+            var names = new List<string>();
+            for (int i = known.Count - 1; i >= 0 && names.Count < 20; i--) names.Add(known[i].Id);
+            names.Reverse();
+            return $"no layout '{wanted}' in this session. Layout and placement ids are "
+                + "session-scoped and are cleared at a game boundary (a load, a new game, a "
+                + "return to the main menu); the journal's `action` row is the durable record. "
+                + (names.Count == 0
+                    ? "This session has placed no layouts."
+                    : "This session knows: " + string.Join(", ", names.ToArray())
+                      + (known.Count > names.Count
+                         ? " (and " + (known.Count - names.Count) + " older)" : ""));
+        }
 
         // Blueprints and frames, in one enumeration, from the map's own request
         // groups — `Verse/ThingRequestGroup` has both `Blueprint` and

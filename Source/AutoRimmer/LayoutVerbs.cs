@@ -1583,6 +1583,49 @@ namespace AutoRimmer
             lock (gate) return new List<LayoutRecord>(order);
         }
 
+        // ---------------------------------------------------- the progress --
+
+        // HOW FAR ALONG IS THIS TRANSACTION — the one question `place-layout`
+        // created and nothing could answer (git-bug 36999fd), and the predicate
+        // `advance {until:{layout:"ly-N"}}` halts on (git-bug fc287ba).
+        //
+        // Cheap ON PURPOSE. Every element costs one `thingGrid.ThingsListAtFast`
+        // and no allocation past this object, because the halting predicate
+        // calls it once per cadence window for the whole of an advance. The
+        // expensive per-element read — `Frame.WorkToBuild`, the cost list, the
+        // blocking thing — belongs to `construction`, which is capped and says
+        // what it capped.
+        //
+        // `Missing` is a placement id this record still names that the
+        // placement table no longer holds. It happens only past `Placements`'
+        // 2000-entry cap or after a rollback's `Forget`, and it counts as
+        // RESOLVED for `Done` — deliberately. The alternative is an advance
+        // that can never halt on a layout whose evidence has been evicted, and
+        // "halted with `unknown: 3` in the report" is a better answer than a
+        // timeout that says nothing at all.
+        public static LayoutProgress Progress(LayoutRecord r)
+        {
+            var lp = new LayoutProgress { Record = r };
+            if (r == null) return lp;
+            for (int i = 0; i < r.PlacementIds.Count; i++)
+            {
+                lp.Total++;
+                var p = Placements.Get(r.PlacementIds[i]);
+                if (p == null) { lp.Missing++; continue; }
+                switch (Placements.StateOf(p))
+                {
+                    case Placements.StateBuilt: lp.Built++; break;
+                    case Placements.StateCancelled: lp.Cancelled++; break;
+                    default:
+                        lp.Live++;
+                        lp.LivePlacements.Add(p);
+                        break;
+                }
+            }
+            return lp;
+        }
+
+
         public static void Clear()
         {
             lock (gate)
@@ -1590,6 +1633,49 @@ namespace AutoRimmer
                 order.Clear();
                 byId.Clear();
             }
+        }
+    }
+
+    // The rollup `construction {layout_id}` publishes and `advance
+    // {until:{layout}}` halts on. One type, so the read and the halt can never
+    // disagree about whether a room is finished.
+    public sealed class LayoutProgress
+    {
+        public LayoutRecord Record;
+        public int Total;
+        public int Built;
+        public int Cancelled;
+        public int Live;      // blueprint or frame — the unresolved ones
+        public int Missing;   // named by the record, gone from the placement table
+        public readonly List<Placement> LivePlacements = new List<Placement>();
+
+        public int Resolved => Built + Cancelled;
+        // Missing counts as resolved — see Layouts.Progress for why.
+        public bool Done => Live == 0;
+
+        public Dictionary<string, object> Out()
+        {
+            var d = new Dictionary<string, object>
+            {
+                ["layout_id"] = Record?.Id,
+                ["elements"] = Total,
+                ["built"] = Built,
+                ["cancelled"] = Cancelled,
+                ["resolved"] = Resolved,
+                ["unresolved"] = Live,
+                ["done"] = Done,
+            };
+            // Presence is the signal (Dev.NoteFog's rule): a zero here would
+            // read exactly like a key that was never published.
+            if (Missing > 0)
+            {
+                d["unknown"] = Missing;
+                d["unknown_note"] = "this layout names placement ids the session's placement "
+                    + "table no longer holds (evicted past its 2000-entry cap, or rolled back). "
+                    + "They count as resolved, because an advance that waits on evidence that "
+                    + "has been discarded can never return.";
+            }
+            return d;
         }
     }
 

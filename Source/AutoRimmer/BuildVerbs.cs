@@ -583,18 +583,35 @@ namespace AutoRimmer
 
         // ------------------------------------------------------ the answer --
 
-        // `blueprint` | `frame` | `built` | `cancelled`, BY FIELD.
+        // `blueprint` | `frame` | `built` | `cancelled`, WITHOUT the dictionary.
         //
-        // The live look comes first and the recorded completion second, because
-        // a `FailConstruction` puts the blueprint BACK: a placement whose frame
-        // failed is genuinely "blueprint" again, and its failure count is a
-        // separate field rather than a state. `cancelled` is the residual — no
-        // blueprint, no frame, no completion — and it is reached only after the
-        // two positive answers have both said no.
-        public static Dictionary<string, object> Answer(Placement p)
+        // Split out of `Answer` for the halting predicate (git-bug fc287ba):
+        // `until:{layout:"ly-N"}` asks every element of a layout for its state
+        // once per cadence window, and `Answer` allocates a fourteen-key
+        // dictionary and two strings per call. This is the same three-way live
+        // look with nothing built on top of it, and `Answer` now calls it, so
+        // the two cannot drift into disagreeing about what a placement id
+        // points at.
+        //
+        // IT IS ALSO THE MONOTONE ONE. `blueprint` and `frame` interchange
+        // freely — `Frame.FailConstruction` destroys the frame and spawns the
+        // blueprint again — but neither ever comes back from `built` or
+        // `cancelled`, because completion sets `CompletedTick` and nothing
+        // clears it, and a cell with no blueprint, no frame and no completion
+        // has nothing left to produce one. That is what makes "every element
+        // resolved" a predicate an advance can halt on without an edge
+        // detector; `construction.frames == 0` is not (session 18: it was true
+        // three separate times on the run that met M2).
+        public static string StateOf(Placement p) => StateOf(p, out _, out _, out _);
+
+        public static string StateOf(Placement p, out Thing blueprint, out Thing frame,
+            out Thing built)
         {
+            blueprint = null;
+            frame = null;
+            built = null;
+            if (p == null) return StateCancelled;
             var map = MapOf(p);
-            Thing blueprint = null, frame = null, built = null;
             if (map != null)
             {
                 var list = map.thingGrid.ThingsListAtFast(p.Pos);
@@ -610,11 +627,23 @@ namespace AutoRimmer
                     else if (t.def == p.Def) built = t;
                 }
             }
-            string state;
-            if (blueprint != null) state = StateBlueprint;
-            else if (frame != null) state = StateFrame;
-            else if (p.CompletedTick > 0 || built != null) state = StateBuilt;
-            else state = StateCancelled;
+            if (blueprint != null) return StateBlueprint;
+            if (frame != null) return StateFrame;
+            if (p.CompletedTick > 0 || built != null) return StateBuilt;
+            return StateCancelled;
+        }
+
+        // `blueprint` | `frame` | `built` | `cancelled`, BY FIELD.
+        //
+        // The live look comes first and the recorded completion second, because
+        // a `FailConstruction` puts the blueprint BACK: a placement whose frame
+        // failed is genuinely "blueprint" again, and its failure count is a
+        // separate field rather than a state. `cancelled` is the residual — no
+        // blueprint, no frame, no completion — and it is reached only after the
+        // two positive answers have both said no.
+        public static Dictionary<string, object> Answer(Placement p)
+        {
+            string state = StateOf(p, out var blueprint, out var frame, out var built);
 
             var d = new Dictionary<string, object>
             {

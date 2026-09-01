@@ -431,6 +431,21 @@ element), which points `Designator_Cancel` at that transaction's own blueprints
 and frames — never at their cells, which would also remove every cancelable
 designation there.
 
+Progress is `rwa construction --layout_id ly-N`, which answers for THAT
+transaction's placements and no others:
+
+```
+rwa construction --layout_id ly-1 --json | jq '{done, built, cancelled, unresolved, by_state}'
+```
+
+`rect_source` reads `layout`, so an envelope says which question it answered.
+`done`/`built`/`cancelled`/`unresolved` are uncapped (only the per-element
+detail is capped, as everywhere in this verb), which is why
+`advance --until.layout ly-1` can halt on them. A `--layout_id` this session
+does not know is a refusal naming the ids it does; `--layout_id` together with
+`--rect`, `--around`, `--id` or `--placement_id` is a refusal too, because two
+scopes are two questions.
+
 ## Environment
 
 | var | what | default |
