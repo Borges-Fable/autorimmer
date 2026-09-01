@@ -630,5 +630,695 @@ namespace AutoRimmer
                     + ". Fix with `assign {pawns:[" + p.thingIDNumber + "],hostility:\"Attack\"}`.",
             });
         }
+
+        // ================================================ spec: posture =======
+        // POSTURE IS A STANDING STATE, NOT THREE VERBS REMEMBERED IN THE RIGHT
+        // ORDER (git-bug b1b3060). One call sets the three settings that must
+        // agree — the allowed area, seek, and the hostility response — and
+        // reports PER PAWN what it did and what it refused, because "partially
+        // succeeded in silence" is the failure this verb exists to remove.
+        //
+        // ------------- WHAT THE INVESTIGATION CHANGED, BEFORE THE CODE -------
+        // The issue (and `[[seek-off-is-a-decision-to-flee]]`) said the
+        // `hostility_response` echo is truthful but MISLEADING, on the ground
+        // that SeekAndKill's node sits above `ThinkNode_ConditionalColonist` and
+        // so makes the vanilla flee node unreachable. Checked against both
+        // sources rather than assumed, and **the premise is wrong in the way
+        // that matters**:
+        //
+        //   * `JobGiver_ConfigurableHostilityResponse` — the ONLY consumer of
+        //     `playerSettings.hostilityResponse` that can produce
+        //     `JobDefOf.FleeAndCower` — is NOT in the `Humanlike` tree at all.
+        //     It is in **`HumanlikeConstant`**, under
+        //     `ThinkNode_ConditionalCanDoConstantThinkTreeJobNow`
+        //     (Core/Defs/ThinkTreeDefs/Humanlike.xml).
+        //   * `SeekAndKill/ThinkTreeInjector.Inject` skips any tree whose ROOT
+        //     has none of its four anchors. `HumanlikeConstant`'s root holds
+        //     exactly `ThinkNode_Subtree(Despawned)`,
+        //     `ThinkNode_ConditionalCanDoConstantThinkTreeJobNow` and
+        //     `ThinkNode_ConditionalCanDoLordJobNow` — no
+        //     `ThinkNode_ConditionalColonist`, no `ThinkNode_QueuedJob`, no
+        //     LordDuty subtree, no `ThinkNode_ConditionalRevenantState`. **Seek
+        //     is never injected into the constant tree.**
+        //   * `Verse.AI/Pawn_JobTracker.DetermineNextJob` runs
+        //     `DetermineNextConstantThinkTreeJob()` FIRST and returns its result
+        //     without ever touching `MainThinkNodeRoot`; and
+        //     `JobTrackerTickInterval` re-runs the constant tree every 30 ticks
+        //     (`AITuning.ConstantThinkTreeJobCheckIntervalTicks`) and starts its
+        //     job with `JobCondition.InterruptForced` over whatever is running.
+        //
+        // So `hostility_response` does not describe an unreachable node. It
+        // describes a node that runs STRICTLY ABOVE seek, in a tree the mod does
+        // not touch, and that can INTERRUPT a seek job twice a second. A second
+        // consumer says the same thing one level down: `JobGiver_
+        // ReactToCloseMeleeThreat` sits at index 6 of the `Humanlike` root —
+        // above the index-11 insertion point — and returns null unless
+        // `hostilityResponse == Attack`.
+        //
+        // The M1 evidence the issue cites is the confirmation, not the
+        // counter-example: op 109 had seek ON, hostility `Flee`, and Captain in
+        // `JobDriver_FleeAndCower`. If the flee node were unreachable he could
+        // not have been in that driver. **`Flee` beat seek, exactly as the
+        // decision order says it must.**
+        //
+        // Consequences this file is built on:
+        //   * `hostility:"Attack"` is not a BACKSTOP. It is the load-bearing
+        //     setting, and seek is what happens after it declines.
+        //   * seek ON + hostility `Flee` is the WORST combination available: the
+        //     pawn runs from anything within 8 cells with line of sight
+        //     (`FleeUtility.ShouldFleeFrom`, checkDistance:true) and marches at
+        //     anything further away. That is M1 day 1 and M1 day 4 in one state.
+        //   * `on_contact` is therefore COMPUTABLE and is published. See
+        //     `OnContact` below for the ordered resolution and its citations.
+        //
+        // ---------------------------- THE ARGUMENT SHAPE ---------------------
+        //   posture {area, pawns?, seek?, hostility?, dry_run?, allow_empty_area?}
+        //
+        //   area       REQUIRED in write mode — an area id, an area label, or
+        //              null/"none"/"unrestricted" to DECLARE unrestricted.
+        //   pawns      default the whole colonist roster ("colonists").
+        //   seek       true (default) | false | "auto" — "auto" is
+        //              `seek-at-will`'s shipped skill rule, which is the thing
+        //              that would have kept three unarmed colonists home on M1
+        //              day 1.
+        //   hostility  "Attack" (default) | "Flee" | "Ignore".
+        //   dry_run    decide and report, write nothing.
+        //
+        // **No lever present at all is a pure READ** — same contract as
+        // `seek-at-will`, so "what is our posture" costs nothing and changes
+        // nothing. Presence of ANY lever switches to write mode, and then `area`
+        // is required, because a posture with two of three settings is the bug.
+        //
+        // -------------- WHY AN ABSENT AREA IS REFUSED, NOT CREATED -----------
+        // Three reasons, and the first is decisive:
+        //   1. A fresh `Area_Allowed` is EMPTY, and
+        //      `RimWorld/ForbidUtility.InAllowedArea` short-circuits on
+        //      `TrueCount > 0` — so an auto-created area binds NOTHING while
+        //      this verb would report every pawn bound. That is precisely the
+        //      false report the issue exists to remove, manufactured by the fix.
+        //   2. `new Area_Allowed(...)` rolls `Rand.Value` twice for its colour
+        //      (AreaVerbs' header, determinism class R). A defaulted argument
+        //      must not advance the shared RNG.
+        //   3. `area allowed create` and `area allowed add {rect}` already ship.
+        // The same short-circuit is why a NAMED area with zero cells is refused
+        // at argument time unless `allow_empty_area:true`: binding to it is a
+        // no-op that looks like a posture.
+        //
+        // ------------------------- GATES, ONE PER LEVER ----------------------
+        //   area       RimWorld/PawnColumnWorker_AllowedArea.cs DoCell, then
+        //              Verse/Area.AssignableAsAllowed — reproduced by `AreaGate`,
+        //              which `assign` already owns and this verb CALLS rather
+        //              than copies.
+        //   hostility  RimWorld/PawnColumnWorker_HostilityResponse.cs DoCell
+        //              (`pawn.RaceProps.Humanlike`), plus
+        //              HostilityResponseModeUtility.DrawResponseButton_GenerateMenu,
+        //              whose menu OMITS `Attack` when
+        //              `WorkTagIsDisabled(WorkTags.Violent)`.
+        //   seek       SeekAndKill/Patch_PawnGetGizmos.ShowsSeekGizmo, CALLED
+        //              (the mod's own method is the authority — see this file's
+        //              header) with `SeekGateReason` for which clause refused.
+        // =====================================================================
+        private const string PostureV = "posture";
+
+        // The three verdict populations, named once so the digest and the verb
+        // cannot drift. Each is a fact about the pawn, not about the call.
+        private sealed class PostureFacts
+        {
+            public Pawn P;
+            public bool Downed, Drafted, Mental, ViolenceCapable, Humanlike;
+            public bool RespectsArea, SupportsAreas, ConfigurableHostility;
+            public Area Area;            // EffectiveAreaRestrictionInPawnCurrentMap
+            public int AreaCells;        // its TrueCount; 0 means the game ignores it
+            public string Hostility;     // the raw enum name, or null
+            public bool SeekToggled, WillSeek, SeekEligible;
+        }
+
+        // Read-only throughout. Every member here is a field read, a dictionary
+        // lookup or a bitmask combine: `Pawn.CombinedDisabledWorkTags` and
+        // `Pawn_StoryTracker.DisabledWorkTagsBackstoryTraitsAndGenes` both
+        // RECOMPUTE and write no cache, unlike `GetDisabledWorkTypes` — which is
+        // why the violence test here is the TAG one and not the work-type one.
+        private static PostureFacts ReadPosture(Pawn p)
+        {
+            var f = new PostureFacts { P = p };
+            try { f.Downed = p.Downed; } catch { }
+            try { f.Drafted = p.Drafted; } catch { }
+            try { f.Mental = p.InMentalState; } catch { }
+            try { f.Humanlike = p.RaceProps != null && p.RaceProps.Humanlike; } catch { }
+            try { f.ViolenceCapable = !p.WorkTagIsDisabled(WorkTags.Violent); } catch { }
+            var ps = p.playerSettings;
+            if (ps != null)
+            {
+                try { f.SupportsAreas = ps.SupportsAllowedAreas; } catch { }
+                try { f.RespectsArea = ps.RespectsAllowedArea; } catch { }
+                try { f.ConfigurableHostility = ps.UsesConfigurableHostilityResponse; } catch { }
+                try { f.Hostility = ps.hostilityResponse.ToString(); } catch { }
+                // EFFECTIVE, not the raw field: `RespectsAllowedArea` is false
+                // for a pawn in a Lord or with a HostFaction, and the game's own
+                // `ForbidUtility.InAllowedArea` reads the effective one.
+                //
+                // PawnSafe CLASS D, guarded explicitly rather than caught:
+                // `EffectiveAreaRestrictionInPawnCurrentMap` does
+                // `allowedAreas.TryGetValue(pawn.MapHeld, ...)` with NO null
+                // check, and Dictionary.TryGetValue(null) throws
+                // ArgumentNullException (its sibling
+                // AreaRestrictionInPawnCurrentMap has the guard). Every caller
+                // here passes spawned pawns, so MapHeld is non-null in practice
+                // — but a swallowed throw would report "no area" for a pawn that
+                // has one, which is a fabricated answer and not a degraded read.
+                try { if (p.MapHeld != null) f.Area = ps.EffectiveAreaRestrictionInPawnCurrentMap; }
+                catch { }
+                try { f.AreaCells = f.Area != null ? f.Area.TrueCount : 0; } catch { }
+            }
+            if (SeekMod.Present)
+            {
+                f.SeekToggled = SeekMod.IsToggled(p);
+                f.WillSeek = SeekMod.WillSeek(p);
+                f.SeekEligible = SeekMod.ShowsGizmo(p);
+            }
+            return f;
+        }
+
+        // The game's own test for "this restriction does anything":
+        // ForbidUtility.InAllowedArea ignores an area whose TrueCount is 0.
+        private static bool AreaBinds(PostureFacts f) => f.Area != null && f.AreaCells > 0;
+
+        // ------------------------------------------------------------------
+        // WHAT THE PAWN WILL ACTUALLY DO ON CONTACT.
+        //
+        // The issue asked whether this can be published honestly. It can,
+        // because the order is deterministic and every input is already
+        // published. The resolution below is the decision order, first match
+        // wins, with the member that decides named in `why`:
+        //
+        //   1 downed            Humanlike root index 2 is
+        //                       `ThinkNode_Subtree(Downed)`, above the index-11
+        //                       insertion point, and ThinkTreeInjector skips the
+        //                       Downed tree outright.
+        //   2 mental-break      `SeekRegistry.ShouldSeek` requires
+        //                       `!InMentalState`; so does
+        //                       `ThinkNode_ConditionalCanDoConstantThinkTreeJobNow`.
+        //   3 player-controlled Both of those also require `!Drafted`.
+        //   4 flee              `JobGiver_ConfigurableHostilityResponse` in the
+        //                       CONSTANT tree, which runs before the main tree
+        //                       and interrupts it every 30 ticks. Triggers at
+        //                       <= 8 cells with LOS.
+        //   5 attack-then-seek  hostility Attack and `ShouldSeek` passes: the
+        //                       constant node engages inside its radius, seek
+        //                       takes everything beyond it.
+        //   6 attack-nearby     hostility Attack, seek off or absent. Radius is
+        //                       8 for melee, else
+        //                       `Clamp(EffectiveRange * 0.66, 2, 20)`.
+        //   7 seek-only         the constant node returns null (Ignore, or
+        //                       `!UsesConfigurableHostilityResponse`) and
+        //                       `ShouldSeek` passes.
+        //   8 ignore            nothing above fires.
+        //
+        // WHAT IT DOES NOT MODEL, said rather than implied: this is the STANDING
+        // posture — the answer for an awake, idle pawn. A sleeping pawn is
+        // handled at `ThinkNode_ConditionalLyingDown` (root index 0) and
+        // `ThinkNode_ConditionalCanDoConstantThinkTreeJobNow` requires
+        // `pawn.Awake()`, so contact wakes it first and the verdict then applies;
+        // `PawnUtility.PlayerForcedJobNowOrSoon` also nulls the constant node
+        // while a forced job runs. Neither is a standing state and neither is
+        // published as one, because a field that flickers with the day/night
+        // cycle is not a posture.
+        // THE VOCABULARY IS CLOSED AND EVERY VERDICT IS ALWAYS PUBLISHED, ZERO
+        // INCLUDED. A count that appears only when non-zero would make
+        // `posture.on_contact.flee` a path that resolves today and refuses
+        // tomorrow — and session 19 ruled that an unresolvable path is a REFUSAL
+        // at arm time, so a predicate armed on a colony that had a fleer would
+        // stop arming the moment it did not. Eight small integers is the price
+        // of a predicate that keeps working.
+        internal static readonly string[] ContactVerdicts =
+            { "downed", "mental-break", "player-controlled", "flee",
+              "attack-then-seek", "attack-nearby", "seek-only", "ignore" };
+
+        private static string OnContact(PostureFacts f, out string why)
+        {
+            if (f.Downed)
+            {
+                why = "downed — the Downed subtree is at Humanlike root index 2, above the "
+                    + "index-11 seek insertion, and SeekAndKill/ThinkTreeInjector skips that tree";
+                return "downed";
+            }
+            if (f.Mental)
+            {
+                why = "in a mental state — SeekRegistry.ShouldSeek requires !InMentalState and so "
+                    + "does ThinkNode_ConditionalCanDoConstantThinkTreeJobNow";
+                return "mental-break";
+            }
+            if (f.Drafted)
+            {
+                why = "DRAFTED — you are driving this pawn. ShouldSeek requires !Drafted and the "
+                    + "constant think tree's own gate requires !Drafted, so neither seek nor the "
+                    + "hostility response decides anything while the draft holds";
+                return "player-controlled";
+            }
+            bool attack = f.ConfigurableHostility
+                && string.Equals(f.Hostility, "Attack", StringComparison.OrdinalIgnoreCase);
+            bool flee = f.ConfigurableHostility
+                && string.Equals(f.Hostility, "Flee", StringComparison.OrdinalIgnoreCase);
+
+            if (flee)
+            {
+                why = "hostility_response is Flee, and that is decided ABOVE seek: "
+                    + "JobGiver_ConfigurableHostilityResponse lives in the HumanlikeConstant tree, "
+                    + "which Pawn_JobTracker.DetermineNextJob runs BEFORE the main tree and "
+                    + "JobTrackerTickInterval re-runs every 30 ticks with JobCondition."
+                    + "InterruptForced. It fires at <= 8 cells with line of sight "
+                    + "(FleeUtility.ShouldFleeFrom, checkDistance:true)"
+                    + (f.WillSeek
+                        ? ". SEEK IS ON AND LOSES: this pawn runs from anything close and marches "
+                          + "at anything far. That is the M1 state that killed two colonists."
+                        : ".");
+                return "flee";
+            }
+            if (attack && !f.ViolenceCapable)
+            {
+                // Reachable only via a mod or a hand-edited save: the dropdown
+                // omits Attack for such a pawn and `assign` refuses it.
+                why = "hostility_response is Attack but this pawn is incapable of Violent work, and "
+                    + "JobGiver_ConfigurableHostilityResponse.TryGetAttackNearbyEnemyJob opens with "
+                    + "WorkTagIsDisabled(WorkTags.Violent) and returns null — so the setting does "
+                    + "nothing at all";
+                return "ignore";
+            }
+            if (attack && f.WillSeek)
+            {
+                why = "hostility_response is Attack (the constant tree engages a target within 8 "
+                    + "cells for melee, else Clamp(EffectiveRange * 0.66, 2, 20)) AND "
+                    + "SeekRegistry.ShouldSeek passes, so the squad brain takes everything the "
+                    + "close-range node declines. This is the posture the checklist asks for";
+                return "attack-then-seek";
+            }
+            if (attack)
+            {
+                why = "hostility_response is Attack, seek is " + (SeekMod.Present ? "off" : "absent")
+                    + " — the pawn fights what comes to it (within 8 cells for melee, else "
+                    + "Clamp(EffectiveRange * 0.66, 2, 20)) and goes nowhere to find it";
+                return "attack-nearby";
+            }
+            if (f.WillSeek)
+            {
+                why = (f.ConfigurableHostility
+                        ? "hostility_response is Ignore, so JobGiver_ConfigurableHostilityResponse "
+                          + "returns null and control reaches seek"
+                        : "this pawn does not use the configurable hostility response "
+                          + "(Pawn_PlayerSettings.UsesConfigurableHostilityResponse is false — a "
+                          + "guest, or a pawn with a HostFaction), so seek is the only thing deciding")
+                    + ". SeekRegistry.ShouldSeek passes: the squad brain drives it";
+                return "seek-only";
+            }
+            why = "nothing will make this pawn fight: "
+                + (f.ViolenceCapable ? "" : "it is incapable of Violent work; ")
+                + "hostility_response is " + (f.Hostility ?? "null")
+                + (SeekMod.Present
+                    ? (f.SeekToggled ? " and seek is toggled but ShouldSeek does not pass" : " and seek is off")
+                    : " and SeekAndKill is not loaded");
+            return "ignore";
+        }
+
+        // ------------------------------------------------------------------
+        // posture {area, pawns?, seek?, hostility?, dry_run?, allow_empty_area?}
+        // ------------------------------------------------------------------
+        [Verb("posture")]
+        public static object Posture(VerbContext ctx)
+        {
+            var map = Map();
+            var a = ctx.Args;
+            bool dryRun = a.Bool("dry_run", false);
+
+            bool wantArea = a.Has("area");
+            bool wantSeek = a.Has("seek");
+            bool wantHostility = a.Has("hostility");
+            bool readOnly = !wantArea && !wantSeek && !wantHostility;
+
+            // `pawns` defaults to the whole roster: the posture is a property of
+            // the COLONY, and a per-pawn default would make "did I do all of
+            // them" the caller's problem again.
+            var pawns = a.Has("pawns") || a.Has("pawn")
+                ? PawnList(map, a)
+                : PawnList(map, new VerbArgs(new Dictionary<string, object> { ["pawns"] = "colonists" }));
+
+            Area area = null;
+            bool areaUnrestricted = false;
+            if (!readOnly)
+            {
+                if (!wantArea)
+                    throw new VerbArgsException(
+                        "posture is THREE settings that must agree, and a posture with two of them is "
+                        + "the bug this verb exists to remove — pass `area` (an area id or label), or "
+                        + "`area:null` to DECLARE unrestricted deliberately. Call `posture` with no "
+                        + "arguments at all for a pure read.");
+                area = FindArea(map, a.Raw("area"));
+                areaUnrestricted = area == null;
+                if (area != null)
+                {
+                    int cells = 0;
+                    try { cells = area.TrueCount; } catch { }
+                    if (cells == 0 && !a.Bool("allow_empty_area", false))
+                        throw new VerbArgsException(
+                            $"area '{Safe(() => area.Label) ?? "?"}' has ZERO cells, and "
+                            + "RimWorld/ForbidUtility.InAllowedArea short-circuits on `TrueCount > 0` "
+                            + "— binding pawns to it restricts nothing while this verb would report "
+                            + "them bound. Paint it first (`area {kind:\"allowed\", op:\"add\", id:"
+                            + area.ID + ", rect:[…]}`), or pass allow_empty_area:true to bind anyway.");
+                }
+            }
+
+            // seek is tri-state, read raw like `seek-at-will`'s `on`.
+            bool autoSeek = false, seekValue = true;
+            if (wantSeek)
+            {
+                object raw = a.Raw("seek");
+                if (raw is bool b) seekValue = b;
+                else if (raw is string s && s.Equals("auto", StringComparison.OrdinalIgnoreCase)) autoSeek = true;
+                else throw new VerbArgsException("seek must be true, false, or \"auto\"");
+            }
+            var hostility = wantHostility ? Hostility(a.Str("hostility")) : HostilityResponseMode.Attack;
+
+            var outcome = new Outcome();
+            var ids = new List<object>();
+            var incapable = new List<object>();
+            var levers = new List<object>();
+            if (!readOnly) { levers.Add("area"); levers.Add("seek"); levers.Add("hostility"); }
+
+            foreach (var p in pawns)
+            {
+                var before = ReadPosture(p);
+                var line = new Dictionary<string, object>
+                {
+                    ["class"] = PawnSafe.Classify(p),
+                    ["violence_capable"] = before.ViolenceCapable,
+                    ["before"] = PostureRow(before),
+                };
+                // NAMED, NOT SKIPPED. A pawn who cannot take the posture is a
+                // real answer — this is b1b3060's second acceptance bullet, and
+                // the name goes in the headline as well as the row so a caller
+                // can branch without walking `accepted`.
+                if (!before.ViolenceCapable)
+                    incapable.Add(new Dictionary<string, object>
+                    {
+                        ["pawn"] = p.thingIDNumber,
+                        ["name"] = PawnSafe.Name(p),
+                        ["gate"] = "violent-disabled",
+                        ["reason"] = "incapable of Violent work: SeekAndKill/Patch_PawnGetGizmos"
+                            + ".ShowsSeekGizmo refuses it and HostilityResponseModeUtility's own "
+                            + "dropdown omits Attack for it (WorkTagIsDisabled(WorkTags.Violent)). "
+                            + "The area still binds; this pawn will never fight.",
+                    });
+
+                if (readOnly)
+                {
+                    string whyRead;
+                    line["on_contact"] = OnContact(before, out whyRead);
+                    line["on_contact_why"] = whyRead;
+                    outcome.Ok(p, line);
+                    continue;
+                }
+
+                var applied = new List<object>();
+                var refused = new List<object>();
+
+                // ---- area. `AreaGate` is `assign`'s, called not copied. ------
+                One(p, "area", applied, refused, () =>
+                {
+                    string why = AreaGate(p, area);
+                    if (why != null) return why;
+                    if (dryRun) return null;
+                    // Same setter `assign` uses, and it can END the pawn's
+                    // current job when a target falls outside the new area
+                    // (RimWorld/Pawn_PlayerSettings.AreaRestrictionInPawnCurrentMap).
+                    p.playerSettings.AreaRestrictionInPawnCurrentMap = area;
+                    return null;
+                });
+
+                // ---- hostility. The load-bearing setting, not the backstop. --
+                One(p, "hostility", applied, refused, () =>
+                {
+                    if (p.playerSettings == null) return "this pawn has no player settings";
+                    if (!before.Humanlike)
+                        return "the hostility-response column is drawn for humanlikes only "
+                            + "(RimWorld/PawnColumnWorker_HostilityResponse.DoCell)";
+                    if (hostility == HostilityResponseMode.Attack && !before.ViolenceCapable)
+                        return "the game does not offer Attack to a pawn incapable of violence "
+                            + "(HostilityResponseModeUtility.DrawResponseButton_GenerateMenu omits it)";
+                    if (!before.ConfigurableHostility)
+                        return "this pawn does not use the configurable hostility response "
+                            + "(Pawn_PlayerSettings.UsesConfigurableHostilityResponse) — the field "
+                            + "would be set and JobGiver_ConfigurableHostilityResponse would ignore it";
+                    if (dryRun) return null;
+                    p.playerSettings.hostilityResponse = hostility;
+                    return null;
+                });
+
+                // ---- seek. -----------------------------------------------
+                One(p, "seek", applied, refused, () =>
+                {
+                    if (!SeekMod.Present)
+                        return SeekMod.Missing ?? "SeekAndKill is not loaded";
+                    if (!before.SeekEligible)
+                    {
+                        string gate = SeekGateReason(p);
+                        line["seek_gate"] = gate;
+                        return SeekGateText(gate);
+                    }
+                    bool target = seekValue;
+                    if (autoSeek)
+                    {
+                        target = AutoOn(p, out string whyOn);
+                        line["seek_auto_reason"] = whyOn;
+                    }
+                    if (target == before.SeekToggled)
+                        return "already " + (target ? "seeking" : "not seeking");
+                    if (dryRun) return null;
+                    // Toggle is a FLIP through the synced path, and
+                    // SyncedToggleSeek re-checks the gizmo gate and returns
+                    // SILENTLY on failure — so the write is read back.
+                    string err = SeekMod.Toggle(p);
+                    if (err != null) return err;
+                    bool now = SeekMod.IsToggled(p);
+                    if (now != target)
+                        return "the write did not take: asked for toggled=" + target
+                            + " and SeekRegistry.IsToggled still answers " + now;
+                    return null;
+                });
+
+                var after = dryRun ? before : ReadPosture(p);
+                line["applied"] = applied;
+                line["refused"] = refused;
+                line["after"] = PostureRow(after);
+                // The dry-run projection is NOT read back, so say which it is
+                // rather than letting `after` read as an observation.
+                if (dryRun) line["after_is"] = "the BEFORE state — dry_run wrote nothing and read nothing back";
+                string whyContact;
+                line["on_contact"] = OnContact(after, out whyContact);
+                line["on_contact_why"] = whyContact;
+
+                if (applied.Count > 0)
+                {
+                    outcome.Ok(p, line);
+                    ids.Add(p.thingIDNumber);
+                }
+                else
+                {
+                    outcome.No(p, "all-refused", "no lever of the posture applied to this pawn", line);
+                }
+            }
+
+            long seq = (!dryRun && !readOnly)
+                ? ActOn(outcome, PostureV, "posture",
+                        (areaUnrestricted ? "unrestricted" : (Safe(() => area.Label) ?? "?"))
+                        + " x" + ids.Count,
+                        new Dictionary<string, object>
+                        {
+                            ["ids"] = ids,
+                            ["levers"] = levers,
+                            ["hostility"] = hostility.ToString(),
+                            ["seek"] = autoSeek ? (object)"auto" : seekValue,
+                        })
+                : 0;
+
+            var extra = new Dictionary<string, object>
+            {
+                ["mode"] = readOnly ? "read" : (dryRun ? "dry-run" : "write"),
+                ["levers"] = levers,
+                ["area"] = readOnly ? null
+                    : (areaUnrestricted ? null : (object)Safe(() => area.Label)),
+                ["area_id"] = readOnly || areaUnrestricted ? null : (object)area.ID,
+                ["area_cells"] = readOnly || areaUnrestricted ? null : (object)SafeObj(() => (object)area.TrueCount),
+                ["hostility"] = readOnly ? null : hostility.ToString(),
+                ["seek"] = readOnly ? null : (autoSeek ? (object)"auto" : seekValue),
+                ["dry_run"] = dryRun,
+                // The headline, so the second acceptance bullet is answerable
+                // without walking rows.
+                ["incapable_of_violence"] = incapable,
+                ["posture"] = PostureSection(map),
+                ["note"] = "hostility_response is NOT a backstop to seek — it is decided ABOVE it. "
+                    + "JobGiver_ConfigurableHostilityResponse is in the HumanlikeConstant tree, which "
+                    + "SeekAndKill/ThinkTreeInjector never injects into (its root has none of the four "
+                    + "anchor nodes), and Pawn_JobTracker runs the constant tree BEFORE the main tree "
+                    + "and re-runs it every 30 ticks with InterruptForced. `on_contact` is the "
+                    + "resolution of that order per pawn. Assigning an area can END a pawn's current "
+                    + "job when a target falls outside it.",
+            };
+            if (readOnly || dryRun) extra["action"] = NoStamp();
+            return outcome.Result(PostureV, seq, extra);
+        }
+
+        private static Dictionary<string, object> PostureRow(PostureFacts f)
+            => new Dictionary<string, object>
+            {
+                ["area"] = f.Area == null ? null : Safe(() => f.Area.Label),
+                ["area_cells"] = f.Area == null ? (object)null : f.AreaCells,
+                // The game's own test, not ours: an area with no cells is
+                // ignored by ForbidUtility.InAllowedArea.
+                ["area_binds"] = AreaBinds(f),
+                ["respects_area"] = f.RespectsArea,
+                ["hostility_response"] = f.Hostility,
+                ["configurable_hostility"] = f.ConfigurableHostility,
+                ["seek_toggled"] = SeekMod.Present ? (object)f.SeekToggled : null,
+                ["will_seek"] = SeekMod.Present ? (object)f.WillSeek : null,
+                ["seek_eligible"] = SeekMod.Present ? (object)f.SeekEligible : null,
+            };
+
+        // ------------------------------------------------------------------
+        // THE DIGEST BLOCK (b1b3060). The standing state at every read, instead
+        // of inferred from a field whose meaning the M1 run got backwards.
+        //
+        // CHEAP ON THE AXIS SESSION 19's PREDICATE-COST DECISION CARES ABOUT:
+        // no `Room.Role`, no `GetStatValueAbstract`, no pathfind. It is one
+        // snapshot of `FreeColonistsSpawned` and, per pawn, field reads, a
+        // dictionary lookup (`allowedAreas`), a `GetLord()` walk, a bitmask
+        // combine (`CombinedDisabledWorkTags`, which writes no cache) and — when
+        // SeekAndKill is present — three cached-MethodInfo invokes whose bodies
+        // are seven field reads and a HashSet lookup. So it IS registered as a
+        // predicate section, and `posture.ok == false` is the halt an agent
+        // wants: "stop when the colony stops holding its combat posture".
+        //
+        // THE DENOMINATORS ARE DIFFERENT ON PURPOSE and are published in words.
+        // `area_bound` is over pawns that support area restriction at all, since
+        // the area is not a combat setting; `will_seek` and `attack` are over
+        // VIOLENCE-CAPABLE pawns, because the game refuses both to the others
+        // and counting them would make a correct colony look under-postured
+        // forever.
+        //
+        // n/m IS PUBLISHED AS A STRING **AND** AS INTEGERS. The issue asks for
+        // "n/m", which is the glance; a predicate cannot use it, because
+        // `advance {until:{condition}}` refuses `<` on a string rather than
+        // coercing it (session 19). So `will_seek` is "2/3" and `will_seek_n` /
+        // `will_seek_of` are the numbers.
+        internal static Dictionary<string, object> PostureSection(Map map)
+        {
+            if (map == null) return null;
+            try
+            {
+                // SNAPSHOT before iterating — FreeColonistsSpawned CLEARS and
+                // rebuilds one cached List on every access (DigestVerb
+                // .ColonistSection's header).
+                var colonists = new List<Pawn>(map.mapPawns.FreeColonistsSpawned);
+                int areaOf = 0, areaN = 0, violent = 0, seekN = 0, attackN = 0;
+                var byContact = new Dictionary<string, int>();
+                for (int v = 0; v < ContactVerdicts.Length; v++) byContact[ContactVerdicts[v]] = 0;
+                var fleeRisk = new List<object>();
+                var areas = new Dictionary<string, int>();
+                bool seekPresent = SeekMod.Present;
+
+                for (int i = 0; i < colonists.Count; i++)
+                {
+                    var p = colonists[i];
+                    if (p == null) continue;
+                    var f = ReadPosture(p);
+
+                    if (f.SupportsAreas)
+                    {
+                        areaOf++;
+                        if (AreaBinds(f))
+                        {
+                            areaN++;
+                            string label = Safe(() => f.Area.Label) ?? "?";
+                            areas[label] = areas.TryGetValue(label, out var n) ? n + 1 : 1;
+                        }
+                    }
+                    if (f.ViolenceCapable)
+                    {
+                        violent++;
+                        if (f.WillSeek) seekN++;
+                        if (string.Equals(f.Hostility, "Attack", StringComparison.OrdinalIgnoreCase)
+                            && f.ConfigurableHostility) attackN++;
+                    }
+
+                    string why;
+                    string contact = OnContact(f, out why);
+                    byContact[contact] = byContact.TryGetValue(contact, out var c) ? c + 1 : 1;
+
+                    // THE M1 STATE, NAMED. A violence-capable pawn set to Flee
+                    // will run from anything within 8 cells whatever seek says,
+                    // because the constant tree decides first.
+                    if (f.ViolenceCapable && contact == "flee")
+                        fleeRisk.Add(new Dictionary<string, object>
+                        {
+                            ["name"] = PawnSafe.Name(p),
+                            ["pawn"] = p.thingIDNumber,
+                            ["will_seek"] = seekPresent ? (object)f.WillSeek : null,
+                        });
+                }
+
+                var areaList = new List<object>();
+                foreach (var kv in areas) areaList.Add(kv.Key + " x" + kv.Value);
+                areaList.Sort((x, y) => string.CompareOrdinal((string)x, (string)y));
+                // In the vocabulary's own order, not the dictionary's hash
+                // order — the 2.6 nit about `threats.kinds`, which took the
+                // first three in enumeration order and called them top-3.
+                var contactCounts = new Dictionary<string, object>();
+                for (int v = 0; v < ContactVerdicts.Length; v++)
+                    contactCounts[ContactVerdicts[v]] = byContact[ContactVerdicts[v]];
+
+                bool ok = violent > 0 && seekN == violent && attackN == violent
+                          && areaOf > 0 && areaN == areaOf && fleeRisk.Count == 0;
+
+                return new Dictionary<string, object>
+                {
+                    // The headline a predicate branches on.
+                    ["ok"] = ok,
+                    ["will_seek"] = seekN + "/" + violent,
+                    ["will_seek_n"] = seekN,
+                    ["will_seek_of"] = violent,
+                    ["area_bound"] = areaN + "/" + areaOf,
+                    ["area_bound_n"] = areaN,
+                    ["area_bound_of"] = areaOf,
+                    // The field that actually decides, published beside the two
+                    // the issue named — see this file's investigation header.
+                    ["attack"] = attackN + "/" + violent,
+                    ["attack_n"] = attackN,
+                    ["attack_of"] = violent,
+                    ["colonists"] = colonists.Count,
+                    ["areas"] = areaList,
+                    // WHAT THEY WILL DO, not what a field says.
+                    ["on_contact"] = contactCounts,
+                    ["flee_risk"] = fleeRisk,
+                    ["seek_mod"] = seekPresent,
+                    ["seek_mod_missing"] = seekPresent ? null : (SeekMod.Missing ?? "SeekAndKill is not loaded"),
+                    ["denominators"] = "`will_seek` and `attack` are over VIOLENCE-CAPABLE free "
+                        + "colonists (the game refuses both to the others); `area_bound` is over free "
+                        + "colonists whose Pawn_PlayerSettings.SupportsAllowedAreas is true, and a "
+                        + "pawn counts as bound only when its EFFECTIVE area has TrueCount > 0, "
+                        + "because RimWorld/ForbidUtility.InAllowedArea ignores an empty one.",
+                    ["note"] = "`on_contact` is the resolved decision order, not a field echo: "
+                        + "JobGiver_ConfigurableHostilityResponse is in the HumanlikeConstant tree, "
+                        + "which runs BEFORE the main tree and which SeekAndKill does not inject "
+                        + "into, so `Flee` BEATS seek. `flee_risk` names every violence-capable pawn "
+                        + "in that state. Repair with `posture {area:…}`.",
+                };
+            }
+            catch (Exception e)
+            {
+                return new Dictionary<string, object>
+                {
+                    ["error"] = e.GetType().Name + ": " + Journal.Truncate(e.Message, 160),
+                };
+            }
+        }
     }
 }

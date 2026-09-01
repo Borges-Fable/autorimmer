@@ -133,6 +133,18 @@ namespace AutoRimmer
                 // not in a verb the agent has to think to call. See
                 // WorkCoverage's header for where every floor comes from.
                 ["work_coverage"] = WorkCoverage.Section(map),
+                // WHAT THE COLONY WILL DO WHEN SOMETHING ARRIVES (git-bug
+                // b1b3060). The M1 run held its combat posture as three settings
+                // remembered in the right order, and lost it silently: seek was
+                // turned off to stop a march, which put every colonist back on
+                // the vanilla flee branch, and nothing in the surface said so.
+                // The three settings are one state, so they are published as one
+                // block — `will_seek` and `area_bound` as the issue asks, plus
+                // `attack` and `on_contact`, because the investigation in
+                // SeekVerbs' posture header found that `hostility_response` is
+                // decided ABOVE seek rather than beneath it. Cheap on session
+                // 19's axis: no Room.Role, no GetStatValueAbstract, no pathfind.
+                ["posture"] = PawnActs.PostureSection(map),
                 ["resources"] = ResourceSection(map),
                 ["power"] = PowerSection(map),
                 ["threats"] = ThreatSection(map),
@@ -164,7 +176,7 @@ namespace AutoRimmer
         // Nothing here is being sent to a model.
         internal static readonly string[] PredicateSections =
             { "time", "site", "alerts", "construction", "colonists", "work_coverage",
-              "resources", "power", "threats" };
+              "posture", "resources", "power", "threats" };
 
         internal static bool IsPredicateSection(string name)
         {
@@ -190,6 +202,15 @@ namespace AutoRimmer
                 // is therefore an affordable predicate, and it is the one an
                 // agent wants — "stop when the colony loses its second doctor".
                 case "work_coverage": return WorkCoverage.Section(map);
+                // Same axis, same verdict as work_coverage: a roster walk of
+                // field reads, one dictionary lookup and a GetLord() per pawn,
+                // plus three cached-MethodInfo invokes into SeekAndKill whose
+                // bodies are seven field reads and a HashSet lookup. No
+                // Room.Role, no GetStatValueAbstract, no pathfind — so
+                // `posture.ok == false` is an affordable halt, and it is the one
+                // the M1 post-mortem asks for: stop when the colony stops
+                // holding the posture it was set to.
+                case "posture": return PawnActs.PostureSection(map);
                 case "resources": return ResourceSection(map);
                 case "power": return PowerSection(map);
                 case "threats": return ThreatSection(map);
