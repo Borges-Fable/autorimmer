@@ -642,6 +642,18 @@ def phase3():
     eq("3.2f", "the ground is clear, per `construction`",
        {"n": blueprint_count(origin)}, "n", 0)
 
+    # THE PER-ROW OUTCOME IS WHAT THE DESIGNATOR SAID, not what the verb
+    # intended to ask it. `DesignateEngine.RunThings` can refuse a target it was
+    # handed (fogged, not on this map, or `Designator_Cancel.CanDesignateThing`
+    # false), and a row that still read `cancelling` while `rejected` counted it
+    # would be green while asserting nothing.
+    rows = [r for r in as_list(dig(e, "data.placements")) if isinstance(r, dict)]
+    outcomes = sorted({r.get("outcome") for r in rows})
+    check("3.2g", "every row says `cancelled`, decided after the designator ran",
+          outcomes == ["cancelled"], "every outcome 'cancelled'", outcomes)
+    check("3.2h", "and no row is left on the provisional value",
+          "pending" not in outcomes, "no outcome 'pending'", outcomes)
+
     # THE SECOND CALL. `cancelled` and `already gone` must be different answers,
     # because a finished build and a cancelled one are the same absence and the
     # placement id is the only thing that can tell them apart.

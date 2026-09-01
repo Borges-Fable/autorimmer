@@ -362,8 +362,22 @@ namespace AutoRimmer
             int clearedMore = 0, wipedMore = 0;
             bool rolledBack = false;
 
+            string threw = null;
             for (int i = 0; i < ordered.Count; i++)
             {
+              // THE WHOLE LOOP BODY IS GUARDED, and this is the difference
+              // between an invariant and an intention. `ThingMaker.MakeThing`,
+              // `GenSpawn.Spawn` and `GenConstruct.PlaceBlueprintForBuild` all
+              // run third-party code for a modded def — a `thingClass`
+              // constructor, a comp's `SpawnSetup` — and an escaping exception
+              // reaches `VerbRegistry.Execute` as an error envelope. At that
+              // moment `undo` is discarded WITHOUT `Rollback` running, the
+              // layout id never reaches the caller and no journal row is
+              // written: N things on the map that nothing can name or cancel,
+              // which is the exact half-built room this verb exists to prevent,
+              // arrived at through the one door the preflight cannot watch.
+              try
+              {
                 var e = ordered[i];
                 if (e.Verdict != null && !e.Verdict.Ok)
                 {
@@ -419,11 +433,33 @@ namespace AutoRimmer
                 e.PlacementId = p.Id;
                 record.PlacementIds.Add(p.Id);
                 placed.Add(PlacedRow(e, p));
+              }
+              catch (Exception ex)
+              {
+                // Not rethrown: an error envelope would take the map state with
+                // it. The transaction is closed the way every other failure
+                // closes it — roll back, publish, journal — and the exception
+                // is published as a first-class fact rather than as the whole
+                // answer.
+                threw = ex.GetType().Name + ": " + ex.Message;
+                rolledBack = true;
+                break;
+              }
             }
 
             var rollback = rolledBack ? Rollback(map, undo, cleared.Count, wiped.Count) : null;
             if (rolledBack)
             {
+                // THE IDS GO TOO. `Placements.Answer` reaches `built` on
+                // `CompletedTick > 0` before it can reach `cancelled`, and
+                // `Record`'s built-on-arrival branch sets that for every
+                // instant-mode placement — so a wall spawned and vanished
+                // inside this one call would report `state: "built"` for the
+                // rest of the session, and `cancel-layout` would answer
+                // "already-built — this build finished". Abandoning the layout
+                // record alone does not reach them.
+                for (int i = 0; i < record.PlacementIds.Count; i++)
+                    Placements.Forget(record.PlacementIds[i]);
                 Layouts.Abandon(record);
                 placed.Clear();
             }
@@ -455,6 +491,7 @@ namespace AutoRimmer
                 ["gate"] = SiteGate.GateId,
                 ["placements"] = JournalPlacements(ordered),
             };
+            if (threw != null) payload["threw"] = threw;
             if (cleared.Count > 0) { payload["cleared"] = cleared; payload["cleared_mode"] = "Deconstruct"; }
             if (wiped.Count > 0) { payload["wiped"] = wiped; payload["wiped_mode"] = "VanishOrMoveAside"; }
             long seq = Journal.Emit("action", payload, tick);
@@ -470,6 +507,16 @@ namespace AutoRimmer
             if (lateRefusals.Count > 0) data["late_refusals"] = Cap(lateRefusals, out int _);
             data["rolled_back"] = rolledBack;
             if (rollback != null) data["rollback"] = rollback;
+            if (threw != null)
+            {
+                data["threw"] = threw;
+                data["threw_note"] =
+                    "a placement call THREW — almost certainly third-party code for a modded def "
+                    + "(a thingClass constructor, a comp's SpawnSetup). The call was rolled back "
+                    + "rather than allowed to escape as an error envelope, because an error "
+                    + "envelope would have taken the map state with it. `rollback` says how "
+                    + "completely.";
+            }
             if (cleared.Count > 0)
             {
                 data["cleared"] = Cap(cleared, out int _);
@@ -592,7 +639,9 @@ namespace AutoRimmer
                 {
                     things.Add(live);
                     row["thing_id"] = live.thingIDNumber;
-                    row["outcome"] = dryRun ? "would-cancel" : "cancelling";
+                    // PROVISIONAL. Corrected below, after the designator has
+                    // actually spoken — see the loop past RunThings.
+                    row["outcome"] = "pending";
                 }
                 else
                 {
@@ -621,6 +670,39 @@ namespace AutoRimmer
             var rejects = new List<DesignateEngine.Reject>();
             DesignateEngine.RunThings(map, des, things, dryRun, accepted, rejects);
             if (!dryRun) DesignateEngine.FinalizeSucceeded(des, accepted.Count > 0);
+
+            // THE OUTCOME IS WHAT THE DESIGNATOR SAID, not what we intended to
+            // ask it. `RunThings` can refuse a target we handed it —
+            // `WorldSafe.Hidden` (fogged, or not on this map) or
+            // `Designator_Cancel.CanDesignateThing` returning false — and a row
+            // that still read `cancelling` while `rejected` counted it would be
+            // the same green-while-asserting-nothing shape the acceptance
+            // suites exist to prevent, one layer down. Every row with a live
+            // thing is now decided by whether that thing is in `accepted`.
+            var acceptedIds = new HashSet<int>();
+            for (int i = 0; i < accepted.Count; i++) acceptedIds.Add(accepted[i].thingIDNumber);
+            var rejectReason = new Dictionary<int, string>();
+            for (int i = 0; i < rejects.Count; i++)
+            {
+                var r = rejects[i];
+                if (r?.Thing == null) continue;
+                rejectReason[r.Thing.thingIDNumber] =
+                    r.Why + (string.IsNullOrEmpty(r.Reason) ? "" : " — " + r.Reason);
+            }
+            for (int i = 0; i < rows.Count; i++)
+            {
+                if (!(rows[i] is Dictionary<string, object> row)) continue;
+                if (!(row.TryGetValue("thing_id", out var tid) && tid is int id)) continue;
+                if (acceptedIds.Contains(id))
+                {
+                    row["outcome"] = dryRun ? "would-cancel" : "cancelled";
+                    continue;
+                }
+                row["outcome"] = "refused";
+                row["detail"] = rejectReason.TryGetValue(id, out var why)
+                    ? "the cancel designator refused this blueprint: " + why
+                    : "the cancel designator did not take this blueprint, and named no reason";
+            }
 
             var echoCells = new List<IntVec3>();
             for (int i = 0; i < targets.Count; i++) echoCells.Add(targets[i].Pos);
@@ -1017,6 +1099,32 @@ namespace AutoRimmer
                 PostPlace(map, e);
                 return true;
             }
+
+            // ------------------------------------------------------------------
+            // KNOWN DUPLICATION, RECORDED RATHER THAN REMOVED — and the record
+            // is the point, because it has already drifted once.
+            //
+            // The sequence below (replaceable-frame loop -> the WorkToBuild == 0
+            // branch -> WipeWatch + WipeExistingThings(bpDef, Deconstruct) ->
+            // PlaceBlueprintForBuild -> PostPlace) is `BuildVerbs.Build`'s,
+            // step for step. This round extracted the two pieces that could be
+            // extracted cheaply — `ReplaceableFrames` and `PlaceZeroWork` are
+            // `internal` for exactly this — but not the SEQUENCING, and the two
+            // copies have already disagreed in two places: `Build` throws on a
+            // null `blueprintDef` where this returns false, and `BuildVerbs
+            // .Echo` throws past `CropRenderer.MaxSide` where `LayoutVerbs.Echo`
+            // returns a note (a layout can be wider than the cap; a single def
+            // cannot, so `Build`'s throw is unreachable and the divergence is
+            // deliberate there).
+            //
+            // NOT unified in this round, deliberately: `build` is bench-proven
+            // at git-bug d7c8088 / RUNLOG session 16, and re-shaping its
+            // placement path in a session that cannot run a bench trades a
+            // documented duplication for an undocumented regression in a verb
+            // the play loop depends on. The extraction is owed and belongs in a
+            // round that ends at a bench. Whoever takes it: the helper wants to
+            // return (mode, produced, cleared) and both verbs call it.
+            // ------------------------------------------------------------------
 
             // BEFORE THE FIRST MUTATION, not after it. Unreachable through
             // `BuildableByPlayer` — the same condition generates the

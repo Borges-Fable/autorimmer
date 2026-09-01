@@ -191,6 +191,13 @@ namespace AutoRimmer
             }
 
             // ------------------------------------------------------ place ----
+            // THE SEQUENCE BELOW IS DUPLICATED IN `LayoutVerbs.Place`, and that
+            // file's own comment carries the argument. Short version: the two
+            // reusable pieces (`ReplaceableFrames`, `PlaceZeroWork`) are shared;
+            // the ORDER is not, and the copies have already diverged twice. If
+            // you change anything here, change it there — or better, extract it,
+            // which is owed and wants a round that ends at a bench because this
+            // verb is bench-proven and that one is not yet.
             string mode;
             Thing produced = null;
             var cleared = new List<object>();
@@ -543,6 +550,34 @@ namespace AutoRimmer
             {
                 order.Clear();
                 byId.Clear();
+            }
+        }
+
+        // Un-record a placement that was ROLLED BACK, i.e. one this session
+        // made and then destroyed inside a single call.
+        //
+        // WHY THIS IS NOT THE SAME AS LEAVING IT TO `Answer`. For a blueprint
+        // the live look would find nothing and the residual `cancelled` would
+        // be honest. For an INSTANT placement it would not: `Record`'s
+        // built-on-arrival branch sets `CompletedTick`, and `Answer` reaches
+        // `built` on `CompletedTick > 0` BEFORE it can reach `cancelled` — so a
+        // wall that was spawned and then vanished half a millisecond later
+        // would report `state: "built"` for the rest of the session, and
+        // `cancel-layout` would answer "already-built — this build finished".
+        // The completion record is exactly what makes that unrecoverable, which
+        // is the same property that makes it useful everywhere else.
+        //
+        // Only ever called for ids the caller itself minted and then undid;
+        // nothing else may remove a placement, because an id that vanishes is
+        // indistinguishable from one that never existed.
+        public static void Forget(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return;
+            lock (gate)
+            {
+                if (!byId.TryGetValue(id, out var p)) return;
+                byId.Remove(id);
+                order.Remove(p);
             }
         }
 
