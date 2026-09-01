@@ -1309,3 +1309,32 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `GenAdj.OccupiedRect` on every call rather than trusted, because a one-cell
   placement slide is cumulative on a module grid (`bac4eba`) and a wrong inverse
   is invisible until it is. `8b4839f`, `c718e4a`.
+- 2026-09-01 (session 15) — **`Designator_Build.Visible` has TEN clauses, and
+  every count on record was low.** `1adc737` amendment #1 named two (research,
+  `maxTechLevelToBuild`); its own verification comment #4 corrected that to six
+  and titled the correction "amendment #1's gate list is one clause of six". The
+  1.6 member has ten: godMode, `minTechLevelToBuild`, `maxTechLevelToBuild`,
+  `IsResearchFinished`, `minMonolithLevel` (Anomaly), `difficulty.AllowedToBuild`,
+  the `PlaceWorkers` × `IsBuildDesignatorVisible` loop, **`buildingPrerequisites`
+  via `ListerBuildings.ColonistsHaveBuilding`**, **`discoveryPrerequisites` via
+  `HiddenItemsManager.Hidden`**, and **`requireInspectedGravEngine` (Odyssey)**.
+  The last three are named nowhere in the issue record, and they are the same
+  class of gap the amendment was arguing about: a verb that reproduces only the
+  research clause is a god-hand for prerequisite- and DLC-restricted defs. All
+  ten are now in `SiteGate.Selectable`, each as a TOKEN an agent can branch on
+  (`min-tech`, `research`, `building-prerequisite`, …) with the prose in a
+  separate `detail` field — read by field, never through a description.
+  Two rulings that came out of writing it:
+  **the godMode clause is published and NOT honoured.** Vanilla's first line is
+  `if (DebugSettings.godMode) return true;`, and reproducing it would turn every
+  player verb into a god-hand the moment a dev session left the flag on, with
+  `ok:true` to show for it. The clauses are evaluated regardless; `god_mode_on`
+  rides in the envelope as a fact about the session. A caller that wants the
+  bypass asks a `dev:*` verb, which says so itself.
+  And **an unreadable research route REFUSES rather than shrugging.**
+  `WorldSafe.Finished` returns "unfinished" for everything if its field ref
+  failed, so a shrug would silently refuse every buildable while looking like a
+  research answer; the clause `research-unreadable` says which of the two
+  happened. That is `PawnSafe.Policies`'s `source` discipline applied to a gate:
+  "not researched" and "we could not look" must never read alike. `c718e4a`,
+  `1adc737`.
