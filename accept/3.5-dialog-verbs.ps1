@@ -16,6 +16,16 @@
     PowerShell 7 is what is actually here. On a box that HAS python,
     `rwa <op> --args-json '<json>'` sends the identical envelopes.
 
+    THIS FILE IS THE BORGES HALF OF A TWIN. `accept/3.5-dialog-verbs.py` is the
+    POSIX half and is kept in step with it check for check - the check NUMBERS
+    are deliberately identical, so a failure reported from one bench can be
+    looked up in the other file. This script CANNOT run on the linux box: there
+    is no pwsh there, and even with pwsh its `-Root` default is
+    `$env:USERPROFILE\...` and every path it builds is
+    `Join-Path $Root "commands\$id.json"`, which on POSIX yields a filename
+    containing a literal backslash rather than a directory. Precedent for
+    shipping both: `accept/3.4-pawn-orders`.
+
     THE FIXTURE IS NAMED, not discovered at acceptance time. 3.4's comment #4
     is explicit that a "dev-spawned trader" is not a thing that exists:
     `dev:spawn-pawn` makes a pawn, not a trade partner, and
@@ -179,6 +189,82 @@ function Has {
     Check $Num $What ([bool]($list -contains $Needle)) "contains '$Needle'" $Haystack
 }
 
+# EQ/GE TAKE (Env, Path). PASSING A COMPUTED VALUE WHERE $Env BELONGS SHIFTS
+# EVERY LATER PARAMETER, and PowerShell fills the missing $Want with $null. For
+# Eq that is `$null -eq $null` -> TRUE, so the check goes GREEN WHILE ASSERTING
+# NOTHING; for Ge, [double]$Want defaults to 0 and Dig on a non-collection
+# returns $null, so it goes RED, always. Eight call sites in this file did
+# exactly that (five silently green, three spuriously red) until the audit of
+# 2026-08-31. Use these two whenever the value is already in hand.
+function EqVal {
+    param([string]$Num, [string]$What, $Got, $Want)
+    Check $Num $What ([bool](($null -eq $Want -and $null -eq $Got) -or ($Got -eq $Want))) (Show $Want) $Got
+}
+
+function GeVal {
+    param([string]$Num, [string]$What, $Got, [double]$Want)
+    $ok = ($Got -is [int] -or $Got -is [long] -or $Got -is [double] -or $Got -is [decimal]) -and ([double]$Got -ge $Want)
+    Check $Num $What $ok ">= $Want" $Got
+}
+
+# ------------------------------------------------------------ shape contract --
+# THE ROUND'S CENTRAL LESSON, and it is not a nicety. `Dig` returns $Default for
+# an ABSENT key and for one that is present-and-null alike, so `Eq ... $null`
+# passes either way: a driver whose dig paths are WRONG does not fail, it goes
+# GREEN WHILE ASSERTING NOTHING, which is strictly worse than a loud abort
+# because nobody investigates a pass. There are nine `... 'data.action.journal_seq'
+# $null` assertions in this file; every one of them is backed by a real key
+# today, so the hazard here is LATENT rather than live - and it is one
+# serializer edit away from live.
+#
+# HasKey is the predicate Dig cannot be: it distinguishes absent from null.
+# Phase 0 uses it to PROVE every envelope key the later phases dig on, naming
+# the verb and the key, so a shape change fails there - loudly, at a check that
+# says which verb moved - instead of downstream, or not at all.
+function HasKey {
+    param($Obj, [string]$Path)
+    $parts = $Path.Split('.')
+    $cur = $Obj
+    for ($i = 0; $i -lt $parts.Count - 1; $i++) {
+        if ($cur -is [System.Collections.IList]) {
+            $n = 0
+            if (-not [int]::TryParse($parts[$i], [ref]$n)) { return $false }
+            if ($n -ge $cur.Count) { return $false }
+            $cur = $cur[$n]
+            continue
+        }
+        if ($cur -is [System.Collections.IDictionary]) {
+            if (-not $cur.Contains($parts[$i])) { return $false }
+            $cur = $cur[$parts[$i]]
+            continue
+        }
+        return $false
+    }
+    return [bool](($cur -is [System.Collections.IDictionary]) -and $cur.Contains($parts[-1]))
+}
+
+function Shape {
+    param([string]$Num, [string]$Verb, $Env, [string]$Path, [string]$Kind = $null)
+    $ok = HasKey $Env $Path
+    $want = 'the key to be PRESENT (absent != null)'
+    if ($ok -and $Kind) {
+        $v = Dig $Env $Path
+        $ok = switch ($Kind) {
+            'list' { $v -is [System.Collections.IList] }
+            'map' { $v -is [System.Collections.IDictionary] }
+            'number' { $v -is [int] -or $v -is [long] -or $v -is [double] -or $v -is [decimal] }
+            default { $true }
+        }
+        $want += " and a $Kind"
+    }
+    Check $Num "``$Verb`` publishes $Path" ([bool]$ok) $want (Dig $Env $Path)
+}
+
+function Absent {
+    param([string]$Num, [string]$What, $Env, [string]$Path)
+    Check $Num $What (-not (HasKey $Env $Path)) 'the key to be ABSENT' (Dig $Env $Path)
+}
+
 function Note { param([string]$Num, [string]$Text) Write-Host ("  {0,-7} NOTE    {1}" -f $Num, $Text) -ForegroundColor DarkYellow }
 
 function Precondition {
@@ -197,8 +283,11 @@ function NoRedErrors { param([string]$Num, [string]$What)
 }
 
 function StackClear { param([string]$Num, [string]$What)
+    # HasKey, not `$null -eq Dig`: `status` OMITS forcePause when the stack is
+    # clear (CoreVerbs.Status adds it only `if (snap.forcePause != null)`), and
+    # absent is what we are asserting. Dig cannot tell absent from null.
     $e = Send-Cmd status
-    Check $Num $What ($null -eq (Dig $e 'data.forcePause')) 'status.forcePause absent' (Dig $e 'data.forcePause')
+    Check $Num $What (-not (HasKey $e 'data.forcePause')) 'status.forcePause absent' (Dig $e 'data.forcePause')
 }
 
 function PhaseBanner { param([string]$T) Write-Host ''; Write-Host ('=' * 78); Write-Host $T; Write-Host ('=' * 78) }
@@ -214,32 +303,112 @@ $NewOps = @(
 )
 
 function Phase0 {
-    PhaseBanner "PHASE 0 - preflight: the bench is live and 3.5's 18 ops registered"
+    PhaseBanner 'PHASE 0 - the bench, the dev switch, and THE SHAPE CONTRACT'
 
     # 0.1  {"op":"status"}
     $e = Send-Cmd status
-    Eq '0.1a' 'status answered' $e 'ok' $true
-    Eq '0.1b' 'a game is loaded' $e 'data.gameLoaded' $true
+    Precondition '0.1' 'the bench answers `status`' ($DryRun -or (Dig $e 'ok') -eq $true) `
+        'no status envelope - start the bench first.'
+    Shape '0.1a' 'status' $e 'data.gameLoaded'
+    Shape '0.1b' 'status' $e 'data.verbs' 'list'
+    Eq '0.1c' 'a game is loaded' $e 'data.gameLoaded' $true
     # The whole point of this spec: a run must not START wedged either.
-    Check '0.1c' 'no force-pausing modal is up before we begin' `
-    ($null -eq (Dig $e 'data.forcePause')) 'absent' (Dig $e 'data.forcePause')
+    Absent '0.1d' 'no force-pausing modal is up before we begin' $e 'data.forcePause'
 
-    # 0.2  every op these two issues register must be present
+    # 0.2  every op these two issues register must be present. The strongest
+    #      check in the file: it fails on a verb that did not register at all,
+    #      which no downstream assertion can distinguish from a bad fixture.
     $verbs = @(Dig $e 'data.verbs')
     $missing = @($NewOps | Where-Object { $verbs -notcontains $_ })
-    Check '0.2' "all 18 ops of 20e5cda + 548ef48 registered" ($missing.Count -eq 0) 'no missing ops' $missing
+    Check '0.2' 'all 18 ops of 20e5cda + 548ef48 registered' ($missing.Count -eq 0) 'no missing ops' $missing
 
-    # 0.3  the journal watermark every later NoRedErrors is measured from
+    # 0.3  THE DEV SWITCH. Phases 1-4 stage their fixtures with `dev:incident`
+    #      and `journal-selftest`, and BOTH throw on !Prefs.DevMode
+    #      (DevVerbs.Dev.Gate, JournalVerbs.Selftest). Without this probe a
+    #      devMode-off bench fails four phases later with "no trader
+    #      materialised", which reads as a spec failure and is not one.
+    #      `dev:incident` with NO args is the probe: Dev.Gate(V) runs BEFORE
+    #      Dev.CurrentMap and before a.StrReq("def"), so it mutates nothing
+    #      either way and the two outcomes are distinguishable by message.
+    $e = Send-Cmd 'dev:incident'
+    $detail = "$(Dig $e 'error.detail')"
+    $devOff = $detail -like '*devMode*'
+    Precondition '0.3' 'devMode is ON (the fixtures need it)' (-not $devOff) `
+        ("dev:incident answered: $detail  ->  Prefs.DevMode is FALSE on this bench. dev:incident and journal-selftest are both gated on it, so phases 2-5 cannot stage a quest, a trader or a dialog. Turn dev mode on in the bench's options (the agent profile seeds it True - see spike 0.1 FINDINGS) and re-run.")
+    Check '0.3a' 'and the gate refused for a REASON, not silently' `
+    ((Dig $e 'error.code') -eq 'bad-args') 'bad-args (the missing `def` arg)' (Dig $e 'error.code')
+
+    # 0.4  journal: the watermark every later NoRedErrors is measured from.
     $e = Send-Cmd journal @{ limit = 1 }
+    Shape '0.4a' 'journal' $e 'data.count'
+    Shape '0.4b' 'journal' $e 'data.last_seq'
+    Shape '0.4c' 'journal' $e 'data.events' 'list'
     $S.seq0 = [int](Dig $e 'data.last_seq' 0)
     Write-Host "          journal watermark seq0 = $($S.seq0)"
 
-    # 0.4  a Social-capable colonist to negotiate with. Every trade and comms
+    # 0.5  interactions: 1.7's force-pause vocabulary, which phases 3-6 dig into
+    #      by five different paths.
+    $e = Send-Cmd interactions
+    Shape '0.5a' 'interactions' $e 'data.force_pause' 'map'
+    Shape '0.5b' 'interactions' $e 'data.force_pause.count' 'number'
+    Shape '0.5c' 'interactions' $e 'data.blocking'
+    Shape '0.5d' 'interactions' $e 'data.letters' 'list'
+    Shape '0.5e' 'interactions' $e 'data.windows' 'list'
+    Eq '0.5f' 'and the stack is clear before we start' $e 'data.force_pause.count' 0
+
+    # 0.6  THE ADVANCE ENVELOPE, and the key that was wrong. 4.8g - the proof
+    #      that un-wedging restored ticking, the single most load-bearing check
+    #      in the suite - read `data.ticks`, which TimeDriver.BuildData does not
+    #      and never did emit. Both halves are asserted here so the mistake
+    #      cannot be made again silently: the real key must be PRESENT and the
+    #      wrong one must be ABSENT.
+    #      One tick, deliberately: it is the smallest budget that still produces
+    #      a real (non-refused) advance envelope, and it is taken BEFORE phase
+    #      1's double-read proof, which needs the clock still.
+    $e = Send-Cmd advance @{ ticks = 1; max_tps = 400 }
+    Shape '0.6a' 'advance' $e 'data.reason'
+    Shape '0.6b' 'advance' $e 'data.ticks_elapsed' 'number'
+    Absent '0.6c' 'advance does NOT publish `data.ticks` (4.8g used to read it)' $e 'data.ticks'
+
+    # 0.7  the quest observer's shape, including the `action` block that nine
+    #      later checks assert is present-with-a-null-seq. `Eq ... $null` alone
+    #      would pass on an ABSENT action block just as happily, which is the
+    #      whole reason this section exists.
+    $e = Send-Cmd quests
+    Shape '0.7a' 'quests' $e 'data.total' 'number'
+    Shape '0.7b' 'quests' $e 'data.counts' 'map'
+    Shape '0.7c' 'quests' $e 'data.counts.available'
+    Shape '0.7d' 'quests' $e 'data.counts.ongoing'
+    Shape '0.7e' 'quests' $e 'data.counts.ended'
+    Shape '0.7f' 'quests' $e 'data.counts.dismissed'
+    Shape '0.7g' 'quests' $e 'data.counts.with_outstanding_choice'
+    Shape '0.7h' 'quests' $e 'data.quests' 'list'
+    Shape '0.7i' 'quests' $e 'data.action' 'map'
+    Shape '0.7j' 'quests' $e 'data.action.journal_seq'
+    Eq '0.7k' 'and an observer stamps it null (present AND null, both proved)' $e 'data.action.journal_seq' $null
+
+    # 0.8  the two refusal shapes phase 6 relies on, probed with NO fixture:
+    #      both are the natural state of a bench that has not traded or called.
+    $e = Send-Cmd trade
+    Eq '0.8a' '`trade` with no session refuses at gate no-session' $e 'data.gate' 'no-session'
+    Shape '0.8b' 'trade' $e 'data.gate_cite'
+    $e = Send-Cmd comms-choose @{ option = 0 }
+    Eq '0.8c' '`comms-choose` with no call refuses at gate no-call' $e 'data.gate' 'no-call'
+    Shape '0.8d' 'comms-choose' $e 'data.gate_cite'
+
+    # 0.9  dialog-dismiss on a clear stack: the no-op shape 4.9 asserts.
+    $e = Send-Cmd dialog-dismiss
+    Shape '0.9a' 'dialog-dismiss' $e 'data.ok'
+    Shape '0.9b' 'dialog-dismiss' $e 'data.dismissed' 'list'
+    EqVal '0.9c' 'and it dismissed nothing (data.dismissed)' (@(Dig $e 'data.dismissed')).Count 0
+
+    # 0.10  a Social-capable colonist to negotiate with. Every trade and comms
     #      gate runs through one, and picking a pawn with Social disabled fails
     #      six checks whose only clue is a gate string.
     $e = Send-Cmd pawns @{ filter = 'colonist' }
+    Shape '0.10a' 'pawns' $e 'data.list' 'list'
     $roster = @(Dig $e 'data.list')
-    Precondition '0.4a' 'at least one visible colonist' ($roster.Count -ge 1) `
+    Precondition '0.10b' 'at least one visible colonist' ($DryRun -or $roster.Count -ge 1) `
         "the roster has $($roster.Count)."
     if ($DryRun) { $S.N = 1001; $S.Nname = '<negotiator>' }
     else {
@@ -252,7 +421,7 @@ function Phase0 {
             if ($social.disabled -eq $true) { $whyNot += "$($r.name): Social disabled"; continue }
             $able += $r
         }
-        Precondition '0.4b' 'a colonist capable of Social (the negotiator)' ($able.Count -ge 1) `
+        Precondition '0.10c' 'a colonist capable of Social (the negotiator)' ($able.Count -ge 1) `
         ("no visible colonist can negotiate. Rejected: {0}. FloatMenuOptionProvider_Trade refuses on skills.GetSkill(SkillDefOf.Social).TotallyDisabled, so trade and comms are both unreachable without one." -f $(if ($whyNot.Count) { $whyNot -join '; ' } else { 'none' }))
         $S.N = $able[0].id; $S.Nname = $able[0].name
     }
@@ -299,7 +468,10 @@ function Phase1 {
 
     if ($S.qTotal -eq 0) {
         Note '1.3' 'no quests on this colony - staging one with dev:incident {def:"GiveQuest_Random"}'
-        Send-Cmd 'dev:incident' @{ def = 'GiveQuest_Random' } | Out-Null
+        $stage = Send-Cmd 'dev:incident' @{ def = 'GiveQuest_Random' }
+        Precondition '1.3s' 'dev:incident {def:"GiveQuest_Random"} was accepted' `
+        ((Dig $stage 'ok') -eq $true) `
+        ("the incident verb itself refused: code=$(Dig $stage 'error.code') detail=$(Dig $stage 'error.detail'). FIXTURE problem, not a 548ef48 failure.")
         $e = Send-Cmd quests
         $quests = @(Dig $e 'data.quests')
         $S.qTotal = [int](Dig $e 'data.total' 0)
@@ -368,7 +540,10 @@ function Phase2 {
     #     verification pass's "name whichever it is IN the acceptance".
     $before = @(Dig (Send-Cmd quests @{ state = 'available' }) 'data.quests')
     if ($before.Count -eq 0) {
-        Send-Cmd 'dev:incident' @{ def = 'GiveQuest_Random' } | Out-Null
+        $stage = Send-Cmd 'dev:incident' @{ def = 'GiveQuest_Random' }
+        Precondition '2.1s' 'dev:incident {def:"GiveQuest_Random"} was accepted' `
+        ((Dig $stage 'ok') -eq $true) `
+        ("the incident verb itself refused: code=$(Dig $stage 'error.code') detail=$(Dig $stage 'error.detail'). FIXTURE problem, not a 3.5 failure.")
         $before = @(Dig (Send-Cmd quests @{ state = 'available' }) 'data.quests')
     }
     Precondition '2.1' 'an available (NotYetAccepted) quest' ($before.Count -ge 1 -or $DryRun) `
@@ -458,8 +633,8 @@ function Phase2 {
 
     # 2.5 the state read back independently, through the observer.
     $e = Send-Cmd quest @{ quest = $S.qa; sections = @('head') }
-    Eq '2.5a' 'the observer agrees the quest is no longer NotYetAccepted' `
-    ((Dig $e 'data.state') -eq 'NotYetAccepted') $false
+    Check '2.5a' 'the observer agrees the quest is no longer NotYetAccepted' `
+    ((Dig $e 'data.state') -ne 'NotYetAccepted') 'anything but NotYetAccepted' (Dig $e 'data.state')
     Eq '2.5b' 'and Accept cleared the dismissed flag, as Quest.Accept does' $e 'data.dismissed' $false
 
     # 2.6 the letter is dismissed SEPARATELY - they are independent acts.
@@ -477,6 +652,13 @@ function Phase2 {
     $e = Send-Cmd quest-dismiss @{ quest = $S.qa; dismissed = $true }
     if ((Dig $e 'data.ok') -eq $true) {
         Eq '2.7a' 'quest-dismiss set the flag' $e 'data.dismissed' $true
+        # The widget is `selected.dismissed = !selected.dismissed` and then a
+        # one-level walk over `selected.GetSubquests()`. Passing `dismissed`
+        # explicitly is the SET form; omitting it toggles, as the click does.
+        Eq '2.7a1' 'passing `dismissed` explicitly is the SET form' $e 'data.mode' 'set'
+        Shape '2.7a2' 'quest-dismiss' $e 'data.subquests' 'list'
+        Contains '2.7a3' 'and the note names the subquest propagation the widget does' `
+        (Dig $e 'data.note') 'subquest'
         Contains '2.7b' 'and says plainly it is NOT a decline' (Dig $e 'data.note') 'does NOT decline'
         $e = Send-Cmd quests @{ include_dismissed = $false }
         $gone = @(Dig $e 'data.quests') | Where-Object { $_.id -eq $S.qa }
@@ -484,7 +666,10 @@ function Phase2 {
         $e = Send-Cmd quest @{ quest = $S.qa; sections = @('head') }
         Check '2.7d' 'but its STATE is untouched - dismissed is orthogonal to state' `
         ((Dig $e 'data.state') -ne 'NotYetAccepted') 'still accepted/ongoing' (Dig $e 'data.state')
-        Send-Cmd quest-dismiss @{ quest = $S.qa; dismissed = $false } | Out-Null
+        # The TOGGLE form, which is the click: no `dismissed` arg at all.
+        $e = Send-Cmd quest-dismiss @{ quest = $S.qa }
+        Eq '2.7e' 'omitting `dismissed` toggles, as MainTabWindow_Quests.DoDismissButton does' $e 'data.mode' 'toggle'
+        Eq '2.7f' 'and the toggle undid it' $e 'data.dismissed' $false
     }
     else { Note '2.7' "quest-dismiss refused: $(Dig $e 'data.reason')" }
 
@@ -505,7 +690,13 @@ function Phase3 {
     $traders = @(Dig $e 'data.list') | Where-Object { $_.trader -eq $true -or "$($_.kind)" -like '*Trader*' }
     if ($traders.Count -eq 0 -and -not $DryRun) {
         Note '3.1' 'no trader on the map - staging with dev:incident {def:"TraderCaravanArrival"} and advancing until it settles'
-        Send-Cmd 'dev:incident' @{ def = 'TraderCaravanArrival' } | Out-Null
+        # ASSERT THE STAGING WORKED. Inferring it from a trader turning up
+        # later conflates "the incident was refused" with "the caravan is still
+        # walking in", and the two need different answers from the operator.
+        $stage = Send-Cmd 'dev:incident' @{ def = 'TraderCaravanArrival' }
+        Precondition '3.1s' 'dev:incident {def:"TraderCaravanArrival"} was accepted' `
+        ((Dig $stage 'ok') -eq $true) `
+        ("the incident verb itself refused: code=$(Dig $stage 'error.code') detail=$(Dig $stage 'error.detail'). That is a FIXTURE problem (devMode, or the incident cannot target this map), not a 3.5 failure.")
         for ($i = 0; $i -lt 8; $i++) {
             $a = Send-Cmd advance @{ ticks = 2500; max_tps = 400 }
             if ((Dig $a 'data.reason') -eq 'dialog') {
@@ -584,8 +775,8 @@ function Phase3 {
         )
     }
     Eq '3.6a' 'trade-set accepted both lines in ONE call' $e 'data.ok' $true
-    Eq '3.6b' 'two accepted' (@(Dig $e 'data.accepted')).Count 2
-    Eq '3.6c' 'none rejected' (@(Dig $e 'data.rejected')).Count 0
+    EqVal '3.6b' 'two accepted (data.accepted)' (@(Dig $e 'data.accepted')).Count 2
+    EqVal '3.6c' 'none rejected (data.rejected)' (@(Dig $e 'data.rejected')).Count 0
     # POSITIVE BUYS, NEGATIVE SELLS - the game's own convention, asserted.
     Eq '3.6d' 'the buy line reads +10 and PlayerBuys' $e 'data.accepted.0.count' 10
     Eq '3.6e' 'and its action is PlayerBuys' $e 'data.accepted.0.action' 'PlayerBuys'
@@ -602,7 +793,7 @@ function Phase3 {
     $e = Send-Cmd trade-cancel
     Eq '3.7a' 'trade-cancel closed the session' $e 'data.ok' $true
     Eq '3.7b' 'and TradeSession.Active is now false' $e 'data.session_closed' $true
-    Eq '3.7c' 'the two staged lines are reported as abandoned' (@(Dig $e 'data.abandoned')).Count 2
+    EqVal '3.7c' 'the two staged lines are reported as abandoned (data.abandoned)' (@(Dig $e 'data.abandoned')).Count 2
     Contains '3.7d' 'and "untouched" is DEFINED in the result, not left to inference' `
     (Dig $e 'data.untouched_means') 'ResolveTrade'
     NotNull '3.7e' 'journaled' $e 'data.action.journal_seq'
@@ -706,6 +897,10 @@ function Phase4 {
     #     about to test. A timing-out letter opening ITSELF mid-advance is the
     #     production path; this is the deterministic stand-in.
     $e = Send-Cmd 'journal-selftest' @{ steps = @('dialogs-clear') }
+    if ((Dig $e 'ok') -ne $true -and "$(Dig $e 'error.detail')" -like '*devMode*') {
+        Precondition '4.2d' 'devMode for journal-selftest' $false `
+            'journal-selftest is gated on Prefs.DevMode and refused. Phase 0.3 should have caught this - if it did not, the switch was turned off mid-run.'
+    }
     Note '4.2' "journal-selftest {steps:['dialogs-clear']} -> $(Dig $e 'ok'). If this bench's selftest has no dialog fixture, the phase falls through to the letter route below."
 
     # 4.3 the production route: a real letter with real options.
@@ -714,7 +909,10 @@ function Phase4 {
     $choice = @($letters | Where-Object { $_.kind -eq 'choice' -and @($_.options).Count -ge 1 })
     if ($choice.Count -eq 0) {
         Note '4.3' 'no choice letter on the stack - staging one with dev:incident {def:"VisitorGroup"} (ChoiceLetter_AcceptVisitors) and advancing'
-        Send-Cmd 'dev:incident' @{ def = 'VisitorGroup' } | Out-Null
+        $stage = Send-Cmd 'dev:incident' @{ def = 'VisitorGroup' }
+        Precondition '4.3s' 'dev:incident {def:"VisitorGroup"} was accepted' `
+        ((Dig $stage 'ok') -eq $true) `
+        ("the incident verb itself refused: code=$(Dig $stage 'error.code') detail=$(Dig $stage 'error.detail'). FIXTURE problem, not a 3.5 failure.")
         Send-Cmd advance @{ ticks = 600; max_tps = 400 } | Out-Null
         $e = Send-Cmd interactions
         $letters = @(Dig $e 'data.letters')
@@ -790,13 +988,18 @@ function Phase4 {
         # dialog is answered, the next advance RUNS ITS FULL BUDGET.
         $a = Send-Cmd advance @{ ticks = 500; max_tps = 400 }
         Eq '4.8f' 'THE POINT OF THIS SPEC: the next advance runs its FULL BUDGET' $a 'data.reason' 'ticks'
-        Ge '4.8g' 'and did all 500 ticks, not 0' $a 'data.ticks' 500
+        # THE KEY IS `ticks_elapsed`. TimeDriver.BuildData emits
+        # `["ticks_elapsed"] = ticks` and has never emitted `ticks`, so the
+        # original `data.ticks` here could only ever fail - on the single most
+        # load-bearing check in the suite, the proof that un-wedging restored
+        # ticking. Phase 0 now asserts both halves of that (0.5b/0.5c).
+        Ge '4.8g' 'and did all 500 ticks, not 0' $a 'data.ticks_elapsed' 500
     }
 
     # 4.9 dialog-dismiss with nothing up is a clean no-op, not an error.
     $e = Send-Cmd dialog-dismiss
     Eq '4.9a' 'dismiss with a clear stack is ok:true, not an error' $e 'data.ok' $true
-    Eq '4.9b' 'with nothing dismissed' (@(Dig $e 'data.dismissed')).Count 0
+    EqVal '4.9b' 'with nothing dismissed (data.dismissed)' (@(Dig $e 'data.dismissed')).Count 0
     Eq '4.9c' 'and nothing journaled' $e 'data.action.journal_seq' $null
 
     # 4.10 answering a letter from the letter side, and the honest report about
@@ -844,7 +1047,7 @@ function Phase5 {
     Eq '5.1a' 'comms-targets answered' $e 'ok' $true
     NotNull '5.1b' 'the console is identified' $e 'data.console.id'
     $targets = @(Dig $e 'data.targets')
-    Ge '5.1c' 'at least one comm target' $targets.Count 1
+    GeVal '5.1c' 'at least one comm target (data.targets)' $targets.Count 1
     $callable = @($targets | Where-Object { $_.callable -eq $true -and $_.kind -eq 'faction' })
     Write-Host "          $($targets.Count) targets, $($callable.Count) callable factions"
     foreach ($t in $targets) { if ($t.callable -ne $true) { Write-Host "          blocked: $($t.name) - $($t.blocked)" } }
@@ -861,7 +1064,7 @@ function Phase5 {
     # which is a Dialog_NodeTree and therefore forcePause.
     Eq '5.3c' 'ZERO force-pausing windows - no Dialog_Negotiation was stacked' $e 'data.force_pause.count' 0
     Eq '5.3d' 'the negotiator did not walk, and the verb says so' $e 'data.negotiator_walked' $false
-    Ge '5.3e' 'the root node has options' (@(Dig $e 'data.node.options')).Count 1
+    GeVal '5.3e' 'the root node has options (data.node.options)' (@(Dig $e 'data.node.options')).Count 1
     NotNull '5.3f' 'journaled' $e 'data.action.journal_seq'
     $opts = @(Dig $e 'data.node.options')
     Write-Host "          options: $(($opts | ForEach-Object { $_.label + $(if($_.disabled){' [DISABLED: '+$_.disabled_reason+']'}) }) -join ' | ')"
@@ -886,7 +1089,7 @@ function Phase5 {
         $e = Send-Cmd comms-choose @{ option = $link[0].index }
         Eq '5.5a' 'comms-choose walked to the linked node' $e 'data.ok' $true
         Eq '5.5b' 'and reports it went to a node' $e 'data.went_to_node' $true
-        Ge '5.5c' 'the new node has its own options' (@(Dig $e 'data.now_showing.options')).Count 1
+        GeVal '5.5c' 'the new node has its own options (data.now_showing.options)' (@(Dig $e 'data.now_showing.options')).Count 1
         Eq '5.5d' 'still no window' $e 'data.force_pause.count' 0
         Write-Host "          now showing: $((@(Dig $e 'data.now_showing.options') | ForEach-Object { $_.label }) -join ' | ')"
     }
