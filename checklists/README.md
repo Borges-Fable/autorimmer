@@ -130,6 +130,46 @@ defect"), applied to attention. `turn.md` is capped by the digest byte budget
 it annotates; `triggered.md` is capped per trigger by the same attentive-read
 bar, enforced at review rather than by a number.
 
+## The promotion pass
+
+4.4 (`d32eadd`) specifies a retirement pass and no promotion pass, so the
+checklists can only ever shrink: nothing turns a repeated observation INTO an
+item, and the thing that does happen instead — a session inventing an id
+mid-run — lands nowhere and fails the audit (§The run ledger). The symmetric
+half, ruled 2026-09-01 and recorded here for 4.4 to build on:
+
+**Run it in the same pass as retirement** — at a post-mortem, or at the end of
+a run — over the same evidence: `RUNS/*/checklist.ndjson` and the run
+summaries.
+
+- **The candidate set is computed, not remembered.** Every ledger `item` with
+  no `### <id>` behind it, plus any check a summary describes in prose only:
+  `grep` the ledgers, diff against `grep '^### '` over the three files. An id
+  a session invented is a REQUEST for an item, filed at the moment the need
+  was felt — the most reliable evidence this system produces, and today it is
+  thrown away.
+- **Two occasions, then promote or reject — in writing.** A candidate seen on
+  two separate days or in two runs is landed as an item, or the file records
+  in one line why not, in the same commit. Silence is the failure being
+  fixed; it is the same rule as retirement's "recorded, not silent", pointed
+  the other way.
+- **It lands at its moment class**, and the ladder still applies: free on the
+  digest → `turn.md`; keyed to an act or event → `triggered.md`; otherwise
+  `daily.md` under the cap, where a promotion past the cap fires the
+  merge-or-retire like any other add. If every branch of the response is
+  computable from published state, it is not a checklist item at all — it
+  goes to the mod rung (`postmortem.md` step 5).
+- **Promotion is the cheap direction to be wrong in.** A promoted item starts
+  logging immediately, so the retirement pass sees its rows from the next run
+  onward and undoes a bad promotion on the same evidence. The asymmetry is
+  deliberate: a missing item costs a colonist, a spurious one costs a line of
+  attention per day until the next pass.
+
+Worked example, and the pass's first output: the three M1 ids in §The run
+ledger. Each fired at least twice, none had a file, and all three landed on
+2026-09-01 — `barracks-heat` on `daily.md`, `postmortem-trigger` and
+`time-control-drift` on `triggered.md`.
+
 ## Deliberately not here
 
 - **Mood.** `Alert_MajorOrExtremeBreakRisk` is threshold-based AHEAD of a

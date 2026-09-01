@@ -123,6 +123,14 @@ separates "idle" from "inapplicable"), weighted by each moment class's cost
 structure (`checklists/README.md`). Flagged items are merged, demoted to
 prose, or retired — recorded in the file, never silent.
 
+**Promotion runs it uphill, in the same pass** (`checklists/README.md` §The
+promotion pass, ruled 2026-09-01). Retirement alone can only shrink the
+checklists; the pass's candidates are the ledger ids with no `### <id>`
+behind them — checks a run invented mid-flight because it needed one — and
+each is landed or rejected in writing. Step 2's "did an item flag it, sit
+`blocked`, or never exist?" is where a post-mortem generates them, so the
+two halves belong to the same procedure and the same commit.
+
 ## When lessons conflict
 
 The rule the potato incident wrote:
