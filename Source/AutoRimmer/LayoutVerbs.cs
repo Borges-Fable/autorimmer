@@ -336,12 +336,16 @@ namespace AutoRimmer
                 data["layout_id"] = null;
                 data["placed"] = new List<object>();
                 data["placed_count"] = 0;
-                data["skipped"] = failed;
+                // Everything was skipped, because nothing was attempted — not
+                // `failed`, which counts preflight FAILURES and can exceed the
+                // element count (a self-overlap is one row per offending pair).
+                data["skipped"] = dryRun ? 0 : rawElements.Count;
                 data["detail"] = dryRun
                     ? "dry_run: preflight only, nothing was placed"
-                    : (failed + " of " + rawElements.Count + " elements were refused, so NOTHING "
-                       + "was placed. Clear the blockers (see each failure's `blocker.removal`) or "
-                       + "site the layout elsewhere, then retry; `partial:true` places the rest.");
+                    : (failed + " preflight failure(s) across " + rawElements.Count
+                       + " elements, so NOTHING was placed. Clear the blockers (see each "
+                       + "failure's `blocker.removal`) or site the layout elsewhere, then retry; "
+                       + "`partial:true` places the rest.");
                 data["view"] = Echo(map, rect, out string viewNote);
                 if (viewNote != null) data["view_note"] = viewNote;
                 return data;
