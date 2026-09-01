@@ -200,16 +200,25 @@ namespace AutoRimmer
         {
             var def = ThingDefOf.TableButcher;
             var anchor = Anchor(map);
-            var rect = FindClearRect(map, anchor, Math.Max(1, def.size.x) + 1, Math.Max(1, def.size.z) + 1);
-            // THE GATE, which this step had none of (git-bug 3a5ff6c item 3).
-            // `FindClearRect` walks cells; a butcher table has a footprint AND an
-            // interaction cell, and neither the rect search nor the bare
-            // GenSpawn.Spawn that followed it knew that. FixtureSite runs
-            // GenConstruct.CanPlaceBlueprintAt and refuses rather than staging a
-            // bench no colonist could have built — see its header for why the
-            // widget half is reported and not honoured here.
-            var spawned = FixtureSite.Spawn(map, def, GenStuff.DefaultStuffFor(def),
-                rect.CenterCell, Rot4.North, "world-fixture bench", out var gate);
+            var stuff = GenStuff.DefaultStuffFor(def);
+            // THE GATE, which this step had none of (git-bug 3a5ff6c item 3) —
+            // and the SEARCH now shares it, which it did not when the gate first
+            // landed. `FindClearRect` walks the footprint's own cells and knows
+            // no def, so on a map that already holds one butcher table it
+            // happily returns the box beside it, whose footprint sits on the
+            // first table's interaction cell. The gate then refused and the step
+            // died on its SECOND call.
+            //
+            // Confirmed live, session 16, 2026-09-01: `world-fixture
+            // {steps:["bench","bill"]}` succeeded once and then failed with
+            // "Butcher table would block butcher table's interaction spot." —
+            // which is `0d9cbd7`'s own acceptance ("run TWICE ... two benches
+            // with two bills each") made unreachable by a half-adopted gate.
+            // A validator the site search does not share is a validator that
+            // turns a fixture into a coin flip.
+            var pos = FindGatedSite(map, anchor, def, stuff, Rot4.North);
+            var spawned = FixtureSite.Spawn(map, def, stuff,
+                pos, Rot4.North, "world-fixture bench", out var gate);
             // The handle. Everything the `bill` bug was is the absence of this
             // one line (git-bug 0d9cbd7).
             chain.Bench = spawned;
@@ -784,6 +793,52 @@ namespace AutoRimmer
         // buildable terrain (or fertile, for a growing zone). Deliberately not
         // CellFinder — the fixture wants a RECT and wants to fail loudly rather
         // than fall back to a cell that will not hold what it is asked to hold.
+        // A site the PLACEMENT GATE accepts, not merely a clear box. Ring-walks
+        // outward from the anchor exactly as `FindClearRect` does, and asks
+        // `SiteGate.Check` at each candidate CENTRE — the same routine
+        // `FixtureSite.Spawn` will run a moment later, so the search and the
+        // placement cannot disagree.
+        //
+        // Keyed on `PlaceOk`, not `Ok`, to match `FixtureSite.Spawn`: the
+        // fixture routes honour the ground half and REPORT the widget half,
+        // because `journal-selftest power` stages a `PowerConduit` on fresh maps
+        // where Electricity is not researched (git-bug 3a5ff6c item 3).
+        //
+        // The zone exclusion is carried over from `FindClearRect` — the gate has
+        // no opinion about stockpiles, and a fixture bench inside one is still a
+        // bad fixture.
+        private static IntVec3 FindGatedSite(Map map, IntVec3 anchor, ThingDef def,
+            ThingDef stuff, Rot4 rot)
+        {
+            for (int ring = 0; ring < 70; ring++)
+            {
+                for (int dx = -ring; dx <= ring; dx++)
+                {
+                    for (int dz = -ring; dz <= ring; dz++)
+                    {
+                        if (Math.Max(Math.Abs(dx), Math.Abs(dz)) != ring) continue;
+                        var pos = new IntVec3(anchor.x + dx, 0, anchor.z + dz);
+                        if (!pos.InBounds(map)) continue;
+                        var rect = GenAdj.OccupiedRect(pos, rot, def.Size);
+                        if (rect.minX < 1 || rect.minZ < 1
+                            || rect.maxX >= map.Size.x - 1 || rect.maxZ >= map.Size.z - 1) continue;
+                        bool zoned = false;
+                        foreach (var c in rect)
+                        {
+                            if (map.zoneManager.ZoneAt(c) != null) { zoned = true; break; }
+                        }
+                        if (zoned) continue;
+                        if (SiteGate.Check(map, def, pos, rot, stuff).PlaceOk) return pos;
+                    }
+                }
+            }
+            throw new VerbArgsException(
+                "no site the placement gate accepts for " + def.defName + " within 70 cells of ("
+                + anchor.x + "," + anchor.z + "). The gate is "
+                + "GenConstruct.CanPlaceBlueprintAt, so this means the ground genuinely will not "
+                + "take one — not that the search was too narrow.");
+        }
+
         private static CellRect FindClearRect(Map map, IntVec3 anchor, int w, int h, bool needsSoil = false)
         {
             for (int ring = 0; ring < 70; ring++)
