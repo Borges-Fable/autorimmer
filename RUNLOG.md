@@ -2805,7 +2805,11 @@ ready to cut.
 ## Session 15 — 2026-09-01 (dorian's Linux box). Session A of the buildable round
 
 One opus worker, its own git worktree, branch `spec/site-routine`. Merged
-`25b65ff`, rebuilt `43e86c7`. **Nothing has run against a game.**
+`25b65ff`, rebuilt `43e86c7`. ~~**Nothing has run against a game.**~~ **Struck
+the same day: a watched bench pass followed** — see "The bench pass" below.
+Struck rather than edited, because a status line going stale on its own is the
+failure mode this file devotes an essay to, and session 13's section carries the
+identical correction.
 
 ### What landed
 
@@ -2881,3 +2885,120 @@ refused with `InteractionSpotOverlaps`, the rotation search in a two-deep
 corridor, the even-size `pos` round-trip, and `7382bdd`'s "run the suites".
 Said in those words on each issue, including that `7382bdd`'s first bullet is
 now true in a WEAKER form than its text asks.
+
+### The bench pass — watched, on `_RimWorld-Agent`
+
+`--quicktest` 250x250 desert, assembly `25b65ff`, Dorian watching on workspace 3
+at 2560x1600. Full record and evidence: `accept/runs/s15-20260901/`.
+
+**The IL was the right IL, structurally.** The bench's `Mods/AutoRimmer` is a
+symlink to this repo, so it loads `Assemblies/` from the working tree with no
+copy to go stale — the trap session 11 wrote up. Confirmed live anyway:
+`rwa verbs` returned **120 verbs including `site-survey`**, which did not exist
+before this merge.
+
+`accept/s13-mod-surface.py`: **174 PASS / 0 FAIL / 1 SKIP / 3 NOTE**, up from
+session 13's 169.
+
+**`EXIT=2` does not mean a failure, and a future session will think it does.**
+`precondition()` calls `sys.exit(2)` when a fixture is missing, so the run
+ABORTS at the first unmet precondition instead of finishing. Here that is 5.1 —
+the last check of the last phase — so no coverage was lost, but "1 SKIP" means
+"it stopped there", not "one was skipped and the rest ran". Session 13's 169/0/1
+will have exited 2 for the same reason.
+
+#### Proven by hand, beyond the suite
+
+The refusal now names the cell that refused: a wall on the interaction cell of a
+bench asked for at `[130,135]` returned `blocker: Wall at [130,134]`,
+`removal: "deconstruct"`, `cell_role: "interaction"` — against session 13's
+banked failure, which named a `WoodLog` on the target cell with
+`removal: "none"`. A wall rather than granite on purpose: same branch, DIFFERENT
+removal class, so it proves the blocker is being asked about the refusing cell
+rather than returning a constant.
+
+`site-survey`'s verdict and `dev:spawn-thing`'s refusal returned the same
+sentence verbatim — one routine, two callers. The corner↔centre round-trip is
+exact: candidate `at [124,125] 3x2 pos [125,125]`, spawned at its own `pos`,
+read back `rect [124,125,3,2]`. The widget gate refuses BEFORE searching
+(`examined: 0, gate_calls: 0`, `clause: "research"`). The margin tier surveys
+9x8 for a 3x2 footprint with reachability. Both interaction rules fired with the
+game's own strings — the overlap rule and `NotBlockingAnyInteractionCells`, the
+latter being the seventh `CanSpawnAt` branch session A found `WhyNoSpawn` was
+missing.
+
+#### What the pass did NOT prove, and one thing it DISPROVED
+
+- **The tolerated chair is not listed.** `verdict.ok: true` with a chair on the
+  interaction cell, but the tier cell reports `blocker: null` and names no
+  occupant — so "a chair is there, which is fine" and "the cell is empty" read
+  alike, and that chair is what the NEXT bench's overlap check trips on.
+  `c718e4a` stays open on it.
+- **`7382bdd` bullet 1 is not met**, measured rather than asserted:
+  `dev:spawn-thing --at` is refused with a suggestion, but `--wibble 3` places
+  anyway, and `things`, `find-rect`, `site-survey`, `map-view`, `nearest`,
+  `reachable`, `pawns` and `digest` all accept an unknown key silently with
+  valid required args supplied. What shipped is a near-miss detector on an alias
+  list, not unknown-argument rejection. Defensible — the worker's measurement
+  killed the whitelist honestly, and the dangerous half (a key that LOOKS
+  positional) is closed — but it is a scope decision for Evan, so the issue
+  stays open rather than closing against text it does not satisfy.
+- **The rotation search never had to rotate.** Open desert took
+  `defaultPlacingRot` everywhere: 8 candidates, all North, `refusals: []`. The
+  corridor case is unproven and needs a staged fixture.
+- **DISPROVED, in thirty seconds, by accident:** `site-survey` refused an
+  overlapping bench and `dev:spawn-thing --mode direct` **placed it anyway**.
+  Two benches then sat on one standing square, a state no colonist could build,
+  with nothing in the envelope or journal remarking on it. That is `3a5ff6c`'s
+  entire thesis reproduced live, working exactly as Evan ruled it should. Filed
+  as evidence there.
+
+#### Evan's design correction, which retires a mechanism rather than fixing it
+
+> "you should focus on time not ticks silly, if you're that worried, drift will
+> happen if you focus on ticks too much right?"
+
+Check 3.4 — the one check in the suite that **cannot be automated**, because
+`DrainCommands` answers `busy` to every mid-advance command except `pause`, so
+only a human at the keyboard can change the speed — was satisfied for the first
+time today by Dorian pressing `3`:
+`speed_changes: [{tick: 36926, from: "Ultrafast", to: "Superfast", by: "external"}]`,
+with `overshoot_bound: 30` from **Ultrafast** while the advance EXITED at
+Superfast. M1 finding K, correct.
+
+I then tried to re-run it for a formal suite PASS and wasted two of his presses,
+including one where my notification round-trip was slower than the 20-second
+window so he was pressing blind. He stopped it: *"this is dumb, what are you
+even trying to get from this?"* — and he was right; the hand-run envelope already
+carried all four fields the check asserts.
+
+The better answer is his: `advance`'s `until` takes `letter | threat | alert |
+event`, all incident taps, and **has no time condition at all**, so the only way
+to advance a known amount of game time is `--ticks N` — whose overshoot
+accumulates with nothing re-anchoring. `digest.time` already publishes `hour`
+and `day_of_season`, so a clock predicate falls out of **1.6** (`fc287ba`) for
+free, and every example in that issue is a resource; it never mentions the
+clock. With `until {digest.time.hour >= 6}` the overshoot bound stops being a
+correctness property and becomes a precision footnote, because each call
+re-reads the real clock. **The right fix for a permanently-manual check is not
+to automate it; it is to stop depending on what it guards.** Recorded on
+`fc287ba`, including that a clock predicate must halt on an EDGE — `hour >= 6`
+is true all afternoon.
+
+#### Two of my own reads dug the wrong path and printed a confident zero
+
+`things --def X` reports under `rollups`, not `list`, so a one-liner looking for
+`list` said "0 benches" when there were two. And the first suite tally came from
+output piped through `tail -30`, which threw away four phases — **the exact trap
+this file records against session 12** ("reported `EXIT=0` for this command by
+piping it to `tail` and reading tail's status"), committed one session later by
+the person who had just read it. Both caught, neither by the suite. The shape
+discipline `accept/` enforces on checks does not extend to the orchestrator's
+own shell one-liners, and on this evidence it should.
+
+#### Status
+
+`8b4839f` CLOSED. `c718e4a` and `7382bdd` stay OPEN, each with its unmet bullet
+named in its own words. Bench left running and paused at tick 75,223; prefs
+still at 2560x1600 fullscreen, so restore `Prefs.xml.bak-640x480` before any
+unattended run.
