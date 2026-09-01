@@ -107,6 +107,16 @@ namespace AutoRimmer
                 // lazy-init getter it routes around.
                 ["site"] = WorldSafe.Site(map),
                 ["alerts"] = AlertSection(),
+                // WHAT THE COLONY IS BUILDING (git-bug d7c8088). The section
+                // that makes an idle-colonist run diagnosable in one call
+                // instead of none: three colonists standing around with four
+                // blueprints `awaiting_materials` is a different colony from
+                // three colonists standing around with nothing to build, and
+                // until now the glance could not tell them apart. Capped inside
+                // ConstructionVerbs.Section — `Frame.WorkToBuild` is a
+                // GetStatValueAbstract per frame and this verb is called
+                // constantly.
+                ["construction"] = ConstructionVerbs.Section(map),
                 ["colonists"] = ColonistSection(map, colonistCap),
                 ["resources"] = ResourceSection(map),
                 ["power"] = PowerSection(map),

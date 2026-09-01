@@ -481,13 +481,21 @@ namespace AutoRimmer
         // cell and the def being built. Cheap (the table is small) and used by
         // the read to hang a `placement_id` on rows the agent placed, while
         // still reporting the ones it did not.
-        public static Placement For(Thing t)
+        //
+        // `mapHint` EXISTS BECAUSE THE CALLERS THAT NEED IT MOST HAVE A DEAD
+        // THING. `Frame.CompleteConstruction` calls `Destroy()` on itself before
+        // it spawns the building, so in a postfix `Thing.Map` is null while
+        // `Thing.Position` and `Thing.def` are still readable — and without the
+        // hint every completion would fail to match its own placement and the
+        // registry would record nothing. The hooks pass the WORKER's map, which
+        // is the same map and is still alive.
+        public static Placement For(Thing t, Map mapHint = null)
         {
             if (t == null) return null;
             BuildableDef built = t.def?.entityDefToBuild;
             if (built == null) return null;
             int mapId = -1;
-            try { mapId = t.Map?.uniqueID ?? -1; } catch { }
+            try { mapId = t.Map?.uniqueID ?? mapHint?.uniqueID ?? -1; } catch { }
             lock (gate)
                 for (int i = order.Count - 1; i >= 0; i--)
                 {
@@ -500,10 +508,11 @@ namespace AutoRimmer
         }
 
         // Called from the Harmony postfix on `Frame.CompleteConstruction`, which
-        // is the POSITIVE event that turns two absences into one fact.
-        public static Placement NoteCompleted(Frame frame, Thing result, int tick)
+        // is the POSITIVE event that turns two absences into one fact. The frame
+        // is already destroyed by then — see `For`'s `mapHint`.
+        public static Placement NoteCompleted(Frame frame, Thing result, Map map, int tick)
         {
-            var p = For(frame);
+            var p = For(frame, map);
             if (p == null) return null;
             lock (gate)
             {
@@ -513,11 +522,12 @@ namespace AutoRimmer
             return p;
         }
 
-        public static void NoteFailed(Frame frame, int tick)
+        public static Placement NoteFailed(Frame frame, Map map)
         {
-            var p = For(frame);
-            if (p == null) return;
+            var p = For(frame, map);
+            if (p == null) return null;
             lock (gate) p.Failures++;
+            return p;
         }
 
         public static void Clear()

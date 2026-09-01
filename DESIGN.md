@@ -1602,3 +1602,59 @@ queue by default (an agent flailing mid-experiment must not page triage).
   ruling as `BuildableDef.PlaceWorkers`: def-level, keyed on `(entDef, stuff)`,
   never scribed, reset when `Find.Storyteller.difficulty` changes, and filled by
   any hover over the architect menu. `d7c8088`.
+- 2026-09-01 (session 16) — **`construction`'s state precedence is
+  `blocked > in-progress > awaiting-materials > ready`, and the issue's listing
+  order is not it.** `d7c8088` names the four states in the order
+  awaiting-materials / ready / in-progress / blocked and says the value "must be
+  computed, not guessed", but a blueprint can satisfy several at once and nothing
+  said which wins. Resolved: `blocked` first, because nothing can proceed while
+  something is in the way and the remedy is different from every other state's;
+  then `in-progress`, because a pawn already on the job outranks a materials
+  shortfall (the pawn is usually fetching the materials, and reporting
+  `awaiting-materials` would send an agent to solve a problem that is already
+  being solved); then `awaiting-materials`; `ready` is the residual, i.e. stocked
+  and nobody on it, which is the one state that means "give somebody the
+  Construction work type". `d7c8088`.
+- 2026-09-01 (session 16) — **A NAIVE `FirstBlockingThing` REPORTS THE COLONIST
+  WHO IS BUILDING IT, and that is a fourth hazard `d7c8088` does not name.**
+  `RimWorld/GenConstruct.BlocksConstruction` ends
+  `if (t is Pawn pawn && !pawn.IsHiddenFromPlayer()) return true;`, and
+  `FirstBlockingThing(constructible, pawnToIgnore)` is the member BOTH
+  construction work givers call — passing the worker precisely so it is excluded.
+  Called with null it names the builder as the blocker, so a build being worked
+  on right now reads `blocked` and an agent goes to fix nothing. So the worker is
+  identified FIRST (one pass over `AllPawnsSpawned` indexing both `targetA` and
+  `targetB`, because `JobDriver_ConstructFinishFrame` puts the constructible in A
+  while `WorkGiver_ConstructDeliverResources`' HaulToContainer puts it in B) and
+  handed to the call; a Pawn that still comes back is PUBLISHED — it is a true
+  fact about the cell — under `blocking_is_pawn`, and does not set the state.
+  Same family as the three the issue does name: every one is a way for a READ to
+  make a healthy colony look broken. `d7c8088`.
+- 2026-09-01 (session 16) — **`Frame.ThingCountNeededWithEnroute` is not worth
+  its exposure; `EnrouteManager.GetEnroute` is.** `d7c8088` hazard 2 leaves the
+  choice open ("decide on-issue whether `WithEnroute` is worth the exposure or
+  whether `enrouteManager.GetEnroute` should be read directly"). Decided: read the
+  manager. The member's two `Log.Error` branches ARE the arithmetic — negative,
+  and greater than could be needed — so calling it is asking the game to
+  red-error on our behalf and then clamping the answer it already clamped.
+  `Verse.AI/EnrouteManager.GetEnroute(IHaulEnroute, ThingDef, Pawn)` is a
+  `TryGetValue` over a stored lookup with no insert, i.e. the same number that
+  member subtracts, and the clamp is one `Math.Max`. Published as `enroute` and
+  `still_wanted` per material so "we have no steel", "the steel is not in a
+  stockpile" and "somebody is already carrying it" are three distinct answers —
+  the last of which is the difference between a stalled build and a slow one.
+  `missing[]` also carries `in_stockpiles` from `map.resourceCounter`, with
+  DigestVerb's caveat: that counter walks SlotGroup haul destinations, so goods
+  on unzoned ground read as ZERO. `d7c8088`.
+- 2026-09-01 (session 16) — **The journal's `action` type shipped in spec 3.2 and
+  was never documented, and five verbs had been writing it for four sessions.**
+  Found while adding the `construction` row to `JOURNAL.md`'s Types table:
+  `DesignationVerbs`, `AreaVerbs`, `PawnActs`, `StorageVerbs` and `ZoneVerbs` all
+  call `Journal.Emit("action", …)` — the non-`dev` twin of the documented `dev`
+  row, i.e. provenance for a state-mutating PLAYER action — and the table listed
+  eleven types, none of them that one. A consumer written from the doc would have
+  dropped every player mutation on the floor while looking complete. Both rows are
+  in the table now. This is the same failure mode as the `Build:` tally in the
+  workspace CLAUDE.md and as `templates/INDEX.md`'s unpinned orientation: a
+  document that is authoritative by convention and updated by nobody in
+  particular. `d7c8088`, `1adc737`.
