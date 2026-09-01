@@ -275,20 +275,32 @@ namespace AutoRimmer
                         ["available_pawns"] = Names(r.Available, 6),
                         ["candidates"] = Candidates(r, 6),
                     };
-                    if (r.Impaired.Count > 0)
-                    {
-                        var imp = new List<object>();
-                        for (int i = 0; i < r.Impaired.Count && i < 6; i++)
-                            imp.Add(new Dictionary<string, object>
-                            {
-                                ["pawn"] = PawnSafe.Name(r.Impaired[i].Key),
-                                ["missing_capacity"] = r.Impaired[i].Value,
-                            });
-                        // ENABLED AND STILL USELESS. Published separately from
-                        // `available` because `work-priorities` does not fix it
-                        // and surgery might.
-                        d["enabled_but_incapable"] = imp;
-                    }
+                    var imp = new List<object>();
+                    for (int i = 0; i < r.Impaired.Count && i < 6; i++)
+                        imp.Add(new Dictionary<string, object>
+                        {
+                            ["pawn"] = PawnSafe.Name(r.Impaired[i].Key),
+                            ["missing_capacity"] = r.Impaired[i].Value,
+                        });
+                    // ENABLED AND STILL USELESS. Published separately from
+                    // `available` because `work-priorities` does not fix it
+                    // and surgery might.
+                    //
+                    // UNCONDITIONAL, and it was not until session 21. It used
+                    // to be emitted only `if (r.Impaired.Count > 0)`, so an
+                    // absent key meant BOTH "nobody here is impaired" and "this
+                    // build does not publish that key" — the exact conflation
+                    // 61794cd ruled against for `ticks_until_bleedout` (null,
+                    // never omitted, never int.MaxValue) and that `NoStamp()`
+                    // exists for. It cost acceptance check 7.2h, which asked
+                    // for the key on a refusal whose fixture happened to have
+                    // nobody handless ENABLED and read the absence as a missing
+                    // field. Every sibling in this dict — `available_pawns`,
+                    // `candidates` — is already an always-present, possibly
+                    // empty list; this one now matches them. An EMPTY list
+                    // means "no impaired pawn", which is a fact about the
+                    // colony a caller can act on.
+                    d["enabled_but_incapable"] = imp;
                     list.Add(d);
                     continue;
                 }

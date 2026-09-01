@@ -60,6 +60,23 @@ the module-level `advance()` wrapper injects `unread_ok` and
 `through_casualties` with a reason naming this file. `raw_advance()` is the
 un-escaped form and phase 7b is its only caller.
 
+**And the halt is on the TRANSITION, not on the state — ruled 2026-09-01 and
+recorded in DESIGN.** Phase 7b originally read `722c951`'s "an advance
+**spanning** an own-faction downing stops at it" as a condition, staged four
+already-downed colonists, and asserted at 7.6a that an un-escaped advance could
+not complete. It completed (`ok:true reason:"ticks" ticks:300`, s21 bench) and
+the mod was right: `JournalHooks.Patch_MakeDowned`/`Patch_SetDead` are postfixes
+on `Pawn_HealthTracker.MakeDowned`/`SetDead`, so a pawn already down emits
+nothing. A state halt would wedge a ten-day run — on a bedless map every
+casualty is `no-rescuer`, no act clears it, and `through_casualties` is per-call
+and not a mode, so the escape would have to ride on every advance forever. Phase
+7b now asserts both halves: **7.5a** that the already-down STATE does not halt
+(the anti-wedge property), **7.6** that a downing armed *inside* the advance
+does, using `722c951`'s own `journal-selftest --steps down-at` fixture, and
+**7.7** the same span with the escape on — same fixture, same bound, the escape
+the only variable. **9.12a** re-derives the transition claim out of
+`JournalHooks.cs` so a hook moved onto `Pawn.Downed` fails offline.
+
 ---
 
 ## The fixture, in the order the driver builds it
@@ -80,6 +97,7 @@ Everything below is done BY THE DRIVER. Nothing here is a manual step except
 | the union | 6 | `dev:add-hediff {def:"Anesthetic", severity:1}` on the patient; `{def:"Flu", severity:0.4}` on the sick one | see "the union" below |
 | the bed | 6 | `dev:spawn-thing {def:"Bed", stuff:"WoodLog", pos:"pawn:<bleeder>", mode:"direct"}` | see "the bed" below |
 | the M1 end-state | 7 | `dev:damage {mode:"until-downed", allow_bleeding:false}` on everyone but two | the only arrangement in which `work-cover` can refuse |
+| a downing INSIDE an advance | 7b | `journal-selftest {steps:["down-at"], down_delay_ticks:400, down_pawn:<id>}`, twice | the ONLY way to drive the casualty halt from outside the game: it arms from the command drain and FIRES from `GameComponentTick`, i.e. inside `DoSingleTick`, inside the advance. A `dev:damage` sent over the protocol lands while the game is PAUSED and proves nothing about an advance halting. Once un-escaped (7.6), once escaped (7.7) — same span, the escape the only variable |
 
 ### `--quicktest` map vs a real colony
 
@@ -87,7 +105,7 @@ Everything below is done BY THE DRIVER. Nothing here is a manual step except
 |---|---|
 | 0, 1, 2, 3, 4, 5 | **either.** A bare `--quicktest` map is fine; the driver spawns its own colonists |
 | 6 | **either, but the no-bed half only fires on a bedless map.** On a `--quicktest` map checks 6.4a–6.4f assert the `no-bed` refusal live; on a colony that already has beds they degrade to a NOTE and phase 9 asserts the banked version instead |
-| 7 | **either** |
+| 7 | **either**, but phase 7b needs `journal-selftest --steps down-at` (dev-gated, `722c951`'s fixture) and two colonists still standing when phase 7 has finished downing the rest. Without it 7.5a still runs and 7.6/7.7 degrade to a NOTE |
 | 9 | **no bench at all** |
 
 A `--quicktest` map is the better bench for this suite, precisely because it has
@@ -127,6 +145,23 @@ s21 bench (`accept/runs/s21-20260901/18-triage-downed.json`), and it would cost
 a session to discover from inside a suite. The driver asserts that state
 deliberately at 6.4, THEN spawns one bed.
 
+**`no-bed` is not what EVERY candidate reads, and 6.4 used to assume it was.**
+`TakeToBedGate("rescue", …)` opens on `HealthAIUtility.CanRescueNow` ->
+`WantsToBeRescued`, whose FIRST clause is `!pawn.Downed`; the bed lookup is its
+LAST. So the refusal depends on the PATIENT:
+
+| patient | what every candidate that clears `ProviderGate` reads |
+|---|---|
+| DOWNED, not in bed (the anaesthetised one) | `no-bed` — the sentence above |
+| STANDING (the bleeder, the sick one) | `cannot-rescue` — nobody carries a pawn who is on their feet |
+
+Both are `no-rescuer` verdicts and both are honest answers to "why is nobody
+coming"; they are simply different answers. 6.4a asserts the verdict across
+**every** casualty, 6.4b2 asserts the standing half by name, and 6.4c/6.4d pick
+the DOWNED row rather than `casualties[0]` — which this fixture makes the
+standing bleeder, and which is how the pair failed on the s21 bench while the
+mod was correct.
+
 The bed goes on the **bleeder's** cell (`pos:"pawn:<id>"`, `mode:"direct"`),
 because `in-time` is only an honest verdict when the carry leg is real, and
 `mode:"near"` would slide the bed somewhere nobody asked about (GenPlace's
@@ -148,7 +183,7 @@ radial search).
 | a roster change below the floor promotes the best capable pawn, journalled as an act | 40ed42f | 5 | 5.3a–5.3h for the promotion and the independent digest; **5.4a–5.4d read the act out of the LEDGER**, not out of the verb's own stamp |
 | when NO capable pawn remains the verb refuses explicitly | 40ed42f | 7 | 7.2 (`too-few-candidates`) and 7.3 (`no-candidate`), each with the counts that decide the follow-up |
 | a downed colonist with a capable rescuer causes a forced `rescue`, journalled, not a priority change | 40ed42f | 6 | 6.9 asserts `act`'s shape, **6.10 SENDS IT VERBATIM** and asserts `job_def:"Rescue"` and a journal seq |
-| no capable rescuer: the procedure says so explicitly | 40ed42f | 6 | 6.4a–6.4f, the `no-bed` case, in the game's own sentence |
+| no capable rescuer: the procedure says so explicitly | 40ed42f | 6 | 6.4a–6.4f — `no-bed` on the downed row in the game's own sentence, `cannot-rescue` on the standing one |
 | `checklists/` item 7 shrinks; `[[one-doctor-is-zero-doctors]]` keeps only the WHY | 40ed42f | — | done in this branch, not by the suite |
 | the advance refusal when travel exceeds the clock | 40ed42f | — | **not built** — `52606d1` deliberately left part 3 to `722c951`'s machinery. `triage` publishes both numbers and the verdict; phase 6.7 asserts the comparison |
 | replay tick 231,968 and show the procedure reaches for `rescue` | 40ed42f | 6 | reconstructed, not replayed — same reason as 61794cd's replay bullet |
@@ -257,7 +292,7 @@ next session to ignore its own colour. All three are filed on the issues.
 | id | what |
 |---|---|
 | **3.7** | `digest.work_coverage.order` says `"under-first, then natural-priority-desc"`, but `WorkCoverage.Section` emits rows in ONE pass over the natural-priority-sorted list and appends under-rows **inline**. On the banked s21 digest the only UNDER row (`Doctor`) is at index **1**, behind `Firefighter`. A caller trusting the string reads `rows[0]` as the worst problem. Phase 9's 9.6f re-asserts it from the banked envelope so it cannot be argued away |
-| **4.7** | `enabled_but_incapable` is built inside `if (r.Under)`, so a colony with two available doctors and a handless third is never told about the third. Arguably correct (it is a diagnosis of a problem, and there is no problem) — but "you have a doctor who cannot tend" is the class of thing the M1 post-mortem exists about |
+| **4.7** | `enabled_but_incapable` is built inside `if (r.Under)`, so a colony with two available doctors and a handless third is never told about the third. Arguably correct (it is a diagnosis of a problem, and there is no problem) — but "you have a doctor who cannot tend" is the class of thing the M1 post-mortem exists about. **Still open, and deliberately narrower than it was:** the INNER guard `if (r.Impaired.Count > 0)` was a different defect and is fixed — the list is now always present, empty when nobody is impaired (7.2h, 3.3q, 9.8d, 9.11a). What 4.7 still asks is whether a COVERED row should carry the diagnosis at all, which is the digest's three-field byte budget and is a design decision, not a shape bug |
 | **5.2c** | a clean `dry_run` reports `action.journal_seq: 0` carrying `Stamp(0)`'s sentence *"NOT WRITTEN — the journal writer is closed"*. The writer is not closed and nothing was mutated: the emit guard is `(repaired>0 && !dryRun) \|\| stillUnder>0`. `NoStamp()` is the shape this case wants |
 
 Plus one the orchestrator filed first and this suite deliberately does not

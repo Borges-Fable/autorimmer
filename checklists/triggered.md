@@ -71,7 +71,10 @@ to execute.
    available pawn in the game's own order and journals the decision as an act.
    A `still_under` row means the roster cannot answer: `no-candidate` means
    recruit or heal, `too-few-candidates` means the colony is too small, and an
-   `enabled_but_incapable` list means the fix is surgery. The floors come from
+   `enabled_but_incapable` list means the fix is surgery. That list is always
+   present on a diagnosed row — **empty** means nobody enabled is missing a
+   capacity, so branch on whether it has entries, never on whether it is
+   there. The floors come from
    `WorkTypeDef.requireCapableColonist` (the game's own list, floor 1 on
    capability) plus **Doctor at 2, on availability** — the one deviation, and
    the reason for it is [[one-doctor-is-zero-doctors]]. This item is now a
