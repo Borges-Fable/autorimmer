@@ -54,6 +54,12 @@ before acting on a new one, or the new one starts unlearned
    | knowledge-wrong | a lesson pointed at the wrong symptom | correction per the conflict rule below |
    | execution-slip | the playbook was right and unfollowed | 4.2 compliance finding, not a new artifact |
 
+   **The class picks the typical output; determinism overrides it.** Where
+   every branch of the response is computable from state the observers
+   already publish, the output is a mod procedure regardless of class — see
+   step 5. `no-signal` and `policy-gap` are the two rows that most often
+   qualify.
+
 4. **The wealth check — mandatory for any prevention that adds wealth.**
    Raid points scale with colony wealth (`StorytellerUtility
    .DefaultThreatPointsNow` over `PointsPerWealthCurve`): "we died, build
@@ -64,17 +70,24 @@ before acting on a new one, or the new one starts unlearned
    (`HistoryAutoRecorder`) — once 2d9a1da reads them out, plot the actual
    curve instead of arguing about it. [[wealth-buys-bigger-raids]]
 
-5. **Land the outputs at the lowest rung that removes the cause** (ladder
-   below), in one commit: the artifact, its INDEX or checklist line, and —
-   if a daily item went over cap — the recorded merge-or-retire that made
-   room (4.4). Then verify each output surfaces at its
-   `playbook/SESSION-START.md` position; an output the next session won't
-   load is not landed.
+5. **Land the outputs at the lowest rung that removes the cause — except
+   that a DETERMINISTIC finding goes in the mod** (Evan, 2026-09-01; DESIGN
+   decisions log). If every branch of the response is computable from state
+   the observers already publish, the output is a mod procedure plus its
+   spec issue, whatever lower rung would also have "worked". Notes get
+   ignored: a rung that only asks the next session to remember is the
+   failure this document exists to remove. The playbook keeps the WHY and
+   the policy flags; the mod executes. Land it in one commit: the artifact,
+   its INDEX or checklist line, and — if a daily item went over cap — the
+   recorded merge-or-retire that made room (4.4). Then verify each output
+   surfaces at its `playbook/SESSION-START.md` position; an output the next
+   session won't load is not landed.
 
 ## The ladder, with promotion criteria
 
 Each rung is a floor, not a queue — a finding may enter at any rung it
-already qualifies for.
+already qualifies for. Determinism is the one thing that is not a floor but
+a *duty*: a computable response does not get to stop lower down (step 5).
 
 - **observation → prose lesson** when it survives verification (source read
   or bench observation, cited), and is not derivable from what every session
@@ -92,9 +105,10 @@ already qualifies for.
   template-built instances in the same commit — escalation removes (4.4).
   The popper is the worked example: `templates/power-room` carries it, and
   the daily check now applies only to rooms built otherwise.
-- **checklist/procedure → mod** when every branch is computable from state
-  the observers already publish (DESIGN 2026-08-31: "deterministic goes in
-  the mod; the playbook carries judgement"). The playbook keeps the WHY and
+- **checklist/procedure → mod** — MANDATORY, not merely available, when
+  every branch is computable from state the observers already publish
+  (DESIGN 2026-08-31: "deterministic goes in the mod; the playbook carries
+  judgement"; ratified over the lowest-rung rule 2026-09-01). The playbook keeps the WHY and
   the policy flags; the mod executes. "Changing it needs a rebuild" is the
   rigour, not the cost. If one branch needs a read that doesn't exist,
   the answer is to NAME the missing read and file it — not to keep the
