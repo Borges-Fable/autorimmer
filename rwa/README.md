@@ -368,6 +368,69 @@ at 8000px, and it is worth respecting: a very large PNG is also the wrong thing
 to hand an agent, because it gets downsampled and the glyphs stop being readable
 before the guard ever trips.
 
+## `rwa place-layout` — the IR half of spec 3.3
+
+Spec 3.3. **The mod never sees a layout file, a path or a token grid.** This
+command reads the IR with `baseviz/ir.py` — the module that already IS the
+dialect — and sends ONE `place-layout` call carrying a resolved list of
+`{def, at, rot?}`.
+
+```bash
+rwa place-layout templates/bedroom.ir.json --origin 120,130 --stuff '*=WoodLog'
+rwa place-layout templates/power-room.ir.json --origin 200,200 --dry-run
+rwa place-layout templates/bedroom.ir.json --origin 120,130 --mode instant
+rwa place-layout templates/bedroom.ir.json --origin 1,1 --print-payload   # offline
+```
+
+**One call, not N `build` calls, and that is the whole design.** The invariant
+is "preflight every cell first; on any failure place NOTHING", and it cannot
+hold across N transactions — a half-built room is reachable between any two of
+them. So the whole layout goes in front of the gate at once, and without
+`--partial` a single refusal places nothing at all. The per-cell failures come
+back in `Blockers`' `{removal, reason}` shape, so a refused layout reads like a
+refused `site-survey` and the agent can choose between "clear this and retry"
+and "site it elsewhere".
+
+Three coordinate facts, and getting any of them wrong puts a room somewhere you
+did not mean:
+
+- **`--origin` is the layout's SOUTH-WEST corner**, deliberately the same corner
+  `find-rect` returns as `at` and `[x,z,w,h]` carries as `x,z`. So
+  `rwa find-rect --w 5 --h 7` and `rwa place-layout … --origin <its at>` name
+  the same ground.
+- **Row 0 of the grid is NORTH** (`baseviz/ir.py`'s pinned docstring), so a cell
+  at grid `(r,c)` is `(ox + c, oz + h - 1 - r)`.
+- **Each element's `at` is its footprint's north-west cell**
+  (`templates/INDEX.md` pin 1). The mod converts north-west → south-west → the
+  game's placement CENTRE, because that needs the def's ROTATED size, and the
+  def database is not on this side of the bridge. Every placement comes back
+  with all three — `at`, `pos` and `footprint` — so they can never be confused.
+
+**A rotation suffix is split; a material suffix is not.** Only the four `Rot4`
+words (`_North/_East/_South/_West`) come off a token, because that is what the
+suffix MEANS (`INDEX.md` pin 2: the `Rot4` value verbatim, not which way the
+thing faces). A KCSG-style `Wall_WoodLog` goes over as a def name and the mod
+refuses it by name — telling a material from a def needs the def database, and a
+silent split would invent a def. Bind material with `--stuff DEF=STUFF` (repeat
+it; `*` is the default for every stuffable def not named) or `--stuff-map
+JSON|@file`; `--strict-stuff` refuses to fall back to the game's default at all.
+
+**The roof grid is reported, not sent.** A roof is a DESIGNATION, not a
+placement, and an enclosed room under 320 cells roofs itself next tick anyway
+(`AutoBuildRoofAreaSetter`). `--roof` sends `area {kind:"build-roof"}` as an
+explicit SECOND call, outside the transaction.
+
+`--print-payload` resolves a layout with no bench at all and prints the JSON —
+the same argument `render --dump` makes, and the way to review what a template
+expands to before placing it. `--save-payload FILE` banks it for
+`rwa send place-layout --args-json @FILE`. `rwa send` also reaches the raw verb
+directly, which is what an acceptance suite building its own payload wants.
+
+Undo is `rwa cancel-layout --layout_id ly-N` (or `--placement_id pl-N` for one
+element), which points `Designator_Cancel` at that transaction's own blueprints
+and frames — never at their cells, which would also remove every cancelable
+designation there.
+
 ## Environment
 
 | var | what | default |
@@ -391,6 +454,13 @@ minimum file age, the same consume-before-execute, the same envelope, the same
 id sanitisation — so the client cannot tell it apart, and every failure mode is
 a flag instead of a race: a stale heartbeat, a live heartbeat over a starved
 frame loop, a timeout, a mangled result, each error code in the taxonomy.
+
+§13 covers `place-layout`'s IR expansion the same way, and is scoped just as
+narrowly on purpose: `--print-payload` resolves a layout with no bench in the
+loop, so the coordinate map, the token split, the stuff-map merge and the
+argument refusals are settled offline — and nothing else about `place-layout`
+is. Whether the game ACCEPTS any of it is `accept/1adc737-place-layout.py`, on
+a bench.
 
 **What the self-test does not prove**: the live round-trip against a running
 game, and `rwa watch` actually moving a window and re-capping a live process.

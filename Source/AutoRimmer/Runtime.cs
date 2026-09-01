@@ -48,6 +48,7 @@ namespace AutoRimmer
             // (an advance resuming against the next colony). Touches no Verse,
             // so it is safe on either thread. See Placements' header.
             Placements.Clear();
+            Layouts.Clear();
             if (TimeDriver.Abandon(Err.NoActiveGame, detail)) answered++;
             while (Pending.TryDequeue(out var cmd))
             {

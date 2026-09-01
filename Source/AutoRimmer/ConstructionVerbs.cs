@@ -577,7 +577,7 @@ namespace AutoRimmer
             catch { return 0f; }
         }
 
-        private static int Stored(Map map, ThingDef def)
+        internal static int Stored(Map map, ThingDef def)
         {
             try { return map.resourceCounter.GetCount(def); }
             catch { return 0; }

@@ -191,6 +191,13 @@ namespace AutoRimmer
             }
 
             // ------------------------------------------------------ place ----
+            // THE SEQUENCE BELOW IS DUPLICATED IN `LayoutVerbs.Place`, and that
+            // file's own comment carries the argument. Short version: the two
+            // reusable pieces (`ReplaceableFrames`, `PlaceZeroWork`) are shared;
+            // the ORDER is not, and the copies have already diverged twice. If
+            // you change anything here, change it there — or better, extract it,
+            // which is owed and wants a round that ends at a bench because this
+            // verb is bench-proven and that one is not yet.
             string mode;
             Thing produced = null;
             var cleared = new List<object>();
@@ -320,7 +327,7 @@ namespace AutoRimmer
         // is spelled out rather than routed through
         // `GenCollection.NotNullAndContainsAnyElement` so a null on either side
         // is visibly a no-match rather than a silent extension-method behaviour.
-        private static List<Thing> ReplaceableFrames(Map map, BuildableDef def, IntVec3 pos)
+        internal static List<Thing> ReplaceableFrames(Map map, BuildableDef def, IntVec3 pos)
         {
             var found = new List<Thing>();
             var mine = def.blueprintDef?.replaceTags;
@@ -341,7 +348,7 @@ namespace AutoRimmer
         // three-way terrain set is the game's own order, and
         // `RemoveTopLayer(c, !godMode)` becomes `RemoveTopLayer(c, true)` — the
         // player's case, which drops the removed floor's leavings.
-        private static Thing PlaceZeroWork(Map map, BuildableDef def, ThingDef stuff,
+        internal static Thing PlaceZeroWork(Map map, BuildableDef def, ThingDef stuff,
             IntVec3 pos, Rot4 rot)
         {
             if (def is TerrainDef terrain)
@@ -449,8 +456,13 @@ namespace AutoRimmer
                 // A zero-work placement is BUILT the moment it returns; there is
                 // no blueprint and no frame to wait for, and reporting it as
                 // "blueprint" would make `construction` lie about a thing that
-                // is standing there.
-                if (mode == "instant-zero-work")
+                // is standing there. `place-layout`'s instant mode is the same
+                // case and MUST be here: it spawns the finished thing, and for a
+                // TerrainDef it produces no Thing at all, so without this
+                // `Answer`'s live look finds nothing, falls through both
+                // positive branches and reports a floor that is on the ground as
+                // `cancelled`.
+                if (mode == "instant-zero-work" || mode == StateInstant)
                 {
                     p.CompletedTick = p.Tick;
                     p.BuiltId = produced?.thingIDNumber ?? -1;
@@ -538,6 +550,34 @@ namespace AutoRimmer
             {
                 order.Clear();
                 byId.Clear();
+            }
+        }
+
+        // Un-record a placement that was ROLLED BACK, i.e. one this session
+        // made and then destroyed inside a single call.
+        //
+        // WHY THIS IS NOT THE SAME AS LEAVING IT TO `Answer`. For a blueprint
+        // the live look would find nothing and the residual `cancelled` would
+        // be honest. For an INSTANT placement it would not: `Record`'s
+        // built-on-arrival branch sets `CompletedTick`, and `Answer` reaches
+        // `built` on `CompletedTick > 0` BEFORE it can reach `cancelled` — so a
+        // wall that was spawned and then vanished half a millisecond later
+        // would report `state: "built"` for the rest of the session, and
+        // `cancel-layout` would answer "already-built — this build finished".
+        // The completion record is exactly what makes that unrecoverable, which
+        // is the same property that makes it useful everywhere else.
+        //
+        // Only ever called for ids the caller itself minted and then undid;
+        // nothing else may remove a placement, because an id that vanishes is
+        // indistinguishable from one that never existed.
+        public static void Forget(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return;
+            lock (gate)
+            {
+                if (!byId.TryGetValue(id, out var p)) return;
+                byId.Remove(id);
+                order.Remove(p);
             }
         }
 

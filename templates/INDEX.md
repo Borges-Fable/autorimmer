@@ -68,6 +68,18 @@ parameter channels that already exist at the placement verb (3.3):
   material, the .md carries a `constraint:` line (power-room walls must be
   Flammability 0) — a constraint violation is a reason to refuse, and 3.3's
   stuff resolution is already required to be explicit, never silent.
+
+  **This is now enforced by the client refusing to guess.** `rwa place-layout`
+  splits ONLY the four `Rot4` words off a token, so a KCSG-style
+  `Wall_WoodLog` is sent as a def name and the mod refuses it by name ("no
+  ThingDef or TerrainDef named 'Wall_WoodLog'"). Telling a material suffix from
+  a def name needs the def database, which lives on the other side of the
+  bridge, and a silent split would invent a def. The stuff-map format is
+  `defName -> stuff defName` with `*` as the default for every `MadeFromStuff`
+  def it does not name; an element's own `stuff` beats both; and each placement
+  publishes `stuff_source` (`element` | `stuff_map` | `stuff_map:*` |
+  `game-default`) so a default is named rather than silent. `strict_stuff:true`
+  refuses to default at all.
 - **variants** — a genuinely different size is a second `.ir.json` beside the
   first, sharing the .md. Scaling RULES (what a bigger freezer must preserve)
   live in the .md as prose, because they are judgement, which is what this
@@ -77,17 +89,38 @@ If freeform resizing turns out to be wanted, the generator belongs beside the
 consumer — `rwa`/3.3, where python already lives — consuming these .md rules.
 Do not invent a template interpreter ahead of the need.
 
-## Proposed dialect pins (3.3's "IR dialect delta" question)
+## Dialect pins — ALL FOUR NOW PINNED (3.3's "IR dialect delta" question)
 
-Four ambiguities ir.py leaves open, resolved here as PROPOSALS — 3.3 pins or
-overrides them, and each template's .md prose is normative meanwhile:
+Four ambiguities `ir.py` left open. They were PROPOSALS here until 2026-09-01;
+**3.3 has now shipped `place-layout` against all four and pins them**, so this
+section is normative rather than provisional. Where the verb's behaviour and
+this list ever disagree, the verb is the thing that runs:
+`Source/AutoRimmer/LayoutVerbs.cs`'s class header carries the reasoning and the
+member citations, and DESIGN's decisions log (2026-09-01, session 17) carries
+the rulings.
 
 0. **Row 0 = north — PINNED**, no longer a proposal. The one above;
    restated here so a reader of this section alone does not miss it. `ir.py`
    now says so in its own docstring.
-1. **Multi-cell anchor**: the token sits in the footprint's north-west cell;
-   remaining cells are `.`. (A token per occupied cell would make stuff-maps
-   and diffs ambiguous.)
+1. **Multi-cell anchor — PINNED.** The token sits in the footprint's
+   north-west cell; remaining cells are `.`. (A token per occupied cell would
+   make stuff-maps and diffs ambiguous.)
+
+   `place-layout` implements exactly this and publishes it as
+   `anchor: "north-west"` on every call. Note that it is deliberately NOT the
+   corner `build --at` and `find-rect` use, which is the SOUTH-WEST corner —
+   `[x,z,w,h]`'s own `x,z`. The two cannot be unified, because converting
+   north-west to south-west needs the def's ROTATED size (the game's
+   `AdjustForRotation` axis swap), and `rwa` has no def database. So the
+   conversion happens mod-side, and every placement publishes `at` (the token
+   cell), `pos` (the game's placement centre) and `footprint` (`[x,z,w,h]`,
+   south-west anchored) so the three can never be confused.
+
+   The `Bed` is what makes a wrong conversion visible: it is size (1,2), so its
+   north-west cell and its south-west corner differ by exactly one, and a
+   conversion that read the token as the south-west corner would put
+   `bedroom`'s bed through the north wall. `accept/1adc737-place-layout.py`
+   check 2.4 asserts the footprint by coordinate for that reason.
 2. **Rotation suffix — PINNED, and tightened.** `_North/_South/_East/_West`
    is the **`Rot4` value, verbatim**, as the game names it and as `map-dump`
    publishes it. It is NOT a description of which way the thing faces.
@@ -108,9 +141,29 @@ overrides them, and each template's .md prose is normative meanwhile:
    field, never through a description. Where a template's .md wants to say
    which way something faces, it says it in the .md — that is what the .md is
    for.
-3. **Layer order**: `layers[0]` = buildings and furniture, `layers[1]` =
-   conduits. Build order inside a layout (walls → door → roof → furniture) is
-   3.3's open question, not encoded here.
+3. **Layer order — PINNED**: `layers[0]` = buildings and furniture,
+   `layers[1]` = conduits.
+
+   **Build order inside a layout is resolved and is NOT encoded here**, because
+   it turned out not to be a property of the layout at all.
+   `place-layout` places TERRAIN FIRST and everything else in the caller's
+   order, and that is the whole rule. Terrain first because
+   `GenConstruct.CanPlaceBlueprintAt`'s occupancy loop refuses a floor asked
+   for under a building whose affordance the floor does not provide, while the
+   same building over the same floor is governed by `CanPlaceBlueprintOver`'s
+   `CoexistsWithFloors` branch and is not — an asymmetric rule whose safe half
+   is floor-first. Everything else is SYMMETRIC: a conduit may go under a wall
+   and a wall over a conduit (`canBuildNonEdificesUnder` /
+   `IsEdificeOverNonEdifice`, which is why `power-room`'s deliberate conduit in
+   a wall cell works either way), two edifices in one cell fail both ways, and
+   the two interaction rules refuse in both directions. A layout that violates
+   them is a broken layout, not a mis-ordered one — so "walls → door → roof →
+   furniture" buys nothing, and the template corpus needs no order field.
+
+   Nor does the mod stage the work: `WorkGiver_ConstructDeliverResources` and
+   `WorkGiver_ConstructFinishFrame` have no notion of walls-before-furniture,
+   so staging could only mean withholding blueprints from the colony, which is
+   a scheduler the game does not have.
 
 ## Validation
 
@@ -124,9 +177,14 @@ Firefoam + construction 5). Conduits added session 10: `PowerConduit` 1×1,
 `ParentName="PowerConduit"`, so it transmits power but is never in
 `ShortCircuitUtility.GetShortCircuitablePowerConduits`, which matches
 `ThingsOfDef(ThingDefOf.PowerConduit)` by def. Both inherit **Electricity**
-and neither adds a further research gate. The enforcing check is still 3.3's preflight —
-every cell validated before anything places, per-cell failures in the
-`removal`/`reason` shape, nothing placed on any failure. A wrong claim in
+and neither adds a further research gate. The enforcing check is 3.3's preflight, which now
+ships: every cell validated before anything places, per-cell failures in the
+`removal`/`reason` shape, nothing placed on any failure. It is worth running
+the corpus through it once as a CORPUS CHECK rather than only per-placement at
+play time — `rwa place-layout <template> --origin P --dry-run` does exactly
+that, and it is the check that would have caught `FueledStove_South` from the
+game's side (`CanPlaceBlueprintAt` runs `InteractionCellStandable`) rather than
+from a reading of the pin. A wrong claim in
 these files fails loudly at preflight, not silently on the map. Research
 gates are widget gates: `build`/`place-layout` must refuse unresearched defs
 (DESIGN §Action model), so a template listing a gated def is honestly
