@@ -829,6 +829,47 @@ def phase1():
         shape("1.6l", "the journal row", row, "payload.failed.0.cell", list)
         shape("1.6m", "the journal row", row, "payload.failed.0.cell_role")
 
+    # 1.8 THE TYPO THAT REPORTED SUCCESS (git-bug 7382bdd). `at` is
+    #     dev:spawn-thing's own OUTPUT key and the obvious guess for its input;
+    #     `Dev.PosArg` used to read `pos`, get null, and silently return the
+    #     colony anchor, so three consecutive spawns aimed at [999,999],
+    #     [107,119] and [90,90] all landed at [125,129] and all reported
+    #     ok:true, placed:1. The refusal must NAME the key and SUGGEST the
+    #     right one.
+    e = send("dev:spawn-thing", {"def": "WoodLog", "count": 1, "at": cell,
+                                 "mode": "direct"})
+    eq("1.8a", "an unknown cell-argument name is refused, not defaulted",
+       e, "ok", False)
+    eq("1.8b", "…as bad-args", e, "error.code", "bad-args")
+    detail = str(dig(e, "error.detail", ""))
+    contains("1.8c", "the refusal names the key that was not read", detail, "'at'")
+    contains("1.8d", "…and suggests the one that would have been", detail, "'pos'")
+    # A refused call must not have MUTATED anything: a failed envelope carries
+    # no data at all, and the guard fires before ThingMaker is ever reached.
+    absent("1.8e", "a refused call publishes no data block", e, "data")
+
+    # 1.9 AND WHEN THE DEFAULT LEGITIMATELY FIRES, IT SAYS SO. The narrow fix's
+    #     other half: `pos_source` is in the envelope AND in the journal row, so
+    #     "the caller's coordinates" and "the colony anchor" never read alike.
+    e = send("dev:spawn-thing", {"def": "WoodLog", "count": 1, "pos": cell,
+                                 "mode": "direct"})
+    shape("1.9a", "dev:spawn-thing", e, "data.pos_source")
+    eq("1.9b", "a cell that came from the argument says so",
+       e, "data.pos_source", "arg")
+    row = journal_row(dig(e, "data.dev.journal_seq"), ["dev"])
+    eq("1.9c", "and the ROW carries it, because the row is the durable record",
+       row, "payload.args.pos_source", "arg")
+    ids = [d.get("id") for d in as_list(dig(e, "data.spawned")) if isinstance(d, dict)]
+    if ids:
+        send("dev:destroy", {"things": ids})
+
+    e = send("dev:spawn-thing", {"def": "WoodLog", "count": 1, "mode": "direct"})
+    eq("1.9d", "…and a cell that came from the colony anchor says THAT",
+       e, "data.pos_source", "anchor-default")
+    ids = [d.get("id") for d in as_list(dig(e, "data.spawned")) if isinstance(d, dict)]
+    if ids:
+        send("dev:destroy", {"things": ids})
+
     # 1.7 tidy: the staged log is left where it is (it is one wood log), but the
     #     run must not have raised a red error doing any of this.
     no_red_errors("1.7", "zero red errors across the spawn-refusal phase")

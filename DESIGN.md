@@ -1402,3 +1402,47 @@ queue by default (an agent flailing mid-experiment must not page triage).
   that defect at scale. `rejected` tallies the game's own sentences, `refusals`
   carries a few worked examples, and one `site-survey` on a chosen candidate
   names the cells for real. `c718e4a`, `8b4839f`.
+- 2026-09-01 (session 15) — **The per-verb argument whitelist was ATTEMPTED and
+  REJECTED ON MEASUREMENT; `7382bdd` ships its narrow half, and the measurement
+  is the finding.** `7382bdd` comment #1 pre-authorized either shape and named
+  the fallback trigger: "a verb that forwards args to a sub-verb ... is the
+  whitelist being too invasive, and one such case is enough to take the fallback
+  for the whole change". The audit found not one case but a structural one.
+  Measured against the shipped tree and the shipped suites, statically, because
+  a worker never launches a bench:
+  **120 registered verbs. 22 handlers read no argument at their own call sites**
+  — some take none, the rest forward `ctx.Args` wholesale into a helper
+  (`advance` into `TimeDriver.Start`, `bill-set` and `bill-remove` into
+  `BillVerbs`' helpers, `draft`/`undraft`/`clear-priority-work` into
+  `PawnOrderVerbs`', and fifteen more). **88 (verb, key) pairs that the shipped
+  suites actually send, across 53 verbs, are read through shared helpers rather
+  than at the handler** — `pawns`, `pawn`, `thing`, `target`, `bench`, `ticks`,
+  `max_tps`, `letter`, `quest`, `kind`, `rect`, `targets` and the rest, every one
+  legitimate. **And five suite call sites build their argument dict at RUNTIME**
+  (`advance`, `designate`, `quest-accept`, `surgery-add`, `things`), so a
+  whitelist cannot be validated statically at all.
+  So a declared arg set could be neither derived from the code nor checked
+  against it — it would be a second source of truth over 120 verbs, and this
+  repo has a worked example of what that costs: the `Build:` tally in the
+  workspace CLAUDE.md went stale three times in one day and misled two review
+  agents. Worse, its drift mode is asymmetric in the wrong direction: a missing
+  declaration REFUSES a legitimate call, mid-run, on a live bench. Shipping that
+  unmeasured against a ten-day run is not a trade this project makes.
+  **What ships instead is the narrow fix, sharpened.** `Dev.PosArg` publishes
+  `pos_source` (`arg` | `anchor-default` | `stockpile`) into both the envelope
+  and the journal row for `dev:spawn-thing` and `dev:spawn-pawn` — so the
+  fallback is never silent even when it was intended — and it REFUSES a near
+  miss rather than defaulting past it: `at`, `cell`, `position`, `loc`,
+  `location` and `where` are read by nothing that defaults a cell (audited over
+  all six `PosArg` call sites and over `StarterKit`'s and `world-fixture`'s
+  forwarded dicts, which pass only `pos` and `around`), so one of them arriving
+  is unambiguously a caller mistake. That satisfies the issue's own worked
+  example — `at` -> `pos` on `dev:spawn-thing`, which is the call that produced
+  three wrong results in a row on bench 20260901T121508 — at the entry point of
+  the one argument whose default is dangerous, with the check exposed as
+  `VerbArgs.NearMiss(key, aliases)` so any verb with a defaulted positional
+  adopts it in one line. **Aliases are supplied by the call site and never
+  guessed globally**: a list that overlapped a real argument name elsewhere
+  would refuse a CORRECT call, which is a worse bug than the one being fixed —
+  and `site-survey` reading both `pos` and `at` legitimately is the live proof
+  that such overlaps exist. `7382bdd`.

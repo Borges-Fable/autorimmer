@@ -216,11 +216,44 @@ namespace AutoRimmer
         // Position with a default. dev verbs default to the colony anchor
         // rather than refusing, because a fixture that has to compute its own
         // coordinates is a fixture nobody writes.
+        //
+        // TWO GUARDS ON THAT DEFAULT (git-bug 7382bdd). A default that fires on
+        // a typo is worse than no default: it turns a caller error into a
+        // plausible-looking result, and the result is journalled as though it
+        // were intended. On bench 20260901T121508 three consecutive
+        // `dev:spawn-thing` calls aimed at [999,999], [107,119] and [90,90] all
+        // landed at [125,129] and all reported `ok:true, placed:1`, because the
+        // cell argument had been spelled `at` — which is this verb's own OUTPUT
+        // key and the obvious guess. Nothing in any envelope said an argument
+        // had been dropped, and the wrong conclusion drawn from it ("direct mode
+        // ignores its cell argument") was filed as a bug.
+        //
+        //  1. A NEAR MISS IS REFUSED, never defaulted. The alias list below is
+        //     read by nothing that calls this helper — audited 2026-09-01 over
+        //     all six call sites AND over StarterKit's and world-fixture's
+        //     forwarded arg dicts, which pass only `pos` and `around` — so one
+        //     of those keys arriving here is unambiguously a caller mistake.
+        //  2. THE SOURCE IS PUBLISHED. `source` is "arg" or "anchor-default",
+        //     and the caller puts it in the envelope AND in the journal row, so
+        //     a fallback is visible even when it was intended.
         public static IntVec3 PosArg(Map map, VerbArgs args, string key)
+            => PosArg(map, args, key, out _);
+
+        public static IntVec3 PosArg(Map map, VerbArgs args, string key, out string source)
         {
             object raw = args.Raw(key);
-            return raw == null ? Anchor(map) : Positions.Resolve(map, raw);
+            if (raw != null) { source = "arg"; return Positions.Resolve(map, raw); }
+            args.NearMiss(key, CellAliases);
+            source = "anchor-default";
+            return Anchor(map);
         }
+
+        // Keys that look like a cell argument and are read by no verb that
+        // defaults one. Deliberately NOT `to`, `target`, `from`, `near` or
+        // `around`: those are real argument names elsewhere in the surface, and
+        // a guess list overlapping a real name would refuse a correct call.
+        private static readonly string[] CellAliases =
+            { "at", "cell", "position", "loc", "location", "where" };
 
         // First free colonist, else map centre — pawn-fixture's AnchorCell, kept
         // identical on purpose so both stimulus layers stage in the same place.
@@ -542,21 +575,27 @@ namespace AutoRimmer
             // a starter kit actually wants and coordinates are the fallback.
             string stockpileNote = null;
             IntVec3 target;
+            // WHERE THE CELL CAME FROM, published (git-bug 7382bdd). Three
+            // sources reach `target` and two of them are not the caller's
+            // coordinates, so the envelope and the journal row both say which
+            // one won. "arg" | "anchor-default" | "stockpile".
+            string posSource;
             if (a.Has("stockpile") && !(a.Raw("stockpile") is bool bb && !bb))
             {
                 object raw = a.Raw("stockpile");
                 string wanted = raw as string;
                 target = FindStoreCell(map, def, stuff, wanted, out stockpileNote);
+                posSource = "stockpile";
                 if (!target.IsValid)
                 {
-                    target = Dev.PosArg(map, a, "pos");
+                    target = Dev.PosArg(map, a, "pos", out posSource);
                     stockpileNote = (stockpileNote ?? "no storage accepted it")
                         + "; fell back to " + (a.Has("pos") ? "pos" : "the colony anchor");
                 }
             }
             else
             {
-                target = Dev.PosArg(map, a, "pos");
+                target = Dev.PosArg(map, a, "pos", out posSource);
             }
 
             var spawned = new List<object>();
@@ -695,6 +734,11 @@ namespace AutoRimmer
                     // facing goes in it: a building staged the wrong way round
                     // is invisible in a `placed:1` and permanent in a save.
                     ["rot"] = rot.ToStringWord(),
+                    // Which source `at` above came from. The row is the durable
+                    // record, and a spawn that silently used the colony anchor
+                    // instead of the coordinates it was given is exactly what
+                    // 7382bdd was filed for.
+                    ["pos_source"] = posSource,
                     ["forbid"] = forbid,
                 },
                 ["placed"] = placed,
@@ -732,6 +776,7 @@ namespace AutoRimmer
                 // actually got is in `spawned[].rot`, which is read off the
                 // spawned thing — GenSpawn.Spawn overrides `rot` for those.
                 ["rot"] = rot.ToStringWord(),
+                ["pos_source"] = posSource,
                 ["mode"] = mode,
                 ["spawned"] = spawned,
                 ["dev"] = stamp,
@@ -1171,7 +1216,7 @@ namespace AutoRimmer
             Faction faction = a.Has("faction")
                 ? Dev.FactionArg(a.Str("faction"))
                 : FactionUtility.DefaultFactionFrom(kind.defaultFactionDef);
-            var at = Dev.PosArg(map, a, "pos");
+            var at = Dev.PosArg(map, a, "pos", out string posSource);
             int count = a.Int("count", 1);
             if (count < 1 || count > 20) throw new VerbArgsException("count must be 1..20");
             bool violence = a.Bool("violence_capable", false);
@@ -1224,6 +1269,11 @@ namespace AutoRimmer
                         ["kind"] = kind.defName,
                         ["faction"] = faction?.def?.defName,
                         ["at"] = Positions.Out(at),
+                        // Same guard as dev:spawn-thing's: a fixture that
+                        // silently staged at the colony anchor instead of the
+                        // cell it was given must say so in the durable record
+                        // (git-bug 7382bdd).
+                        ["pos_source"] = posSource,
                         ["count"] = count,
                     },
                     ["ids"] = IdsOf(made),
@@ -1237,6 +1287,7 @@ namespace AutoRimmer
                 ["faction"] = faction?.Name,
                 ["faction_def"] = faction?.def?.defName,
                 ["at"] = Positions.Out(at),
+                ["pos_source"] = posSource,
                 ["spread"] = spread,
                 ["pawns"] = made,
                 ["dev"] = stamp,
