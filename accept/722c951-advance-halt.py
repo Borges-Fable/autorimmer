@@ -316,7 +316,12 @@ def shape(num, verb, env, path, kind=None):
     want = "the key to be present"
     if ok and kind is not None:
         ok = isinstance(dig(env, path), kind)
-        want += " and a %s" % kind.__name__
+        # `kind` may be a tuple of types — `data.halted_seq` is int-or-float,
+        # since MiniJson gives a whole number back as either. tuple has no
+        # __name__, and reaching for it crashed this suite at check 3.14 after
+        # 62 green ones (session 21).
+        want += " and a %s" % (kind.__name__ if isinstance(kind, type)
+                               else "/".join(k.__name__ for k in kind))
     check(num, "`%s` publishes %s" % (verb, path), ok, want, dig(env, path))
     return ok
 
