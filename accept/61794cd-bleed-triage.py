@@ -881,14 +881,21 @@ def phase0():
     # A path that does not resolve is refused AT ARM TIME and names the keys the
     # section really publishes — which is also the proof the section is
     # registered, since an unregistered one refuses with a different sentence.
-    e = send("advance", {"until": {"condition": {"path": "work_coverage.okk",
-                                                 "op": "==", "value": False}}})
+    # THROUGH THE ESCAPED WRAPPER, deliberately. These are arm-time parse
+    # refusals and the escapes cannot change them — but `dev:spawn-pawn` has
+    # already written journal rows by now, so an UNESCAPED advance here could
+    # come back refused by `722c951`'s unread-delta guard instead of by the
+    # parse, and the check would be asserting the wrong refusal. The wrapper
+    # removes that ordering dependency; `raw_advance` has exactly ONE caller in
+    # this file and it is phase 7b.
+    e = advance({"until": {"condition": {"path": "work_coverage.okk",
+                                         "op": "==", "value": False}}})
     bad_args("0.10a", "a near-miss path inside work_coverage is refused at ARM "
                       "time", e, "okk")
     contains("0.10b", "…and names the keys the section really publishes", e,
              "error.detail", "under")
-    e = send("advance", {"until": {"condition": {"path": "work_coverage.ok",
-                                                 "op": "<", "value": False}}})
+    e = advance({"until": {"condition": {"path": "work_coverage.ok",
+                                         "op": "<", "value": False}}})
     bad_args("0.10c", "`<` on a bool is refused rather than coerced", e, "bool")
 
     # THE CLOCK MUST NOT HAVE MOVED. Every refusal above happens at arm time,
