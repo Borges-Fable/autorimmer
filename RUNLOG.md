@@ -2801,3 +2801,83 @@ verification rebuild.
 
 Nothing has been launched and nothing has been branched. The three sessions are
 ready to cut.
+
+## Session 15 — 2026-09-01 (dorian's Linux box). Session A of the buildable round
+
+One opus worker, its own git worktree, branch `spec/site-routine`. Merged
+`25b65ff`, rebuilt `43e86c7`. **Nothing has run against a game.**
+
+### What landed
+
+Six commits, in the order the brief set: `edfee42` (`8b4839f`) · `33e9d95` (the
+`rot` argument + `Siting.cs`) · `7e23e7f` `SiteGate` · `90e578e` `site-survey` ·
+`923800b` `find-rect {def}` · `280a0cb` (`7382bdd`). Verb surface 119 → 120, the
+addition being `site-survey`. Six DESIGN decisions-log entries.
+
+The worker was stopped mid-round by a session rate limit, having committed
+steps 1 and 2. **That it lost nothing is the brief working:** it had been told
+to commit after each numbered step because a half-finished step is fine and an
+uncommitted one is gone. Resumed with an explicit "steps 1 and 2 are DONE, do
+not re-read the briefs", it finished the remaining four commits.
+
+### Verified by the orchestrator, not taken on report
+
+- `dotnet build -c Release` at the merged tree: 0 warnings, 0 errors.
+- The merged tree's `*.cs` is byte-identical to the branch tip's — checked, not
+  assumed. The branch deliberately carried no assembly, so the rebuild was owed
+  unconditionally rather than by the tree-comparison rule. It landed alone: pdb
+  path names this worktree under `obj/Release/`, Release blob present, Debug
+  blob absent, `InformationalVersion` = this HEAD, 598,402 differing bytes at
+  +24K.
+- `923800b` is **340 insertions and zero deletions** in `SpatialVerbs.cs`. The
+  Acceptance asked that `find-rect {w,h}` be "byte-for-byte what it was"; a
+  zero-deletion diff proves it more cheaply than a comparison run.
+- `--selftest` 25/25, and the runner's own closing line is the caveat on the
+  whole merge: *"Nothing about the mod was asserted; take this to a bench."*
+- **The claim with a bad history, checked because of that history.**
+  `Designator_Build.Visible` really does have TEN clauses. `1adc737` amendment
+  #1 named two; its verification comment corrected that to six and titled
+  itself "one clause of six". The three neither names are
+  `buildingPrerequisites`, `discoveryPrerequisites` and
+  `requireInspectedGravEngine`. All ten ship as branchable tokens, because a
+  clause count in prose goes stale against a DLC boundary and a token does not.
+
+### The worker found a defect in MY work, and it read like a regression
+
+It reported `accept/e6faa51-channel-alphabet.py` as 0/2 from its worktree. That
+was correct. **`transcripts/` is gitignored** (`.gitignore:25`), and BOTH suites
+written in session 14 read their input from there — so both passed only on this
+machine, scored 0 in any worktree or clean clone, and `2a7c064` and `e6faa51`
+had already been CLOSED on their evidence.
+
+This is `accept/runs/s13-20260901/README.md`'s own lesson committed the same day
+it was written, one directory over: *"an issue that cites a path under the
+bench's protocol root cites a file with a lifetime shorter than the issue."* A
+gitignored path is that lesson's other half — the file survives locally and
+vanishes for everyone else. Fixed in `accept/fixtures/`, kept separate from
+`accept/runs/` on purpose (runs/ holds evidence, which may be pruned once its
+claim is settled; fixtures/ holds input, which may not), and **verified 25/25
+and 12/12 from a worktree with no `transcripts/` at all** — the case that was
+actually broken, rather than the case that was convenient to test.
+
+### Resolved by the orchestrator
+
+**godMode is published, never honoured.** The worker built `SiteGate` that way
+and flagged it rather than assuming, because it reads as contradicting
+`1adc737` amendment #4's Correction 3, which calls godMode "the legitimate
+bypass for instant/dev mode". Flagging was right; the choice stands. That
+correction was ENUMERATING vanilla's clauses, not prescribing which our gate
+honours, and honouring it would make every player verb a god-hand the moment a
+dev session left the flag set — worse than no gate, because it looks like one.
+The god-hand stays where `3a5ff6c` put it: the path that never calls `SiteGate`.
+Session B's `build` inherits this.
+
+### Open, deliberately
+
+All three issues stay `state:doing`. Every bullet settleable by reading or
+compiling is settled; every bullet that says "on a bench" has not been run —
+the granite replay, the chair tolerated on an interaction cell, two benches
+refused with `InteractionSpotOverlaps`, the rotation search in a two-deep
+corridor, the even-size `pos` round-trip, and `7382bdd`'s "run the suites".
+Said in those words on each issue, including that `7382bdd`'s first bullet is
+now true in a WEAKER form than its text asks.
