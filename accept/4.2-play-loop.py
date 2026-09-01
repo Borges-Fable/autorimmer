@@ -16,11 +16,16 @@ Checks (PASS/FAIL/WARN per check, exit 0 iff no FAIL):
                       item has a ledger line that day (silent skip = missing line)
   action-taken        >=1 verdict:"action" line with a non-empty note
   summary-written     RUNS/<run>/summary.md exists, non-empty
-  final-undrafted     digests/final.json: no colonist drafted, hostiles == 0
+  final-undrafted     digests/final.json: no colonist drafted, and no hostile
+                      left unpardoned (threats.hostiles_unpardoned, falling
+                      back to threats.hostiles on a pre-pardon run)
   advance-invariants  from transcript result envelopes: timeout_ticks <= 60000,
+                      ticks_elapsed <= 60000 + the envelope's own overshoot_bound,
                       halt_on_error never false, no two consecutive 0-tick advances
   transcript-journal  every journal action/dev verb appears among transcript ops,
-                      with journal count <= transcript count per op
+                      with journal count <= transcript count per op — minus the
+                      lines a composite verb declares via caused_seqs, which are
+                      attributed to that composite's own op
   zero-red-errors     no red_error events in the journal window
 
 What this does NOT audit (the labelled human gate — Dorian reads the
@@ -161,28 +166,92 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
         d = d.get("data", d)  # accept a raw envelope or its data block
         colonists = d.get("colonists", {}).get("list", [])
         drafted = [c.get("name") for c in colonists if c.get("drafted")]
-        hostiles = d.get("threats", {}).get("hostiles", 0)
+        threats = d.get("threats", {}) or {}
+        # Evan's ruling (session 13): M1's insects "aren't hostile in the same
+        # way a normal hostile is, since they won't attack at will", and the
+        # run should have explicitly DECLARED it was not attacking them
+        # because it wasn't ready. So the criterion is not "0 hostiles" but
+        # "0 drafted, 0 hostiles that we haven't pardoned" — where a pardon is
+        # a deliberate, journalled act (the `threat-pardon` verb) and never a
+        # silent exemption. `hostiles` keeps its old meaning, the total.
+        hostiles = threats.get("hostiles", 0)
+        if "hostiles_unpardoned" in threats:
+            standing, keyed = threats.get("hostiles_unpardoned", 0), "hostiles_unpardoned"
+        else:
+            # A run recorded before threat-pardon shipped declared no pardons
+            # at all, so every hostile left standing is one nobody accounted
+            # for. Falling back to the total is the STRICT reading and is
+            # meant to be: m1-20260831 ends with six undeclared hostiles, and
+            # that FAIL is the correct verdict on it, not a gap to paper over.
+            standing, keyed = hostiles, "hostiles"
         if drafted:
             report("FAIL", "final-undrafted", f"drafted at end: {drafted}")
-        elif hostiles:
-            report("FAIL", "final-undrafted", f"threats.hostiles == {hostiles} at end")
+        elif standing and keyed == "hostiles_unpardoned":
+            report("FAIL", "final-undrafted",
+                   f"threats.hostiles_unpardoned == {standing} at end "
+                   f"({hostiles} hostile(s), {threats.get('hostiles_pardoned', 0)} pardoned)")
+        elif standing:
+            report("FAIL", "final-undrafted",
+                   f"threats.hostiles == {standing} at end, none declared — pre-pardon run, "
+                   "no threats.hostiles_unpardoned field to key on")
         else:
-            report("PASS", "final-undrafted", f"{len(colonists)} colonists, 0 drafted, 0 hostiles")
+            pardoned = threats.get("hostiles_pardoned", 0)
+            report("PASS", "final-undrafted",
+                   f"{len(colonists)} colonists, 0 drafted, 0 unpardoned hostiles"
+                   + (f" ({pardoned} of {hostiles} pardoned)" if pardoned else ""))
 
     # -- advance-invariants (needs the transcript's result envelopes) ------
     if transcript_dir and Path(transcript_dir).is_dir():
         advances = []
+        problems = []
+        # One entry per advance DIRECTORY, in order: True/False for a readable
+        # envelope, None for one we could not read. The None is load-bearing —
+        # see the wedge check below.
+        zeros = []
         for cmd_dir in sorted(Path(transcript_dir).iterdir()):
             if not cmd_dir.is_dir() or not re.search(r"-advance$", cmd_dir.name):
                 continue
-            try:
-                cmd = json.loads((cmd_dir / "cmd.json").read_text(encoding="utf-8"))
-                res = json.loads((cmd_dir / "result.json").read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as e:
-                report("WARN", "advance-invariants", f"{cmd_dir.name}: unreadable ({e})")
+            cmd_file, res_file = cmd_dir / "cmd.json", cmd_dir / "result.json"
+            # rwa writes cmd.json to disk BEFORE dispatching, so the two ways a
+            # directory can come up short are distinguishable and they do not
+            # mean the same thing.
+            if not cmd_file.is_file():
+                # Nothing on disk at all: a pre-fix recording artifact from
+                # before rwa wrote cmd.json first. There is no verb, no args
+                # and no envelope to name, so the cause is unrecoverable — all
+                # this can honestly say is that an advance is missing here.
+                report("WARN", "advance-invariants",
+                       f"{cmd_dir.name}: empty command dir — cause unrecoverable, "
+                       "the client wrote nothing before dying")
+                zeros.append(None)
                 continue
-            advances.append((cmd_dir.name, cmd.get("args", {}), res.get("data", {})))
-        problems = []
+            try:
+                cmd = json.loads(cmd_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as e:
+                report("WARN", "advance-invariants", f"{cmd_dir.name}: cmd.json unreadable ({e})")
+                zeros.append(None)
+                continue
+            if not res_file.is_file():
+                # cmd.json on disk and no result: the client died MID-CALL.
+                # The game kept running with nobody watching and no envelope
+                # was ever written, so every invariant below is unenforceable
+                # over that span. In m1-20260831 that cost ~60000 unobserved
+                # ticks, more than once. This is a FAIL, not a WARN.
+                problems.append(
+                    f"{cmd_dir.name}: client died mid-call — cmd.json has verb "
+                    f"'{cmd.get('op', '?')}' {cmd.get('args', {})}, no result.json "
+                    "(the advance ran unobserved)")
+                zeros.append(None)
+                continue
+            try:
+                res = json.loads(res_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as e:
+                report("WARN", "advance-invariants", f"{cmd_dir.name}: result.json unreadable ({e})")
+                zeros.append(None)
+                continue
+            data = res.get("data", {}) or {}
+            advances.append((cmd_dir.name, cmd.get("args", {}), data))
+            zeros.append(data.get("ticks_elapsed", None) == 0)
         for name, args, data in advances:
             if args.get("timeout_ticks", 0) > MAX_ADVANCE_TICKS or args.get("ticks", 0) > MAX_ADVANCE_TICKS:
                 problems.append(f"{name}: cap exceeded ({args})")
@@ -194,11 +263,37 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
             # 10x this policy's own cap. An advance that actually ran past
             # the cap is a real violation even when the declared args look
             # clean, so check what happened, not just what was asked for.
+            #
+            # But the cap is a TARGET, not a promise, and the driver says so.
+            # TimeDriver's stop check runs once per FRAME, after vanilla has
+            # already ticked up to TickRateMultiplier*2 times, so an advance
+            # lands at its target or a little past — bounded by exactly one
+            # frame's worth of ticks. TimeDriver.MaxTicksPerFrame publishes
+            # that bound in every advance envelope as `overshoot_bound`
+            # (30 at Ultrafast, 24 at Superfast, ...). Comparing elapsed to
+            # the bare cap therefore FAILs the driver for behaviour it
+            # documents: m1-20260831's 132-advance came in at 60021 against
+            # a 60000 cap — 21 ticks, inside a bound of 30.
+            #
+            # Read `overshoot_bound`, NOT `overshoot`: TimeDriver only emits
+            # `overshoot` when Target >= 0, i.e. for `advance {ticks:N}`. An
+            # `until`+timeout advance — which is the shape that can reach the
+            # cap at all — has no `overshoot` key to read.
             elapsed = data.get("ticks_elapsed", 0)
-            if isinstance(elapsed, (int, float)) and elapsed > MAX_ADVANCE_TICKS:
-                problems.append(f"{name}: ticks_elapsed {elapsed} exceeded cap ({args})")
-        zeros = [d.get("ticks_elapsed", None) == 0 for _, _, d in advances]
-        if any(a and b for a, b in zip(zeros, zeros[1:])):
+            bound = data.get("overshoot_bound", 0)
+            if not isinstance(bound, (int, float)) or bound < 0:
+                bound = 0
+            if isinstance(elapsed, (int, float)) and elapsed > MAX_ADVANCE_TICKS + bound:
+                problems.append(
+                    f"{name}: ticks_elapsed {elapsed} exceeded cap "
+                    f"{MAX_ADVANCE_TICKS}+{bound} overshoot_bound ({args})")
+        # The wedge rule is about two advances that ACTUALLY ran back to back.
+        # Building this list from readable envelopes alone closed the gap left
+        # by a skipped directory and made two advances either side of it look
+        # adjacent — so a run with an unreadable advance between them could
+        # false-FAIL, and a real wedge hiding behind one could pass. None is
+        # neither True nor False, so a gap breaks the adjacency run instead.
+        if any(a is True and b is True for a, b in zip(zeros, zeros[1:])):
             problems.append("two consecutive 0-tick advances (wedge rule violated)")
         if problems:
             report("FAIL", "advance-invariants", "; ".join(problems))
@@ -222,20 +317,47 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
             ops = {}
             for e in load_ndjson(Path(transcript_dir) / "log.ndjson"):
                 ops[e.get("op")] = ops.get(e.get("op"), 0) + 1
+            # "journal count <= transcript count per verb" holds only for verbs
+            # the agent issued ITSELF. A composite verb calls other verbs
+            # internally and each nested call journals its own line, so the
+            # journal outruns the transcript with no op missing: m1-20260831's
+            # dev:starter-kit (survival preset) fans out to seven
+            # DevVerbs.SpawnThing calls, giving journal 46 vs transcript 39 for
+            # dev:spawn-thing on a run where nothing was unlogged.
+            #
+            # The join to undo that already ships. StarterKit.cs publishes the
+            # seqs it caused twice — `caused_seqs` on its own journal line and
+            # `caused_journal_seqs` in its result envelope — for exactly this.
+            # Attribute a caused line to the composite that caused it: drop it
+            # from the per-verb tally, where the composite's own line already
+            # stands against the composite's own transcript op.
+            caused = set()
+            for e in events:
+                p = e.get("payload") or {}
+                for key in ("caused_seqs", "caused_journal_seqs"):
+                    v = p.get(key)
+                    if isinstance(v, list):
+                        caused.update(s for s in v if isinstance(s, int))
             jverbs = {}
+            attributed = 0
             for e in events:
                 if e.get("type") in ("action", "dev"):
-                    v = e.get("payload", {}).get("verb")
+                    if e.get("seq") in caused:
+                        attributed += 1
+                        continue
+                    v = (e.get("payload") or {}).get("verb")
                     jverbs[v] = jverbs.get(v, 0) + 1
             gaps = [
                 f"{v}: journal {n} > transcript {ops.get(v, 0)}"
                 for v, n in sorted(jverbs.items())
                 if n > ops.get(v, 0)
             ]
+            note = f" (+{attributed} nested, attributed to their composite verb)" if attributed else ""
             if gaps:
-                report("FAIL", "transcript-journal", "; ".join(gaps))
+                report("FAIL", "transcript-journal", "; ".join(gaps) + note)
             else:
-                report("PASS", "transcript-journal", f"{sum(jverbs.values())} journaled mutations all covered by transcript ops")
+                report("PASS", "transcript-journal",
+                       f"{sum(jverbs.values())} journaled mutations all covered by transcript ops" + note)
         else:
             report("WARN", "transcript-journal", "no transcript log.ndjson — skipped")
     else:
@@ -264,7 +386,11 @@ def build_fixture(root, repo):
     (run / "digests" / "day-2.json").write_text("{}", encoding="utf-8")
     (run / "digests" / "final.json").write_text(json.dumps({
         "colonists": {"list": [{"name": "A", "drafted": False}, {"name": "B", "drafted": False}]},
-        "threats": {"hostiles": 0},
+        # Hostiles STANDING at the end and the run still green, because every
+        # one of them was pardoned by a deliberate act. That is the shape
+        # Evan's ruling makes legal, so it is the shape the clean fixture
+        # pins — a check that only ever saw hostiles == 0 would not prove it.
+        "threats": {"hostiles": 6, "hostiles_pardoned": 6, "hostiles_unpardoned": 0},
     }), encoding="utf-8")
     (run / "summary.md").write_text("# selftest run\nlast seq read: 7\n0 drafted, 0 red.\n", encoding="utf-8")
 
@@ -272,14 +398,19 @@ def build_fixture(root, repo):
     for i, (op, args, data) in enumerate([
         ("advance", {"until": {"letter": True}, "timeout_ticks": 60000}, {"reason": "letter", "ticks_elapsed": 41000}),
         ("designate", {"kind": "harvest"}, {}),
-        ("advance", {"until": {"letter": True}, "timeout_ticks": 60000}, {"reason": "timeout", "ticks_elapsed": 60000}),
+        # A timeout advance that lands PAST the cap by less than the bound the
+        # envelope itself publishes. This is legal — the stop check is per
+        # frame — and the clean fixture must stay green on it.
+        ("advance", {"until": {"letter": True}, "timeout_ticks": 60000},
+         {"reason": "timeout", "ticks_elapsed": 60021, "overshoot_bound": 30}),
     ], 1):
         d = tr / f"{i:03d}-{op}"
         d.mkdir(parents=True)
         (d / "cmd.json").write_text(json.dumps({"id": f"c{i}", "op": op, "args": args}), encoding="utf-8")
         (d / "result.json").write_text(json.dumps({"id": f"c{i}", "op": op, "ok": True, "data": data}), encoding="utf-8")
     (tr / "log.ndjson").write_text(
-        "\n".join(json.dumps({"op": op, "ok": True}) for op in ("advance", "designate", "advance")) + "\n",
+        "\n".join(json.dumps({"op": op, "ok": True})
+                  for op in ("advance", "designate", "advance", "dev:starter-kit")) + "\n",
         encoding="utf-8")
 
     journal = root / "journal.ndjson"
@@ -287,6 +418,15 @@ def build_fixture(root, repo):
         {"seq": 1, "tick": 0, "type": "session", "payload": {"kind": "boot"}},
         {"seq": 2, "tick": 20000, "type": "letter", "payload": {"def": "NeutralEvent", "label": "Wanderer"}},
         {"seq": 3, "tick": 61000, "type": "action", "payload": {"verb": "designate", "step": "harvest"}},
+        # One composite verb and the two lines it caused. There is no
+        # dev:spawn-thing op in the transcript and there should not be: the
+        # agent issued one op, dev:starter-kit, which spawned internally. The
+        # clean fixture must stay green, so a per-verb tally that counts the
+        # nested lines against a missing op is caught here.
+        {"seq": 4, "tick": 700, "type": "dev", "payload": {"verb": "dev:spawn-thing", "step": "spawn-thing"}},
+        {"seq": 5, "tick": 700, "type": "dev", "payload": {"verb": "dev:spawn-thing", "step": "spawn-thing"}},
+        {"seq": 6, "tick": 700, "type": "dev",
+         "payload": {"verb": "dev:starter-kit", "step": "starter-kit", "caused_seqs": [4, 5]}},
     ]) + "\n", encoding="utf-8")
     return run, journal, tr
 
@@ -305,21 +445,47 @@ def selftest(repo):
             failures.append("clean fixture FAILed a check")
 
         print("\n== selftest: each mutation must fail its own check ==")
-        for mutate, expect in [
-            (lambda: (run / "checklist.ndjson").write_text(
+        for label, mutate, expect in [
+            ("a daily item skipped silently",
+             lambda: (run / "checklist.ndjson").write_text(
                 "\n".join(l for l in (run / "checklist.ndjson").read_text(encoding="utf-8").splitlines()
                           if '"freezer-below-zero"' not in l) + "\n", encoding="utf-8"),
              "daily-coverage"),
-            (lambda: (run / "digests" / "final.json").write_text(json.dumps({
+            ("a colonist left drafted",
+             lambda: (run / "digests" / "final.json").write_text(json.dumps({
                 "colonists": {"list": [{"name": "A", "drafted": True}]},
                 "threats": {"hostiles": 0}}), encoding="utf-8"),
              "final-undrafted"),
-            (lambda: [(tr / "003-advance" / "result.json").write_text(json.dumps(
+            # A hostile nobody pardoned. The pardon is the whole point: five
+            # of six declared is still one left standing unaccounted for.
+            ("a hostile left unpardoned",
+             lambda: (run / "digests" / "final.json").write_text(json.dumps({
+                "colonists": {"list": [{"name": "A", "drafted": False}]},
+                "threats": {"hostiles": 6, "hostiles_pardoned": 5,
+                            "hostiles_unpardoned": 1}}), encoding="utf-8"),
+             "final-undrafted"),
+            # The pre-pardon shape: no hostiles_unpardoned field at all, so
+            # the fallback reads the total. This is m1-20260831's own shape
+            # and it must stay red — a run that never declared a pardon
+            # accounted for none of its hostiles.
+            ("a pre-pardon run with hostiles and no declaration",
+             lambda: (run / "digests" / "final.json").write_text(json.dumps({
+                "colonists": {"list": [{"name": "A", "drafted": False}]},
+                "threats": {"hostiles": 6}}), encoding="utf-8"),
+             "final-undrafted"),
+            ("two 0-tick advances back to back",
+             lambda: [(tr / "003-advance" / "result.json").write_text(json.dumps(
                 {"id": "c3", "op": "advance", "ok": True,
                  "data": {"reason": "dialog", "ticks_elapsed": 0}}), encoding="utf-8"),
                 (tr / "001-advance" / "result.json").write_text(json.dumps(
                     {"id": "c1", "op": "advance", "ok": True,
                      "data": {"reason": "dialog", "ticks_elapsed": 0}}), encoding="utf-8")],
+             "advance-invariants"),
+            # cmd.json on disk with no result.json: rwa writes the command
+            # before dispatching, so this shape means the client died mid-call
+            # and the advance ran unobserved. FAIL, not WARN.
+            ("the client died mid-call",
+             lambda: (tr / "003-advance" / "result.json").unlink(),
              "advance-invariants"),
         ]:
             # rebuild clean, then break one thing
@@ -333,8 +499,8 @@ def selftest(repo):
             audit(run, repo, journal, tr)
             got = {c for s, c, _ in results if s == "FAIL"}
             if expect not in got:
-                failures.append(f"mutation for {expect} did not FAIL it (FAILs: {sorted(got)})")
-            print(f"-- mutation '{expect}': {'ok' if expect in got else 'MISSED'}\n")
+                failures.append(f"mutation '{label}' did not FAIL {expect} (FAILs: {sorted(got)})")
+            print(f"-- mutation '{label}' -> {expect}: {'ok' if expect in got else 'MISSED'}\n")
 
     if failures:
         print("SELFTEST FAIL:", *failures, sep="\n  ")
