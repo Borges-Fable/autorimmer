@@ -78,6 +78,16 @@ namespace AutoRimmer
         private static TimeSpeed requestedSpeed;   // the caller's ask, pre-ceilings
         private static TimeSpeed baseSpeed;        // post-ceiling, pre-thermal
         private static TimeSpeed activeSpeed;      // what is actually set right now
+        // The FASTEST speed this advance ever ran at. M1 finding K
+        // (2026-09-01): `overshoot_bound` was computed from `activeSpeed`, the
+        // speed the advance happened to EXIT at, so a 192-tick advance that ran
+        // at Ultrafast and exited at Superfast (thermal step-down, TimeSlower, or
+        // a human on the speed keys) published a bound of 24 next to a measured
+        // overshoot of 30. The bound is a property of the whole advance, not of
+        // its last frame — the overrun happened while the game was fast, and the
+        // reader gets that number afterwards. The CAP is not affected and is not
+        // touched: 20/20 advances came in under the real bound (max 29 vs 30).
+        private static TimeSpeed fastestSpeed;
         private static string speedSource;         // "speed" | "max_tps" | "default"
         private static int askedMaxTps;            // -1 when the caller gave none
         private static Dictionary<string, object> speedClamp; // null when nothing moved
@@ -143,6 +153,11 @@ namespace AutoRimmer
         // frame's worth of ticks past its target. Superfast is quoted at its
         // BOOSTED multiplier (12), because `NothingHappeningInGame()` can flip
         // mid-advance and the bound has to hold when it does.
+        //
+        // For the same reason the ARGUMENT must be the fastest speed the advance
+        // ran at, never the speed it exited at: the bound has to hold over the
+        // whole advance, and a step-down after the overrun does not retroactively
+        // shrink it. Callers pass `fastestSpeed` (M1 finding K).
         public static int MaxTicksPerFrame(TimeSpeed s)
         {
             switch (s)
@@ -188,6 +203,15 @@ namespace AutoRimmer
         // Fast, Superfast, Ultrafast), so the slower of two is the smaller.
         private static TimeSpeed Slower(TimeSpeed a, TimeSpeed b) => a < b ? a : b;
 
+        // EVERY write to activeSpeed goes through here, so the high-water mark
+        // cannot be missed by a later edit that adds a fourth assignment. Same
+        // enum-order fact as Slower: the faster of two is the larger.
+        private static void NoteActive(TimeSpeed s)
+        {
+            activeSpeed = s;
+            if (s > fastestSpeed) fastestSpeed = s;
+        }
+
         private static TimeSpeed OneNotchDown(TimeSpeed s)
             => s <= TimeSpeed.Normal ? TimeSpeed.Normal : (TimeSpeed)((byte)s - 1);
 
@@ -208,7 +232,7 @@ namespace AutoRimmer
             tm.CurTimeSpeed = want;
             if (tm.CurTimeSpeed == want)
             {
-                activeSpeed = want;
+                NoteActive(want);
                 return true;
             }
             speedRefusals.Add(new Dictionary<string, object>
@@ -338,6 +362,17 @@ namespace AutoRimmer
             // Own the clock: set the speed and VERIFY it took. A refused set is
             // a failure result, not a stalled advance — see SetSpeed.
             speedRefusals.Clear();
+            // fastestSpeed is a per-advance high-water mark, so it is cleared
+            // HERE — before the SetSpeed below takes the first reading — and not
+            // with the rest of the per-advance state further down, which runs
+            // after the speed is set.
+            //
+            // The PRE-ARM speed is deliberately NOT fed into it: it is a
+            // snapshot of what the game was doing before this advance existed
+            // (normally Paused, since the agent is turn-based), and counting it
+            // would inflate the bound of a slow advance that happened to start
+            // while the clock was still running.
+            fastestSpeed = TimeSpeed.Paused;
             activeSpeed = tm.CurTimeSpeed;
             if (!SetSpeed(tm, want, "advance start"))
                 return Result.Fail(command.Id, command.Op, "cannot-set-speed",
@@ -602,7 +637,7 @@ namespace AutoRimmer
                     ["to"] = cur.ToString(),
                     ["by"] = "external",
                 });
-                activeSpeed = cur;
+                NoteActive(cur);
             }
 
             // Thermal governor: act on the EDGE only, so it does not fight an
@@ -786,7 +821,15 @@ namespace AutoRimmer
                 // per frame and vanilla runs up to TickRateMultiplier*2 ticks
                 // per frame, so `advance {ticks:N}` lands at N or a little past.
                 ["max_ticks_in_frame"] = maxTicksInFrame,
-                ["overshoot_bound"] = MaxTicksPerFrame(activeSpeed),
+                // FROM THE FASTEST SPEED THIS ADVANCE RAN AT, not the one it
+                // exited at (M1 finding K — see `fastestSpeed`). An advance that
+                // ran Ultrafast and was stepped down to Superfast before it
+                // stopped can still have overshot by Ultrafast's frame, and it
+                // did: 192 ticks, published bound 24, measured overshoot 30.
+                ["overshoot_bound"] = MaxTicksPerFrame(fastestSpeed),
+                // Named so the bound can be checked rather than trusted, and so
+                // a bound that differs from `speed`'s is self-explaining.
+                ["overshoot_bound_speed"] = fastestSpeed.ToString(),
 
                 // The turn-based contract, stated every time rather than only
                 // when it fails. False here means the colony is still running.

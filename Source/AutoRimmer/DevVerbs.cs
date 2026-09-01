@@ -567,11 +567,16 @@ namespace AutoRimmer
                     if (!GenSpawn.CanSpawnAt(def, target, map, thing.Rotation, canWipeEdifices: true))
                     {
                         ok = false;
+                        string why = WhyNoSpawn(def, target, map, thing.Rotation)
+                            ?? "GenSpawn.CanSpawnAt refused this cell for " + def.defName;
                         failures.Add(new Dictionary<string, object>
                         {
                             ["at"] = Positions.Out(target),
-                            ["reason"] = "GenSpawn.CanSpawnAt refused this cell for " + def.defName,
-                            ["blocker"] = Blockers.Describe(target.GetFirstBuilding(map)),
+                            ["reason"] = why,
+                            // Was Blockers.Describe(target.GetFirstBuilding(map)),
+                            // which is null for every refusal that is not an
+                            // edifice — i.e. for most of them (M1 finding A).
+                            ["blocker"] = Blockers.At(map, target, why),
                         });
                     }
                     else
@@ -585,12 +590,31 @@ namespace AutoRimmer
                     ok = GenPlace.TryPlaceThing(thing, target, map,
                         mode == "direct" ? ThingPlaceMode.Direct : ThingPlaceMode.Near, out result);
                     if (!ok)
+                    {
+                        // Near searches GenRadial's pattern out to
+                        // PlaceNearMaxRadialCells and keeps the best
+                        // PlaceSpotQuality (Verse/GenPlace.cs
+                        // TryFindPlaceSpotNear / PlaceSpotQualityAt), and EVERY
+                        // candidate is gated by the same GenSpawn.CanSpawnAt. So
+                        // the target cell's own refusal is the representative
+                        // reason when there is one, and its absence is itself
+                        // the finding: the anchor would have taken it and the
+                        // whole disc was still full.
+                        string branch = WhyNoSpawn(def, target, map, thing.Rotation);
+                        string why = "GenPlace.TryPlaceThing found no spot for " + def.defName
+                            + " in mode " + mode
+                            + (branch != null
+                                ? "; at the target cell: " + branch
+                                : "; the target cell itself would take it, so every cell in the "
+                                  + "radial search was refused (stack limits, a storage that "
+                                  + "declines it, or an unreachable room)");
                         failures.Add(new Dictionary<string, object>
                         {
                             ["at"] = Positions.Out(target),
-                            ["reason"] = "GenPlace.TryPlaceThing found no spot for " + def.defName
-                                + " in mode " + mode,
+                            ["reason"] = why,
+                            ["blocker"] = Blockers.At(map, target, branch ?? why),
                         });
+                    }
                 }
 
                 if (!ok) break;
@@ -623,7 +647,11 @@ namespace AutoRimmer
             string label = def.defName + " x" + placed
                 + (stuff != null ? " (" + stuff.defName + ")" : "")
                 + " @ " + target.x + "," + target.z
-                + (forbid ? " [forbidden x" + forbiddenIds.Count + "]" : "");
+                + (forbid ? " [forbidden x" + forbiddenIds.Count + "]" : "")
+                // M1 finding A: `SimpleResearchBench x0 (WoodLog) @ 123,117` is
+                // indistinguishable from a success at a glance, and the label is
+                // what a human scanning JOURNAL.md reads. Say it refused.
+                + (failures.Count > 0 ? " REFUSED" : "");
             var extra = new Dictionary<string, object>
             {
                 ["args"] = new Dictionary<string, object>
@@ -643,6 +671,15 @@ namespace AutoRimmer
             {
                 extra["forbidden"] = forbiddenIds.Count;
                 if (notForbiddable.Count > 0) extra["not_forbiddable"] = notForbiddable.Count;
+            }
+            // M1 finding A, the defect proper: the RESPONSE carried `failed` and
+            // the JOURNAL ROW did not, so seq 66's `placed: 0, ids: []` was the
+            // only surviving record of the refusal and it had no reason in it.
+            // The row is the durable record; it carries the reasons.
+            if (failures.Count > 0)
+            {
+                extra["failed"] = failures;
+                extra["placed_is_floor"] = true;
             }
             long seq = Dev.Emit(V, "spawn-thing", label, extra);
 
@@ -685,6 +722,73 @@ namespace AutoRimmer
                 };
             }
             return data;
+        }
+
+        // WHICH branch of GenSpawn.CanSpawnAt refused, in the game's own order.
+        //
+        // Verse/GenSpawn.cs CanSpawnAt is one boolean over six distinct
+        // conditions — ThingDef.CanSpawnAt, IntVec3.InBounds, IntVec3.Walkable,
+        // an occupant that SpawningWipes would have to destroy and cannot,
+        // GenConstruct.CanBuildOnTerrain (buildings only) and
+        // GenConstruct.InteractionCellStandable — and a caller that only knows
+        // "false" cannot say anything an agent can act on. Re-walked here in the
+        // same order so the refusal names its own cause (M1 finding A).
+        //
+        // The ORDER here is vanilla's with one deliberate change: vanilla tests
+        // the opaque `ThingDef.CanSpawnAt` first, and this walks the concrete,
+        // actionable branches first and names that one last as the residual. A
+        // refusal is a refusal either way; the difference is only which sentence
+        // the caller gets, and "the cell is not walkable" beats "the def said no".
+        //
+        // Returns null when CanSpawnAt is in fact satisfied, so a Near-mode
+        // failure never gets handed a fabricated reason.
+        //
+        // Two of vanilla's checks are keyed on the CENTRE cell inside a loop over
+        // the occupied rect (`!c.Walkable(map)` and the `c.GetThingList(map)`
+        // wipe scan, Verse/GenSpawn.cs CanSpawnAt) — a quirk, and reproduced
+        // rather than corrected, because the job is to name the branch the game
+        // took. Only `InBounds` really is per-cell, and is walked as such.
+        //
+        // Read-only: grid lookups, def flags and terrain reads. The one
+        // non-obvious call is GenConstruct.CanBuildOnTerrain, which is what
+        // Designator_Build runs under the cursor every frame.
+        private static string WhyNoSpawn(ThingDef def, IntVec3 c, Map map, Rot4 rot)
+        {
+            try
+            {
+                foreach (var item in GenAdj.OccupiedRect(c, rot, def.Size))
+                    if (!item.InBounds(map))
+                        return def.defName + " at " + c.x + "," + c.z
+                            + " would extend past the map edge (" + item.x + "," + item.z + ")";
+                if (!c.Walkable(map)) return "the cell is not walkable";
+                foreach (var t in c.GetThingList(map))
+                    if (t?.def != null
+                        && GenSpawn.SpawningWipes(def, t.def, ignoreDestroyable: true)
+                        && !t.def.destroyable)
+                        return "'" + t.def.defName + "' holds the cell and cannot be destroyed to make room";
+                if (def.category == ThingCategory.Building
+                    && !GenConstruct.CanBuildOnTerrain(def, c, map, rot))
+                    return "terrain '" + map.terrainGrid.TerrainAt(c)?.defName + "' cannot carry " + def.defName;
+                if (def.HasSingleOrMultipleInteractionCells)
+                {
+                    // Returns an AcceptanceReport, so the game's own sentence is
+                    // available and is preferred over one of ours — the same
+                    // rule Blockers.Classify follows.
+                    var cell = GenConstruct.InteractionCellStandable(def, c, rot, map);
+                    if (!cell.Accepted)
+                        return string.IsNullOrEmpty(cell.Reason)
+                            ? def.defName + "'s interaction cell is not standable"
+                            : cell.Reason;
+                }
+                return GenSpawn.CanSpawnAt(def, c, map, rot)
+                    ? null
+                    : "ThingDef.CanSpawnAt refused " + def.defName + " here at rotation " + rot.ToStringHuman();
+            }
+            catch (Exception e)
+            {
+                return "GenSpawn.CanSpawnAt refused this cell (" + e.GetType().Name
+                    + " while naming which branch)";
+            }
         }
 
         private static List<object> IdsOf(List<object> described)

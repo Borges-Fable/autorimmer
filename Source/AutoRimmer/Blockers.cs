@@ -115,6 +115,48 @@ namespace AutoRimmer
             return d;
         }
 
+        // The obstacle AT A CELL, for a caller that knows only that the cell
+        // refused and not what is standing on it.
+        //
+        // `IntVec3.GetFirstBuilding` is NOT enough, and that was M1 finding A
+        // (2026-09-01): it consults Verse/EdificeGrid via
+        // Verse/GridsUtility.cs GetEdifice and so sees the edifice ONLY, so a
+        // cell that refused for its terrain, for a non-building thing, or for
+        // being out of bounds described its blocker as `null` — and the journal
+        // row, which is the only durable record of the refusal, then carried no
+        // obstacle at all.
+        //
+        // Order is "what a player would point at": the edifice that owns the
+        // cell (wall, rock, building), else the first impassable thing, else
+        // whatever is there. `reason` is why the CELL refused — the caller's
+        // knowledge — and is published as `refused` so it never overwrites
+        // Classify's `reason`, which is how the THING clears.
+        //
+        // OBSERVER DISCIPLINE: GetEdifice is a grid index and GetThingList
+        // returns Map.thingGrid's stored list; neither is lazy and neither
+        // rebuilds on read.
+        public static Dictionary<string, object> At(Map map, IntVec3 c, string reason)
+        {
+            Thing t = null;
+            try
+            {
+                if (map != null && c.InBounds(map))
+                {
+                    t = c.GetEdifice(map);
+                    if (t == null)
+                        foreach (var x in c.GetThingList(map))
+                        {
+                            if (t == null) t = x;
+                            if (x.def != null && x.def.passability == Traversability.Impassable) { t = x; break; }
+                        }
+                }
+            }
+            catch { }
+            var d = t == null ? Cell(c, reason) : Describe(t);
+            d["refused"] = reason;
+            return d;
+        }
+
         // A rejection that is not a thing (fog, terrain, roof, reachability):
         // still carries the pair, so a consumer never has to special-case the
         // absence of the field.
