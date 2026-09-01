@@ -119,6 +119,8 @@ exceptions are known, verified, and small enough to memorize:
 | `Alert_FireInHomeArea` | scoped | home-area only, `ThingDefOf.Fire` only — `fires` verb is the honest read |
 | `Alert_LowFood` | late twice | muzzled before tick 150,000; threshold overstates days ~1.6× (see `food-days-floor`) |
 | `Alert_NeedMealSource` | building ≠ food | tests only that a stove EXISTS, and is silent before day 2 (`GetReport`) — see `production-still-runs` |
+| `Alert_ColonistNeedsTend` | **inverts on the worst case** | its getter EXCLUDES pawns needing rescue, so it goes OFF the moment the patient goes DOWN — silence means tended OR collapsed. M1: it was the only pre-casualty signal, on at 205,979, and it self-silenced 8,620 ticks before the first death ([[read-every-return-or-lose-a-colonist]]) |
+| `Alert_NeedDoctor` | structurally too late | fires when NOBODY can doctor, which on a one-doctor colony is the tick that doctor becomes the patient. It cannot warn about a single point of failure, only about its arrival ([[one-doctor-is-zero-doctors]]) |
 | armament | no alert exists | all 126 concrete vanilla alerts checked (133 `Alert_*` declarations, 7 abstract); the gap is total ([[weapons-have-no-alert]]) |
 
 **Two suppressions apply to the WHOLE table, not to any row in it**, and no
