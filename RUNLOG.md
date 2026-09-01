@@ -3002,3 +3002,104 @@ own shell one-liners, and on this evidence it should.
 named in its own words. Bench left running and paused at tick 75,223; prefs
 still at 2560x1600 fullscreen, so restore `Prefs.xml.bak-640x480` before any
 unattended run.
+
+## Session 16 — 2026-09-01 (dorian's Linux box). Session B, merged and bench-proven
+
+`build` exists. The round's DONE MEANS is met: `build {def, pos, rot, stuff}`
+places a blueprint the game would accept, refuses with the game's own sentence
+when it would not, and the agent can read back whether it stalled, progressed or
+finished — **proven on a bench, not asserted.**
+
+One opus worker (`spec/build-verb`, six commits), merged `e9c47ea`, rebuilt
+`8b804c5`; one orchestrator fix and rebuild after the pass (`479e4a1`,
+`f974ddf`). Full record: `accept/runs/s16-20260901/`.
+
+### The lifecycle, on one placement id
+
+`build` → `Blueprint_Wall`, journal seq 33 carrying `placement_id "pl-1"` →
+`construction` reports `awaiting-materials` with `needed 5 / present 0` → a
+colonist hauls → `frame`, `ready`, `present 5` → a colonist builds → journal seq
+55 `{"kind":"completed","worker":"Lizzie","thing_id":18369,"placement_id":"pl-1"}`
+→ `construction {placement_id:"pl-1"}` answers **`built`**, `completed_tick
+37157`, `thing_id 18369`, while `pl-2` (cancelled) answers **`cancelled`**,
+`thing_id null`.
+
+**Completion is an absence and the id survives it** — the whole thesis of
+`d7c8088`, and it could not have been proven any way but by building something.
+The worker's own highest-risk guess was that `worker?.Map` in the Frame postfix
+might be wrong, in which case every finished build would read `cancelled`. It
+fired. Vanilla settles why it had to be done that way:
+`Frame.CompleteConstruction` does `Map map = base.Map;` THEN `Destroy()`.
+
+### Verified rather than taken on report
+
+Merged tree's `*.cs` byte-identical to the branch tip; build 0/0; verb surface
+120 → 123. Four of the worker's source claims checked against the decompiled
+tree and all confirmed, including two I would have bet against:
+`GenConstruct.FirstBlockingThing`'s second parameter is literally named
+`pawnToIgnore` and all three construction work givers pass the worker — so
+calling it with null names the colonist doing the building as the obstacle; and
+`Blueprint_Install.TotalMaterialCost()` opens with `Log.Error`, a fifth
+red-error route `d7c8088` had not catalogued. The worker also corrected its own
+DESIGN entry mid-session (`WorkToBuild`'s `defaultBaseValue` is 1, not 0) and
+landed on the game's own `BuildableDef.BuildableByPlayer`.
+
+### Three findings, and the third is about our own instruments
+
+**1. `world-fixture`'s site search did not share its new gate.** Session B gave
+the `bench` step the gate it never had and left `FindClearRect` as the SEARCH.
+The search returns the box beside an existing table — whose footprint sits on
+that table's interaction cell — and the gate then correctly refuses. The step
+died on its SECOND call, which made `0d9cbd7`'s own acceptance unreachable for a
+reason unrelated to the bug it was filed about. **A validator the site search
+does not share turns a fixture into a coin flip.** Fixed with `FindGatedSite`,
+which ring-walks identically and asks `SiteGate.Check` at each candidate centre.
+Three consecutive calls now give three benches with two bills each.
+
+**2. `3a5ff6c`'s `wiped[]` bullet is unreachable as specified.**
+`GenSpawn.CanSpawnAt` tests `!c.Walkable(map)` on the **centre** cell inside the
+loop over the occupied rect — the centre-keying quirk `WhyNoSpawn` already
+documents one line down — so any unwalkable occupant refuses before
+`canWipeEdifices` is even consulted. Four attempts, including the bullet's own
+rock-wall case. The field is honest (`[]` when nothing was erased); the example
+cannot occur. Closed on that basis: the code is right and the acceptance text is
+wrong.
+
+**3. THE RED-ERROR CHECK HAS NEVER BEEN SCOPED TO THE RUN IT GRADES.** The pass
+first came back 181 PASS / **3 FAIL**, all "zero red errors". The only red error
+on the bench was `"[AutoRimmer] selftest-induced red error (deliberate)"` —
+emitted by design, by a `journal-selftest` call in my own smoke pass.
+
+`s13-mod-surface.py` was the one suite that never got session 11's watermark
+fix. It read `journal {limit: 1}`, and `JournalVerbs.Read` updates `last_seq`
+BEFORE the `since_seq` skip and breaks on `events.Count >= limit` BEFORE the
+append — so it reports the SECOND row's seq. It printed `seq0 = 2` against a
+108-row journal, i.e. it was counting from the start of the session.
+`3.4-pawn-orders`, `3.6`, `4087644` and `1.8` all carry the corrected idiom;
+this one was missed. **So sessions 13 (169/0) and 15 (174/0) scored zero
+failures only because nothing happened to precede them.** Fixed in `19d6446`:
+same bench, same assembly, `seq0 = 108`, **174 PASS / 0 FAIL**.
+
+That is the second time in two sessions that a green number turned out to be an
+instrument reading rather than a fact about the mod — session 15's was `tail`
+eating four phases. Both were caught, neither by the suite.
+
+### git-bug
+
+`c718e4a`, `d7c8088`, `0d9cbd7`, `3a5ff6c` all **CLOSED** on bench evidence,
+each naming what it did not demonstrate. `8b4839f` closed in session 15.
+**`7382bdd` stays OPEN** — its bullet 1 is not met and that is a scope decision
+for Evan, not more work: what shipped is a near-miss detector on an alias list
+(`--at` refused with a suggestion; `--wibble` still places, and eight other
+verbs accept junk silently), and the whitelist was rejected on a measurement
+that justifies it.
+
+### Where the round stands
+
+Session A and session B are both merged and bench-proven. `place-layout`,
+`cancel-layout` and IR consumption are the NEXT round; `bac4eba` (the 7x7 module
+grid) is held until after M2 and is the first thing after it. M2 itself needs
+`place-layout` — a pawn-built house from IR, room verified by the game's own
+Room analysis.
+
+Bench left running, paused. Prefs at 640x480 windowed (unattended).
