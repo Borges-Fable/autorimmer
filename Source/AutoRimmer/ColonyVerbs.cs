@@ -374,7 +374,13 @@ namespace AutoRimmer
                     ["progress"] = WorldSafe.R(progress, 0),
                     ["pct"] = cost > 0f ? WorldSafe.Pct(progress / cost) : 0,
                     ["tech_level"] = current.techLevel.ToString(),
-                    ["bench_ok"] = current.requiredResearchBuilding == null || benchOk(current),
+                    // Same fix, same reason, as `research-set` — see M1 finding J
+                    // in ResearchVerbs.ResearchSet. `bench_ok` is now "a bench
+                    // that can research this exists", not "the gate would pass",
+                    // and `bench_required` carries the gate's input. The observer
+                    // is where the missing bench was supposed to be visible.
+                    ["bench_required"] = current.requiredResearchBuilding?.defName,
+                    ["bench_ok"] = benchOk(current),
                 };
             }
 

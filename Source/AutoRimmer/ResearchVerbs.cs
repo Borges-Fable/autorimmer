@@ -148,11 +148,37 @@ namespace AutoRimmer
                 ["progress"] = WorldSafe.R(WorldSafe.Progress(proj), 0),
                 ["pct"] = proj.Cost > 0f ? WorldSafe.Pct(WorldSafe.Progress(proj) / proj.Cost) : 0,
                 ["tech_level"] = proj.techLevel.ToString(),
-                ["bench_ok"] = proj.requiredResearchBuilding == null || benchOk(proj),
+                // M1 finding J (2026-09-01): this published `bench_ok: true` on
+                // a map with NO research bench at all, because
+                // `requiredResearchBuilding == null` short-circuited the OR —
+                // and the lie hid a destroyed bench for five in-game days.
+                //
+                // THE GATE IS UNCHANGED and stays faithful: Verse/
+                // ResearchProjectDef.cs CanStartNow treats a null
+                // requiredResearchBuilding as satisfied, and WorldSafe.CanStart
+                // above reproduces exactly that. Only the REPORTING is fixed.
+                //
+                //   bench_required — the bench def vanilla demands, null when it
+                //                    demands none. This is the gate's input.
+                //   bench_ok       — whether a bench that can actually research
+                //                    THIS project exists on any player map
+                //                    (ResearchProjectDef.
+                //                    PlayerHasAnyAppropriateResearchBench, which
+                //                    walks listerBuildings.allBuildingsColonist
+                //                    and tests CanBeResearchedAt). The field now
+                //                    means what its name says.
+                //
+                // So `bench_required: null` with `bench_ok: false` is a legal and
+                // informative pair: vanilla will let the project start, and no
+                // colonist can put a single point of work into it.
+                ["bench_required"] = proj.requiredResearchBuilding?.defName,
+                ["bench_ok"] = benchOk(proj),
                 ["source"] = WorldSafe.ResearchRefsOk ? "backing-field" : "unavailable",
                 ["action"] = Stamp(seq),
                 ["note"] = "selecting a project does no work: a colonist with the Research work type active "
-                    + "must sit at a research bench. Check `work-priorities` and advance.",
+                    + "must sit at a research bench. Check `work-priorities` and advance. "
+                    + "`bench_ok:false` means no such bench exists — the project is selected and will "
+                    + "make no progress until one is built, even when `bench_required` is null.",
             };
         }
 
