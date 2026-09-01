@@ -42,6 +42,12 @@ namespace AutoRimmer
         public static int ResetForGameBoundary(string detail)
         {
             int answered = 0;
+            // A placement id names a cell on a map. After a boundary the map is
+            // gone, so every id in the table would resolve against whatever
+            // loads next — which is the shape of bug 1.5 blocker 2 one layer up
+            // (an advance resuming against the next colony). Touches no Verse,
+            // so it is safe on either thread. See Placements' header.
+            Placements.Clear();
             if (TimeDriver.Abandon(Err.NoActiveGame, detail)) answered++;
             while (Pending.TryDequeue(out var cmd))
             {

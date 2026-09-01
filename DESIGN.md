@@ -1529,3 +1529,76 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `ThingRequestGroup.BuildingArtificial` includes them, and a build in progress
   belongs to `construction` rather than to an audit of what is standing.
   `3a5ff6c`.
+- 2026-09-01 (session 16) — **`build` is `Designator_Build.DesignateSingleCell`
+  minus four things, and the zero-work branch it KEEPS is the one that looks like
+  a cheat.** Reproduced in the game's own order: destroy any Frame whose
+  `replaceTags` intersect `def.blueprintDef.replaceTags` with
+  `DestroyMode.Cancel`; then either the zero-work direct placement or
+  `GenSpawn.WipeExistingThings(pos, rot, def.blueprintDef, map,
+  DestroyMode.Deconstruct)` followed by `GenConstruct.PlaceBlueprintForBuild`;
+  then `PlaceWorkers[i].PostPlace`. **Dropped on purpose:**
+  `FleckMaker.ThrowMetaPuffs` (a particle effect), `TutorSystem.AllowAction` /
+  `Notify_Event` (a UI session that does not exist here), and
+  `PlayerKnowledgeDatabase.KnowledgeDemonstrated(BuildOrbitalTradeBeacon)` —
+  which WRITES scribed knowledge state and is exactly the kind of write-on-act an
+  agent's placement has no business doing. **Kept on purpose:** vanilla's
+  `WorkToBuild == 0` branch, which places the finished thing rather than a
+  blueprint. Its sibling disjunct `DebugSettings.godMode` is dropped (the
+  session-15 ruling), and dropping the whole condition with it would have made
+  `build` refuse to do what a player's click does — a blueprint needing no work
+  is a blueprint no pawn is ever dispatched to. `mode` in the result is
+  `blueprint` or `instant-zero-work` so the two never read alike.
+  Two guards fell out of writing it. **`def.designationCategory == null` is
+  `bad-args`**: the architect menu is built by
+  `Verse/DesignationCategoryDef.ResolveDesignators` from defs with a non-null
+  category, so a null one means no `Designator_Build` for that def exists
+  anywhere — and without the test `build {def:"Steel"}` reaches the zero-work
+  branch (a resource has no `WorkToBuild` stat, so the abstract value is the
+  stat's default) and god-hands a steel stack through the one verb that is
+  supposed to be a player's hand. And **`cleared` is a different field from
+  `dev:spawn-thing`'s `wiped`, because the wipe MODE differs**: the blueprint
+  path passes `DestroyMode.Deconstruct`, which REFUNDS, while the god-hand passes
+  `Vanish`, which does not. One vocabulary for two behaviours would have made
+  "the game took your wall apart and gave the steel back" indistinguishable from
+  "your wall is gone". `1adc737`, `c718e4a`.
+- 2026-09-01 (session 16) — **The placement registry is IN MEMORY and
+  session-scoped, and that is the observer discipline rather than a shortcut.**
+  `Placements` holds `{id, def, stuff, pos, rot, mapId, mode, journalSeq,
+  completedTick, failures}` in a static table cleared by
+  `Runtime.ResetForGameBoundary`. Nothing is scribed: a placement id is a handle
+  for the agent that issued the placement, not a durable fact about the colony,
+  and writing our own data into the save is the one mutation this mod's whole
+  observer discipline exists to avoid. The DURABLE record is the journal — `build`
+  writes an `action` row carrying the id and the two Frame transitions write
+  `construction` rows carrying it — so a post-mortem reads the ndjson and a live
+  agent reads the table. Clearing on a game boundary is the same bug class as 1.5
+  blocker 2 one layer up: an id names a CELL ON A MAP, and after a load it would
+  resolve against whatever colony loaded next. **`Answer` looks live first and at
+  the recorded completion second, deliberately**, because `Frame.FailConstruction`
+  puts the blueprint BACK — a placement whose frame failed is genuinely
+  `blueprint` again, so failures are a COUNT beside the state and never a state.
+  `cancelled` is the residual, reached only after both positive answers said no.
+  `d7c8088`, `1adc737`.
+- 2026-09-01 (session 16) — **`CostListAdjusted`'s `errorOnNullStuff:false` is a
+  TRAP, and refusing to ask is the only safe guard.** `d7c8088` hazard 2 says
+  reading material cost can emit a red error and asks the implementation to guard
+  `stuffToUse == null` before asking. The obvious guard is the parameter vanilla
+  already provides — `CostListCalculator.CostListAdjusted(BuildableDef, ThingDef,
+  bool errorOnNullStuff = true)` — and it is worse than the error it silences.
+  With `false` and a null stuff on a `MadeFromStuff` def the method falls through
+  to `value.Add(new ThingDefCountClass(stuff, num))` with `stuff` NULL and then
+  `cachedCosts.Add(key, value)` under the key `(entDef, null)`. Vanilla's own
+  error path never inserts that key — it recurses into
+  `(entDef, DefaultStuffFor(entDef))` and returns — so passing `false` converts a
+  red error into a process-lifetime poisoned cache entry holding a
+  `ThingDefCountClass` with a null `thingDef`, which the next vanilla call for
+  that key consumes instead of taking its error branch. An observer mutating a
+  shared game cache is strictly worse than an observer logging. So
+  `Placements.Materials` **does not call it at all** for that pair: `materials` is
+  null and `materials_note` says why. Every path in this mod resolves stuff
+  before placing (`SiteVerbs.ResolveStuff` -> `GenStuff.DefaultStuffFor`), so the
+  case is reachable only for a blueprint someone else made — which is precisely
+  the case the acceptance bullet stages. The cache ITSELF is accepted, same
+  ruling as `BuildableDef.PlaceWorkers`: def-level, keyed on `(entDef, stuff)`,
+  never scribed, reset when `Find.Storyteller.difficulty` changes, and filled by
+  any hover over the architect menu. `d7c8088`.
