@@ -3549,3 +3549,106 @@ AssemblyConfiguration Release blob 1 / Debug 0, `InformationalVersion`
 
 **No acceptance suite exists for items 1 or 2 and no verb in either has met a
 bench.** `722c951` is not started. `b1b3060` is still held. M1 cannot re-run.
+
+## Session 21 — 2026-09-01 (dorian's Linux box). The M1 gate, and the round that outgrew it
+
+Eight workers, eight worktrees, ten merges, six standalone `Build:` commits.
+The brief asked for four gate items and a bench proof; it ended with the M1
+contract rewritten for twenty days and a different goal.
+
+### The four gate items, all merged and built
+
+`7382bdd` **CLOSED** — an unknown argument name is never silent. `VerbArgs`
+keeps a read log: every accessor funnels through one `Look(key)`, so
+`supplied − queried` is derived from the code rather than maintained beside it.
+The whitelist session 15 rejected stays rejected, and the number is now known:
+the literal form costs **73 keys across 26 verbs** read only on some paths.
+Bullet 1 was REWORDED and closed against the report form, Evan's call.
+
+`b1b3060` **done** — `posture`, and the issue's own premise refuted.
+`JobGiver_ConfigurableHostilityResponse` lives in `HumanlikeConstant`, which
+`ThinkTreeInjector` never touches and `DetermineNextJob` runs FIRST, so `Flee`
+BEATS seek and `hostility:"Attack"` is load-bearing. The corrected account is
+better than either version: `ShouldStartFleeing` is the TRIGGER and tests
+distance at `InHorDistOf(8f)`, while `TryGetFleeJob` re-gathers with distance
+and sight OFF and flees every threat the caches hold. **That gap is M1's 150
+cells** — one crow inside eight cells starts it, the whole map chooses where the
+pawn runs to.
+
+`722c951` + `40ed42f`#3 — the unread-journal refusal and the casualty halt.
+**96 PASS / 0 FAIL / 0 SKIP.** The delta the refusal caught in testing contained
+a `death`: M1's exact failure, refused by default.
+
+`61794cd` + `40ed42f` — the suite session 20 owed. 290/294 first run, four
+failures adjudicated as forks (one suite bug, one mod defect, one spec ruling),
+now 75 offline self-checks.
+
+### What the round grew into
+
+Evan's questions changed the scope three times, each time correctly.
+
+**"What would you want done before playing?"** produced `261f2e9` (temperature,
+and the rot term `food_days` never had) and `2d9a1da` (rates). The rates finding
+is the one to remember: **RimWorld has kept eleven `HistoryAutoRecorder` series
+since tick 0 and the mod had never opened one.** Session 13 decoded that same
+block by hand out of `Autosave-5.rws`.
+
+**"What would wake you up if you slept the whole day?"** — almost nothing.
+Every letter and alert halt sat inside `switch (until)`, and `CheckUntilKeys`
+refuses a second matcher, so an agent waiting on a condition could not ALSO ask
+to be woken by a raid. His ruling reframed it: **"anything neutral or positive
+should wake you, maybe you want to act on an inspiration ... that's how you get
+propelled into actually playing the game and having fun."** The rule is "is
+there something I might act on", not "is this bad". `280fb78`.
+
+**"A quiet day is typical"** reframed `1113019`'s default bound: 60,000 ticks is
+not a safety net on an error path, it is the NORMAL idle unit, and the halts are
+the wake-up mechanism.
+
+### Four times the orchestrator overstated a worker's finding
+
+Recorded because it decided what got queued, and Evan caught three of them.
+
+- The runaway advance "said nothing" — it published `true_when_armed: true`,
+  `saw_false: false`. Session 19 anticipated the case and instrumented it.
+- Weapons "cannot be counted" — `pawn` publishes `equipment`/`apparel`/
+  `inventory` and `things {kind:"weapons"}` maps to `ThingRequestGroup.Weapon`.
+  Only the *trend series* is missing.
+- Observers "write scribed state" — `Map.MapUpdate` calls
+  `TryRebuildDirtyRegionsAndRooms` every frame anyway.
+- `0.7c` "a real regression" — refuted with banked s19 envelopes showing tick
+  1118 → 1118 across the same nine refusals. The suite takes its baseline before
+  it pauses anything; a bench that arrives running produces exactly that.
+  Filed as `f794bfc`.
+
+Each time the worker was precise and the orchestrator generalised. Two p1s
+shrank under Evan's challenge (`65e7cf9` → p3, discharged) and two proposed
+pre-M1 blockers evaporated.
+
+### The bench
+
+`work_coverage` was live and reporting Doctor under floor on a seven-day-old
+colony — the M1 death condition visible from birth. `BloodLoss` came back at
+**row 0 of 20 with 34 dropped**, a harder truncation than any of Captain's five
+M1 reads, and the same pawn refuted the Scope's own alternative by measurement:
+`life_threatening` false at 0.562, true at 0.623.
+
+`triage` proven through four states of one casualty, and the deadline refusal
+fired on a staged `too-slow`: clock 3,061 against travel 2,264 + carry 2,284,
+margin **−1,487**. That is M1's tick-231,968 decision, answered.
+
+And `7382bdd` caught a mistake nobody planned: the orchestrator passed
+`area --op create --label` where the verb reads `name`, and `ignored_args` named
+the key, listed what the verb did read, and handed over the journal seq.
+
+### What the next session inherits
+
+`664e9b9` is `state:next`, rewritten as **thrive-20-days** with three verdicts
+(FAILED / SURVIVED / THRIVED), gate rows G1–G5 and thrive rows T1–T7 graded off
+the new rates surface. Staging must NOT stock food beyond the scenario's own
+survival meals, or the food-cycle row cannot fail.
+
+Fixture facts that each cost a cycle: `dev:unfog` needs `{all:true}`;
+a bare `--quicktest` map's only sealed roofed room is the ancient danger;
+`status.json` persists across restarts so a waiter must require the sid to
+CHANGE; `pkill -f RimWorldLinux` kills its own shell.
