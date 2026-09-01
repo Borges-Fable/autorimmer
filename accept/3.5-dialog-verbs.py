@@ -442,6 +442,7 @@ def phase0():
     eq("0.8a", "`trade` with no session refuses at gate no-session", e, "data.gate",
        "no-session")
     shape("0.8b", "trade", e, "data.gate_cite")
+    S["noSessionTrade"] = e          # 0.11 reads it back; see the note there
     e = send("comms-choose", {"option": 0})
     eq("0.8c", "`comms-choose` with no call refuses at gate no-call", e, "data.gate",
        "no-call")
@@ -487,6 +488,22 @@ def phase0():
                      % ("; ".join(why_not) if why_not else "none"))
         S["N"], S["Nname"] = able[0].get("id"), able[0].get("name")
     print("  %snegotiator N = %s (%s)%s" % (DIM, S["N"], S["Nname"], OFF))
+
+    # 0.11  THE TRADE-TOTALS SHAPE CONTRACT — the half of it that CAN live here,
+    #       and an explicit statement of why the other half cannot. Phase 3 digs
+    #       `data.totals.colony_silver`, `.colony_silver_post_deal` and
+    #       `.trader_silver`, and `TradeVerbs.AddDealTotals` writes the whole
+    #       `totals` block off `TradeSession.deal` — so it exists only inside an
+    #       open session, which phase 0 has no trader to open. The ABSENCE half
+    #       is proved here on 0.8's own no-session refusal; the PRESENCE half is
+    #       proved at 3.2i-3.2k and 3.8a1-3.8a3, at the first envelopes that can
+    #       carry it. Written down rather than skipped: a shape contract with an
+    #       undeclared hole in it is the exact failure this section exists to
+    #       prevent, and 3.2d spent a whole round in one.
+    absent("0.11", "a refused `trade` carries NO totals block, so the PRESENCE half of "
+                   "the trade shape contract is deferred to 3.2i / 3.8a1 rather than "
+                   "dropped",
+           S.get("noSessionTrade") or {}, "data.totals")
 
 
 # ------------------------------------------------------------------- phase 1 --
@@ -833,15 +850,34 @@ def phase3():
     eq("3.2a", "trade-start opened a session", e, "data.ok", True)
     eq("3.2b", "the session is active", e, "data.session.active", True)
     not_null("3.2c", "the trader is named", e, "data.session.trader")
-    # THE INVARIANT THIS SPEC IS ABOUT: a trade with no window on the stack.
-    eq("3.2d", "ZERO force-pausing windows — the deal is transacted, not driven",
-       e, "data.force_pause.count", 0)
+    # THE INVARIANT THIS SPEC IS ABOUT: a trade with no window on the stack —
+    # RETARGETED 2026-08-31, because until then it ASSERTED NOTHING. `trade-start`
+    # does not publish a `force_pause` block at all: the only publishers in the
+    # mod are `InteractionVerbs.Interactions` and `DialogVerbs`, and
+    # `TradeVerbs.TradeStart` / `PawnActs.TradeStart` is not among them. The key
+    # was therefore ABSENT, `dig()` returns its default for an absent key exactly
+    # as it does for a present-and-null one, and `eq(..., 0)` was reading a hole
+    # — which is why it reported `actual: null` against `expected: 0`.
+    # It is now measured on `interactions`, the verb that DOES publish the block
+    # and whose shape phase 0 proves at 0.5a/0.5b. Deleting it was the other
+    # option — 3.3 already proves the same invariant through
+    # `status.forcePause` — but two independent routes to "no window was
+    # raised" is the point of a spec that is ABOUT the window stack, and this one
+    # reads the richer of the two surfaces.
+    fp = send("interactions")
+    eq("3.2d", "ZERO force-pausing windows after trade-start — the deal is "
+               "transacted, not driven", fp, "data.force_pause.count", 0)
     eq("3.2e", "and the verb says the negotiator did NOT walk",
        e, "data.negotiator_walked", False)
     not_null("3.2f", "the scribed-thing-id cost of opening a session is DISCLOSED",
              e, "data.session_cost.scribed_thing_id")
     not_null("3.2g", "journaled", e, "data.action.journal_seq")
     ge("3.2h", "the deal has tradeables", e, "data.tradeables_total", 1)
+    # 0.11's deferred PRESENCE half, at the first envelope that can carry it.
+    # 3.7i digs the first of these and 3.9g is built on the other two.
+    shape("3.2i", "trade-start", e, "data.totals.colony_silver", NUM)
+    shape("3.2j", "trade-start", e, "data.totals.colony_silver_post_deal", NUM)
+    shape("3.2k", "trade-start", e, "data.totals.trader_silver", NUM)
     S["silver0"] = dig(e, "data.totals.colony_silver") or 0
     print("  %scolony silver at open = %s%s" % (DIM, S["silver0"], OFF))
 
@@ -872,10 +908,65 @@ def phase3():
                  "ITrader.ColonyThingsWillingToBuy, i.e. the caravan's trade radius, not "
                  "the whole map. Move goods near the trader, or stage with "
                  "dev:spawn-thing.")
-    S["buy"] = ({"index": 3, "thing": "MealSimple", "trader_has": 30, "colony_has": 0}
-                if ARGS.dry_run else buyable[0])
-    S["sell"] = ({"index": 7, "thing": "Apparel_Shirt", "colony_has": 12, "trader_has": 0}
-                 if ARGS.dry_run else sellable[0])
+    # THE TWO SIDES MUST BE DIFFERENT DEFS, and this is not a tidiness
+    # preference — it is what makes the phase capable of failing.
+    # `RimWorld/Transferable.CountToTransfer` is ONE signed field per row and
+    # `RimWorld/Tradeable.ActionToDo` derives the side from its sign (None at 0,
+    # PlayerSells when CountToTransferToDestination > 0, else PlayerBuys). So a
+    # def that is bought AND sold is a SINGLE row, the two writes collapse, and
+    # the last one wins. On 2026-08-31 `buyable[0]` and `sellable[0]` were both
+    # ComponentIndustrial: the driver asked to buy 10 and sell 5, the row ended
+    # at -5, colony stock went 50 -> 45, the buy never happened, and 3.9h and
+    # 3.9i were reading THE SAME `data.after` object — `TradeVerbs.TradeConfirm`
+    # keys `after` by ThingDef (`t2.ThingDef == def`), so one row answered both.
+    #
+    # The tell, preserved as check 3.6h: `lines_with_action` was 2, which was the
+    # single item row PLUS THE SILVER ROW, not two item rows.
+    #
+    # Uniquely-named rows are preferred on top of distinctness, because 3.8
+    # re-addresses by defName after the Reset and `data.after` is keyed by
+    # ThingDef — a def carried by two rows (same def, different stuff) is
+    # ambiguous to both. It is a preference, not a requirement: distinctness is
+    # the hard constraint and the search below only breaks ties with it.
+    if ARGS.dry_run:
+        S["buy"] = {"index": 3, "thing": "MealSimple", "trader_has": 30, "colony_has": 0}
+        S["sell"] = {"index": 7, "thing": "Apparel_Shirt", "colony_has": 12, "trader_has": 0}
+    else:
+        seen = {}
+        for r in rows:
+            seen[r.get("thing")] = seen.get(r.get("thing"), 0) + 1
+
+        def solo(r):
+            return seen.get(r.get("thing")) == 1
+
+        best = None
+        for b in buyable:
+            for s in sellable:
+                if s.get("thing") == b.get("thing"):
+                    continue
+                score = (0 if solo(b) else 1) + (0 if solo(s) else 1)
+                if best is None or score < best[0]:
+                    best = (score, b, s)
+            if best is not None and best[0] == 0:
+                break
+        if best is None:
+            note("3.4e", "every sellable row carries the SAME def as every buyable one "
+                         "(%s). One def is ONE Tradeable row and CountToTransfer is a "
+                         "single signed field, so the buy and the sell would collapse "
+                         "into each other and this phase would prove nothing."
+                         % buyable[0].get("thing"))
+            precondition("3.4e", "a sellable def DISTINCT from the buyable one",
+                         False,
+                         "%d buyable row(s), %d sellable row(s), and no pair of them "
+                         "names two different defs. Stage a second kind of good inside "
+                         "the trader's radius (dev:spawn-thing) and re-run. This is a "
+                         "FIXTURE gap, not a 3.5 failure."
+                         % (len(buyable), len(sellable)))
+        S["buy"], S["sell"] = best[1], best[2]
+        if best[0]:
+            note("3.4e", "the chosen pair is distinct but not uniquely named (%d of the "
+                         "two defs appear on more than one row) — 3.8's defName "
+                         "addressing may hit the ambiguity fallback" % best[0])
     print("  %sBUY  10 x %s (index %s, trader has %s)%s"
           % (DIM, S["buy"].get("thing"), S["buy"].get("index"),
              S["buy"].get("trader_has"), OFF))
@@ -887,18 +978,81 @@ def phase3():
     S["buyTrader0"] = S["buy"].get("trader_has") or 0
     S["sellTrader0"] = S["sell"].get("trader_has") or 0
 
-    # 3.5 THE RED-ERROR GUARD on trade-set. Transferable.AdjustTo Log.Errors
-    #     "Failed to adjust transferable counts" on an out-of-range count; the
-    #     verb must refuse with the game's own overflow reason instead.
+    # 3.5 THE RED-ERROR GUARD on trade-set, AND IT TAKES TWO CALLS TO REACH IT.
+    #     `RimWorld/Transferable.AdjustTo` Log.Errors "Failed to adjust
+    #     transferable counts" when `CanAdjustTo` refuses, so `TradeVerbs
+    #     .TradeSet`'s gate 4 calls that same predicate and rejects first. But
+    #     read `RimWorld/Transferable.CanAdjustTo`: it returns WasAccepted when
+    #     `destination == CountToTransfer`, returns WasAccepted AGAIN whenever
+    #     `ClampAmount(destination) != CountToTransfer`, and only falls through
+    #     to `OverflowReport()` when the clamp EQUALS the current count. From a
+    #     row sitting at `CountToTransfer == 0`, asking for 10030 against a
+    #     maximum of 31 clamps to 31, and 31 != 0, SO THE GAME ITSELF ACCEPTS
+    #     IT and `AdjustTo` silently writes the clamped 31.
+    #
+    #     The gate is therefore CORRECT and simply never entered, which is
+    #     exactly why the 2026-08-31 run failed 3.5a-3.5d while 3.5's red-error
+    #     invariant PASSED — there was no red error to catch, because the game
+    #     was never asked for anything it considered out of range. Those checks
+    #     were unreachable by construction, not evidence of a defect.
+    #
+    #     Sending the SAME line a SECOND time is what reaches the gate: by then
+    #     `CountToTransfer` is 31, `ClampAmount(10030)` is 31, the clamp equals
+    #     the count, and the report is an overflow. Both halves are asserted —
+    #     call one accepted WITH A CLAMP, call two refused by name.
+    #
+    #     CALL ONE IS ASSERTED AGAINST WHAT SHIPS TODAY. The accepted line is
+    #     `TradeVerbs.TradeableLine` plus `was`, so it carries `count` (the
+    #     clamped result) and `was` (the count before) and does NOT carry
+    #     `requested`/`clamped`. git-bug 7e8c969 proposes adding them; when it
+    #     lands, 3.5d/3.5e get an explicit echo to read instead of inferring the
+    #     clamp from `count == max`. Do not write that assertion before the
+    #     issue ships — a check that fails until an unrelated issue lands is a
+    #     check nobody can act on.
     over = (S["buy"].get("trader_has") or 0) + 9999
+
+    # ---- call one: the game accepts it, and clamps ----
     e = send("trade-set", {"index": S["buy"].get("index"), "buy": over})
-    eq("3.5a", "an out-of-range buy is REFUSED, not attempted", e, "data.ok", False)
-    eq("3.5b", "and names the gate", e, "data.rejected.0.gate", "out-of-range")
-    not_null("3.5c", "with the game's own bounds echoed", e, "data.rejected.0.max")
-    eq("3.5d", "nothing was journaled for a wholly refused call",
+    shape("3.5a", "trade-set", e, "data.accepted.0.was", NUM)
+    shape("3.5b", "trade-set", e, "data.accepted.0.max", NUM)
+    eq("3.5c", "the FIRST out-of-range line is ACCEPTED — Transferable.CanAdjustTo "
+               "returns WasAccepted while ClampAmount(dest) != CountToTransfer",
+       e, "data.ok", True)
+    eq("3.5d", "and it started from a ZERO row, which is WHY gate 4 could not fire",
+       e, "data.accepted.0.was", 0)
+    acc_count = dig(e, "data.accepted.0.count")
+    acc_max = dig(e, "data.accepted.0.max")
+    check("3.5e", "so AdjustTo SILENTLY CLAMPED it to the game's own maximum "
+                  "(accepted.0.count == accepted.0.max, both far below the %d asked "
+                  "for)" % over,
+          is_num(acc_count) and is_num(acc_max) and acc_count == acc_max
+          and acc_count < over,
+          "count == max, and < %d" % over,
+          {"count": acc_count, "max": acc_max, "requested": over})
+    not_null("3.5f", "a clamp IS a write, so this call DID journal",
+             e, "data.action.journal_seq")
+
+    # ---- call two: the identical line, now refused ----
+    e = send("trade-set", {"index": S["buy"].get("index"), "buy": over})
+    shape("3.5g", "trade-set", e, "data.rejected.0.requested", NUM)
+    # Proved PRESENT so 3.5m is not an eq(..., None) against a hole — the 3.2d
+    # lesson. `PawnActs.NoStamp` publishes `journal_seq: null`.
+    shape("3.5h", "trade-set", e, "data.action.journal_seq")
+    eq("3.5i", "the SECOND, IDENTICAL line is REFUSED — ClampAmount(dest) now EQUALS "
+               "CountToTransfer, so CanAdjustTo reaches OverflowReport()",
+       e, "data.ok", False)
+    eq("3.5j", "and names the gate", e, "data.rejected.0.gate", "out-of-range")
+    rej_max = dig(e, "data.rejected.0.max")
+    check("3.5k", "with the game's own bounds echoed — and the max it names is exactly "
+                  "the count call one was clamped to (data.rejected.0.max)",
+          is_num(rej_max) and rej_max == acc_count,
+          show(acc_count), rej_max)
+    eq("3.5l", "and the request echoed back verbatim", e, "data.rejected.0.requested",
+       over)
+    eq("3.5m", "nothing was journaled for a wholly refused call",
        e, "data.action.journal_seq", None)
-    no_red_errors("3.5e", 'THE INVARIANT: no "Failed to adjust transferable counts" '
-                          "red error")
+    no_red_errors("3.5n", 'THE INVARIANT: no "Failed to adjust transferable counts" '
+                          "red error, across BOTH calls")
 
     # 3.6 THE PLURAL FORM IS THE VERB — buy and sell in ONE call.
     e = send("trade-set", {"items": [
@@ -915,7 +1069,18 @@ def phase3():
     eq("3.6e", "and its action is PlayerBuys", e, "data.accepted.0.action", "PlayerBuys")
     eq("3.6f", "the sell line reads -5", e, "data.accepted.1.count", -5)
     eq("3.6g", "and its action is PlayerSells", e, "data.accepted.1.action", "PlayerSells")
-    eq("3.6h", "two lines carry an action", e, "data.totals.lines_with_action", 2)
+    # THREE, NOT TWO — the two item rows PLUS the silver row.
+    # `TradeVerbs.AddDealTotals` counts every tradeable whose
+    # `RimWorld/Tradeable.ActionToDo` is not None, and `trade-set` ends in
+    # `deal.UpdateCurrencyCount()`, which gives the currency row a non-zero
+    # count. On 2026-08-31 this read 2 and PASSED while the buy had been
+    # silently overwritten by the sell — that 2 was one item row plus silver.
+    # Demanding 3 is what makes a future collapse visible instead of letting it
+    # hide behind a count that happens to match. (The one benign way it can be
+    # 2 is a deal whose net cost rounds to zero: `Tradeable.ActionToDo` returns
+    # None at CountToTransfer == 0, so the silver row drops out.)
+    eq("3.6h", "THREE lines carry an action — the buy, the sell, AND the silver row",
+       e, "data.totals.lines_with_action", 3)
     not_null("3.6i", "journaled", e, "data.action.journal_seq")
     stack_clear("3.6j", "still no window on the stack")
 
@@ -926,8 +1091,13 @@ def phase3():
     e = send("trade-cancel")
     eq("3.7a", "trade-cancel closed the session", e, "data.ok", True)
     eq("3.7b", "and TradeSession.Active is now false", e, "data.session_closed", True)
-    eq_val("3.7c", "the two staged lines are reported as abandoned (data.abandoned)",
-           len(as_list(dig(e, "data.abandoned"))), 2)
+    # Three again, and for the same reason: `TradeVerbs.TradeCancel` walks
+    # `deal.AllTradeables` and keeps every row whose ActionToDo is not None, the
+    # currency row included. This read 2 and passed on 2026-08-31 — one item row
+    # plus silver, not the two item rows the label claimed.
+    eq_val("3.7c", "all THREE staged lines are reported as abandoned, silver row "
+                   "included (data.abandoned)",
+           len(as_list(dig(e, "data.abandoned"))), 3)
     contains("3.7d", 'and "untouched" is DEFINED in the result, not left to inference',
              dig(e, "data.untouched_means"), "ResolveTrade")
     not_null("3.7e", "journaled", e, "data.action.journal_seq")
@@ -966,11 +1136,26 @@ def phase3():
             {"index": sell_row[0].get("index"), "sell": 5},
         ]})
     eq("3.8a", "both lines staged again", e, "data.ok", True)
-    S["buyValue"] = dig(e, "data.totals.buy_value") or 0
-    S["sellValue"] = dig(e, "data.totals.sell_value") or 0
-    S["silverPre"] = dig(e, "data.totals.colony_silver") or 0
-    print("  %sbuy value %s, sell value %s, colony silver %s%s"
-          % (DIM, S["buyValue"], S["sellValue"], S["silverPre"], OFF))
+    # 0.11's deferred PRESENCE half again, on the envelope 3.9g is built from.
+    shape("3.8a1", "trade-set", e, "data.totals.colony_silver", NUM)
+    shape("3.8a2", "trade-set", e, "data.totals.colony_silver_post_deal", NUM)
+    shape("3.8a3", "trade-set", e, "data.totals.trader_silver", NUM)
+
+    # THE PRE-CONFIRM SNAPSHOT. Taken from whichever `trade-set` last touched
+    # the deal — 3.8f below re-stages it, and a snapshot taken only here would
+    # be stale by the time 3.9g read it.
+    def snap(env):
+        S["buyValue"] = dig(env, "data.totals.buy_value") or 0
+        S["sellValue"] = dig(env, "data.totals.sell_value") or 0
+        S["silverPre"] = dig(env, "data.totals.colony_silver") or 0
+        S["silverPost"] = dig(env, "data.totals.colony_silver_post_deal")
+        S["traderSilver"] = dig(env, "data.totals.trader_silver")
+        print("  %sbuy value %s, sell value %s; colony silver %s -> post-deal %s "
+              "(the trader holds %s)%s"
+              % (DIM, S["buyValue"], S["sellValue"], S["silverPre"],
+                 show(S["silverPost"]), show(S["traderSilver"]), OFF))
+
+    snap(e)
 
     e = send("trade-confirm")
     if dig(e, "data.gate") == "colony-cannot-afford":
@@ -986,9 +1171,12 @@ def phase3():
         no_red_errors("3.8e", "and no NRE reached the log")
         note("3.8f", "the colony cannot afford 10 of that item — reducing the buy to "
                      "what the silver covers and retrying")
-        send("trade-set", {"items": [{"thing": S["buy"].get("thing"), "buy": 1}]})
+        snap(send("trade-set", {"items": [{"thing": S["buy"].get("thing"), "buy": 1}]}))
         e = send("trade-confirm")
     if dig(e, "data.gate") == "trader-short-funds":
+        # Remembered for 3.9g: TryExecute runs `LimitCurrencyCountToFunds()`,
+        # which caps what the colony can actually be paid.
+        S["shortFunds"] = True
         eq("3.8g", "THE CONFIRMATION MODAL became an argument, not a window",
            e, "data.gate", "trader-short-funds")
         contains("3.8h", "and cites the Dialog_MessageBox it replaced",
@@ -1004,26 +1192,66 @@ def phase3():
     not_null("3.9f", "and the post-trade counts are read BACK from the rebuilt deal",
              e, "data.after")
     # SILVER AND STOCK VERIFIED CORRECT — the bullet's own words.
-    delta = dig(e, "data.colony_silver_delta") or 0
-    expect = round(S["sellValue"] - S["buyValue"])
-    print("  %ssilver %s -> %s (delta %s); expected roughly sell(%s) - buy(%s) = %s%s"
-          % (DIM, S["silverPre"], dig(e, "data.colony_silver_after"), delta,
-             S["sellValue"], S["buyValue"], expect, OFF))
-    check("3.9g", "BULLET 1 — colony silver moved, and the delta is the deal's own "
-                  "arithmetic",
-          is_num(delta) and abs(delta - expect) <= 2,
-          "delta within 2 of %s" % expect, delta)
+    # SILVER VERIFIED AGAINST THE DEAL'S OWN POST-DEAL NUMBER — because
+    # `sell_value - buy_value` IS STRUCTURALLY ZERO and the old expectation
+    # could therefore never have been wrong. `TradeVerbs.AddDealTotals` sums
+    # `CurTotalCurrencyCostForSource`/`ForDestination` over EVERY tradeable with
+    # an action, and the silver row has one — whereas
+    # `RimWorld/TradeDeal.UpdateCurrencyCount` sums only the rows where
+    # `!tradeable.IsCurrency` and then `ForceToSource`s the silver row to absorb
+    # exactly that difference. So the currency row makes the two totals equal by
+    # construction. On 2026-08-31 it read sell(98.9) - buy(99) = 0 against a
+    # real delta of 99, and would have read 0 for any deal that balances.
+    #
+    # `RimWorld/Tradeable.CountPostDealFor(Transactor.Colony)` is
+    # `CountHeldBy(colony) + CountToTransferToSource`, read off the currency row
+    # AFTER `trade-set`'s own `UpdateCurrencyCount()` — the same function
+    # `TradeDeal.TryExecute` re-runs before resolving — so this is exact integer
+    # arithmetic against the number the deal itself promised, not an estimate.
+    delta = dig(e, "data.colony_silver_delta")
+    expect = None
+    if is_num(S.get("silverPost")):
+        expect = S["silverPost"] - S["silverPre"]
+        # ...unless the trader could not cover it. `TradeDeal.TryExecute` calls
+        # `LimitCurrencyCountToFunds()`, which ForceToSource()s the currency row
+        # down to `CountHeldBy(Transactor.Trader)` — the branch 3.8g took.
+        if S.get("shortFunds") and expect > 0 and is_num(S.get("traderSilver")):
+            expect = min(expect, S["traderSilver"])
+    print("  %ssilver %s -> %s (delta %s); the deal's own pre-confirm post-deal "
+          "number promised %s%s"
+          % (DIM, S["silverPre"], show(dig(e, "data.colony_silver_after")),
+             show(delta), show(expect), OFF))
+    check("3.9g", "BULLET 1 — colony silver moved by EXACTLY what the deal promised "
+                  "(totals.colony_silver_post_deal - totals.colony_silver, read "
+                  "pre-confirm)",
+          is_num(delta) and is_num(expect) and delta == expect,
+          "delta == %s" % show(expect), delta)
     after = [r for r in as_list(dig(e, "data.after")) if isinstance(r, dict)]
     after_buy = [r for r in after if r.get("thing") == S["buy"].get("thing")]
     after_sell = [r for r in after if r.get("thing") == S["sell"].get("thing")]
+    # A MISSING ROW IS A FAILURE, NOT A SKIP. These two used to sit behind bare
+    # `if after_buy:` / `if after_sell:` guards, so an absent row made the check
+    # vanish from the run entirely — no PASS, no FAIL, no mention in the RESULT
+    # line. That is the same green-while-asserting-nothing shape as 3.2d, one
+    # level up: an assertion that did not run reads exactly like one that
+    # passed. `data.after` is keyed by ThingDef, so with the buy and sell defs
+    # now distinct (see 3.4) both rows must be there.
     if after_buy:
         check("3.9h", "BULLET 1 — the bought stock is now in the colony",
               (after_buy[0].get("colony_now") or 0) > S["buyColony0"],
               "> %s" % S["buyColony0"], after_buy[0].get("colony_now"))
+    else:
+        check("3.9h", "BULLET 1 — the bought stock is now in the colony", False,
+              "a `data.after` row for the bought def %s" % S["buy"].get("thing"),
+              [r.get("thing") for r in after])
     if after_sell:
         check("3.9i", "BULLET 1 — the sold stock left the colony",
               (after_sell[0].get("colony_now") or 0) < S["sellColony0"],
               "< %s" % S["sellColony0"], after_sell[0].get("colony_now"))
+    else:
+        check("3.9i", "BULLET 1 — the sold stock left the colony", False,
+              "a `data.after` row for the sold def %s" % S["sell"].get("thing"),
+              [r.get("thing") for r in after])
     stack_clear("3.9j", "THE INVARIANT: the whole trade ran with no window on the stack")
     no_red_errors("3.9k", "zero red errors across the whole trade")
 
