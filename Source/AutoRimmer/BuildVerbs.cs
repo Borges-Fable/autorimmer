@@ -449,8 +449,13 @@ namespace AutoRimmer
                 // A zero-work placement is BUILT the moment it returns; there is
                 // no blueprint and no frame to wait for, and reporting it as
                 // "blueprint" would make `construction` lie about a thing that
-                // is standing there.
-                if (mode == "instant-zero-work")
+                // is standing there. `place-layout`'s instant mode is the same
+                // case and MUST be here: it spawns the finished thing, and for a
+                // TerrainDef it produces no Thing at all, so without this
+                // `Answer`'s live look finds nothing, falls through both
+                // positive branches and reports a floor that is on the ground as
+                // `cancelled`.
+                if (mode == "instant-zero-work" || mode == StateInstant)
                 {
                     p.CompletedTick = p.Tick;
                     p.BuiltId = produced?.thingIDNumber ?? -1;

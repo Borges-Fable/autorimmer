@@ -385,8 +385,13 @@ namespace AutoRimmer
                 }
 
                 Place(map, e, mode, undo, cleared, wiped, ref clearedMore, ref wipedMore);
+                // `e.PlaceMode` is what actually ran — `instant`, `blueprint`
+                // or vanilla's `instant-zero-work` branch — never the mode
+                // argument, because a zero-work def inside a blueprint-mode
+                // layout is already built and `construction` must not call it a
+                // blueprint.
                 var p = Placements.Record(map, e.Def, e.Stuff, e.Pos, e.Rot,
-                    mode == ModeInstant ? Placements.StateInstant : e.PlaceMode, e.Produced);
+                    e.PlaceMode, e.Produced);
                 e.PlacementId = p.Id;
                 record.PlacementIds.Add(p.Id);
                 placed.Add(PlacedRow(e, p));
