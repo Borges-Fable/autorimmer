@@ -1035,6 +1035,15 @@ def main():
 
     print("")
     print("=" * 78)
+    if ARGS.dry_run:
+        # A dry-run SENDS NOTHING, so every expectation above was printed and
+        # no expectation was evaluated. Saying "passed" here is the exact
+        # green-while-asserting-nothing failure phase 0 exists to prevent, one
+        # level up.
+        print("%sRESULT: --dry-run printed %d expectations and asserted NONE of "
+              "them. Nothing was sent; no dig path was proved. Run it live.%s"
+              % (YELLOW, CHECKS, OFF))
+        sys.exit(0)
     if FAILS:
         print("%sRESULT: %d FAILED of %d checks - %s%s"
               % (RED, len(FAILS), CHECKS, ", ".join(FAILS), OFF))
