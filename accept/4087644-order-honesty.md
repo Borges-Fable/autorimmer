@@ -14,7 +14,10 @@ BY HAND from the tables below** — that is how the first acceptance run went.
     ./accept/4087644-order-honesty.py             # against a live bench
 
 **Fixture:** the agent bench (`_RimWorld-Agent/run-agent.sh`) and a colony with
-two or more colonists. Two loose apparel items are wanted and one is
+two or more colonists **and at least one animal on the map** — tame or wild,
+either satisfies 6.15 (`PawnSafe.FilterClasses` maps `filter:"animal"` onto both
+`ClassAnimal` and `ClassWildlife`); with none, 6.15 exits 2 as a fixture gap
+rather than failing. Two loose apparel items are wanted and one is
 required; with none, phase 0 stages two with `dev:spawn-thing
 {def:"Apparel_Parka", count:2}` and says so in its output. With only one,
 phase 3's queued order falls back to a second `move-to` so the check is still
@@ -27,8 +30,12 @@ could not be met, which is not a spec failure.
 
 **`--dry-run` proves the plan, never the paths.** It sends nothing, so every
 envelope is empty, every shape check is skipped, and every wrong `dig()` path
-looks fine. The first draft of this suite passed `--dry-run` with eight wrong
-arg names and paths in it.
+looks fine — which is why it now refuses to print the word *passed*. The first
+draft of this suite passed `--dry-run` with eight wrong arg names and paths in
+it, and the **first live run** (2026-08-31, 92 PASS / 5 FAIL, zero red errors)
+found three more that a dry-run cannot reach. All five failures were driver
+defects; no mod change was owed by any of them. See the table under *This suite
+is the worked example*.
 
 ---
 
@@ -44,9 +51,16 @@ file. *A suite that cannot distinguish absent from null is not a test.*
 
 So phase 0 asserts the **existence** of every envelope key the later phases dig
 on, naming the verb and the key: `pawns` → `data.list`; `things` →
-`data.things`; `journal` → `data.last_seq`, `data.events`, `data.count`; `pawn`
-→ `data.state`, `data.state.job_queue`, `data.apparel`, `data.apparel.worn`. A
-shape change then fails *here*, at a check that says which verb moved.
+`data.things`; `journal` → `data.last_seq`, `data.events`, `data.count`, and —
+against a real row, from a second read — `data.events[0].type`,
+`data.events[0].payload`, `data.events[0].payload.verb`; `pawn` → `data.state`,
+`data.state.job_queue`, `data.apparel`, `data.apparel.worn`. A shape change then
+fails *here*, at a check that says which verb moved.
+
+**The row-shape read has to be a second call.** The watermark read pushes
+`since_seq` past the end on purpose, so it returns *zero* events — it can prove
+`data.events` is a list and nothing whatever about what is inside one. That gap
+is exactly what 6.5 fell through (below).
 
 **Per-driver on purpose, not a shared `accept/_shapes.py`.** Every file in
 `accept/` stands alone and runs from a bare checkout — that portability is what
@@ -74,6 +88,29 @@ them, because the preflight happened to die first:
 `has_key()` was already in the file, for `job_start_tick`. The distinction was
 known, the tool was built, and it was applied in exactly one place. That is the
 lesson worth carrying: the next person will also know, and also forget.
+
+**And the first live run found three more, in a driver that had already been
+audited for exactly this.** 92 PASS / 5 FAIL, zero red errors, and *every one of
+the five was a driver defect — no mod change was owed*:
+
+| # | wrong | right |
+|---|---|---|
+| 9 | `data.rows` / `data.entries` on `journal` (6.5) | `data.events` — the key this same file's 0.2b asserts and 1.4b reads. Both attempted paths missed, `as_list(None)` gave `[]`, and it reported `actual: []` against a journal holding every row |
+| 10 | a journal row read **flat** for `verb` (6.5) | `Journal.Emit` writes `{seq, tick, wall, type, payload}`; `PawnActs.Act` puts `{verb, step, target}` under `payload`. It is `payload.verb`. Also `"man"` was accepted for `"man-turret"` — that is the **step**, not the verb |
+| 11 | `prioritize {work:"Warden_DeliverFood"}` (6.9) | that is the `<giverClass>`; the `<defName>` is `DeliverFoodToPrisoner`. `Dev.Named` throws first, so the reply had **no `data` block at all** |
+
+Plus one that was not a path at all but a target: 6.15 aimed `attack` at a
+colonist, and `Attack` returns at `cannot-target` before it ever reads `queue`
+— unpassable on any save. See 6C.
+
+**The pattern across all four is one thing: `eq(..., None)` and a missing block
+are indistinguishable, and so are a missing key and a nested one.** 6.5 survived
+only because it happened to be phrased as *positive membership* (`want <=
+verbs`), which fails red; 6.9's two `eq`/`ge` checks against an error envelope
+reported "wrong gate" and "missing seq" when the truth was "the verb never ran".
+Phase 0 now proves the journal **row** shape against a real row, from a second
+read — the watermark read returns zero events by design and so could never have
+caught this.
 
 ### And a second failure mode the contract does not catch
 
@@ -404,11 +441,29 @@ Record `seq0 = journal {limit:1}`'s highest seq before starting, so the
 | 6.3b | ″ | `action.journal_seq >= 1` |
 | 6.4a | `man-turret {pawns:[A], thing:B}` (a pawn has no CompMannable) | `rejected[0].gate == "not-mannable"` |
 | 6.4b | ″ | `action.journal_seq >= 1` |
-| 6.5 | `journal {since_seq:seq0, types:["action"]}` | rows for `extinguish`, `beat-fire`, `man` and `tend`, each carrying `verdict.by_gate` with its gate at count 1 |
+| 6.5 | `journal {since_seq:seq0, types:["action"]}` | `data.events[]` carries `payload.verb` for **all four** of `extinguish`, `beat-fire`, `man-turret`, `tend`, each with `verdict.by_gate` and its gate at count 1 |
 
 6.5 is the one that matters. Per-call reporting was already correct for three
 of these; what was missing is the **aggregate**, and the aggregate is what
 comment #1 says the agent learns from.
+
+**6.5 was the driver's own blind spot, found by the first live run and fixed
+2026-08-31.** It read `data.rows` *or* `data.entries` — neither key exists;
+`JournalVerbs.Read` returns `["events"]`, which this file's own 0.2b and 1.4a
+assert and 1.4b reads correctly. Both digs missed, `as_list(None)` collapsed to
+`[]`, and it reported `actual: []` against a journal that held every row. Two
+more mistakes were stacked behind it: the verb was then read **flat**, when
+`Journal.Emit` writes `{seq, tick, wall, type, payload}` and `PawnActs.Act` puts
+`{verb, step, target}` under `payload`; and `"man"` was accepted as an
+alternative to `"man-turret"`, when `PawnEmergencyVerbs.ManTurret` declares
+`const string V = "man-turret"` and passes `"man"` as the **step**
+(`ActOn(outcome, verb, "man", …)`) — a step satisfying a verb assertion. The
+rows were there all along: `6.1b`/`6.2b`/`6.3b`/`6.4b` each read
+`journal_seq >= 1` in the same run, a number that exists only because
+`PawnActs.ActOn → Act → Journal.Emit("action", …)` wrote a line. **No mod change
+was owed.** Note the asymmetry that saved it: 6.5 is a *positive membership*
+assertion, so a wrong path fails red. Had it been an `eq(..., None)` it would
+have gone green while proving nothing — the same defect phase 0 exists for.
 
 ### 6B — the same shape swept out of the order verbs
 
@@ -420,8 +475,20 @@ comment #1 says the agent learns from.
 | 6.7b | ″ | `action.journal_seq >= 1` |
 | 6.8a | `attack {pawns:[A], target:B}` (a colonist: not hostile, not an animal, not an attackable building) | `rejected[0].gate == "cannot-target"` |
 | 6.8b | ″ | `action.journal_seq >= 1` |
-| 6.9a | `prioritize {pawn:A, work:"Warden_DeliverFood", thing:B}` — any work giver `orders {pawn:A, thing:B}` does **not** list | `ok == false`, `rejected[0].gate == "not-offered"` |
+| 6.9a | `prioritize {pawn:A, work:"DeliverFoodToPrisoner", thing:B}` — any work giver `orders {pawn:A, thing:B}` does **not** list | `ok == false`, `rejected[0].gate == "not-offered"` |
 | 6.9b | ″ | `action.journal_seq >= 1` — a refused prioritize used to publish `"not applicable — nothing was mutated"` |
+
+**`work` takes the defName, not the giverClass — fixed 2026-08-31 after the
+first live run.** This said `Warden_DeliverFood`, which is the C# type named by
+`<giverClass>` in `Core/Defs/WorkGiverDefs/WorkGivers.xml`; the `<defName>` on
+that same def is `DeliverFoodToPrisoner`. `PawnOrderVerbs.Prioritize` opens with
+`Dev.Named<WorkGiverDef>(workName, "work")` — *before* it constructs its
+`Outcome` — and `DevVerbs.Dev.Named` throws `VerbArgsException` on a miss, so
+the reply was a **bad-args error envelope with no `data` block at all**. Both
+digs read null: not "empty and accepted", not "gate-less" — **absent**, which is
+the `eq(..., None)` hazard arriving from the other direction. The mod-side
+contract was already implemented and simply never reached: Prioritize's
+`if (!matched)` exit stamps `Stamp(PrioritizeRow(…))` on the refusal path.
 
 **Not staged, and say so rather than inventing a fixture:** `move-to`'s
 `no-standable-cell` refusal needs a destination with no standable cell within
@@ -443,9 +510,30 @@ This is the issue's own reproduction, re-run.
 | 6.13a | `move-to {pawns:[A], to:P1}` while still walking to P1 | `counts.accepted == 0`, `rejected[0].gate == "already-doing-it"` |
 | 6.13b | ″ | the reason names `PawnGotoAction`'s own clause, and `action.journal_seq >= 1` |
 | 6.14 | `move-to {pawns:[A], to:<A's current cell>}` | `rejected[0].gate == "already-there"` — the shipped gate, untouched |
-| 6.15a | `attack {pawns:[A], target:B, queue:true}` | `counts.accepted == 0`, `rejected[0].gate == "queue-unsupported"` |
+| 6.15a | `pawns {filter:"animal"}` → W, then `attack {pawns:[A], target:W, queue:true}` | `counts.accepted == 0`, `rejected[0].gate == "queue-unsupported"` |
 | 6.15b | ″ | the reason names `FloatMenuUtility.GetRangedAttackAction`, and `action.journal_seq >= 1` |
 | 6.16 | `journal {since_seq:seq0, types:["red_error"]}` | `count == 0` |
+
+**6.15 targeted `B` and was therefore unpassable on any save — fixed
+2026-08-31.** `B` is the very target 6.8a asserts is `cannot-target`, and in
+`PawnOrderVerbs.Attack` the `CanDraftAttack` → `outcome.NoThing(target,
+"cannot-target", …)` exit **returns before** the `ctx.Args.Bool("queue")` →
+`queue-unsupported` block is ever reached. So the check measured the wrong gate
+*by construction*: not a fixture problem, a wrong target choice, and it would
+have failed identically on every colony in existence. `CanDraftAttack`'s third
+accepting clause is `t is Pawn p && p.NonHumanlikeOrWildMan()`, so **any animal
+qualifies regardless of hostility**, and the queue block is the next statement
+after it. `filter:"animal"` selects both `ClassAnimal` and `ClassWildlife`
+(`PawnSafe.FilterClasses`), so one probe covers tame and wild, and the roster
+already excludes fogged and off-map pawns (`PawnSafe.Hidden`) so whatever comes
+back is resolvable by `PawnActs.ThingArg`. Nothing is mutated: the
+`queue-unsupported` branch refuses every pawn and returns without building a
+job, so the colony animal is never actually attacked.
+
+**The empty probe is the one legitimate fixture branch in phase 6, and it exits
+2 — never a FAIL.** With no animal anywhere on the map, *nothing* reaches the
+queue block, so the check cannot be staged at all. `6.15c` is downstream and
+needed no separate fix.
 
 **6.11b + 6.11d together are the whole bug.** The measured failure was
 `accepted:1`, `job_queue.total 0`, and the pawn walking to the *queued*
