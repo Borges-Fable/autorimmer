@@ -2538,10 +2538,34 @@ the hediff cap that hid it. Serially, from one session, per `16b959a`.
 
 ### What is NOT done, said rather than skipped
 
-- **None of the new mod surface has been exercised on a bench.**
-  `threat-pardon`, `digest.site`, the new `bench_ok`, the journal `extra` and
-  the `overshoot_bound` change are source-verified and compile-verified only.
-  No bench was launched this session.
+- ~~**None of the new mod surface has been exercised on a bench.**~~
+  **Superseded later the same session — the bench WAS launched and all five
+  findings were proven live** (`_RimWorld-Agent`, session `20260901T121508`,
+  assembly `1.0.0+ad29d6d`). Smoke pass at
+  `accept/runs/s13-20260901/live-smoke.md`, then the suite at
+  **169 PASS / 0 FAIL / 1 SKIP**. The sharpest single artifact is journal seq
+  24 — `SimpleResearchBench x0 (WoodLog) @ 107,119 REFUSED`, carrying
+  `failed[]` with the reason and a blocker naming granite and its removal.
+  M1's seq 66, the row the fix exists for, had `placed:0`, `ids:[]` and nothing
+  else. `bench_ok` was proven BOTH ways on one map: false with no bench, true
+  after spawning one.
+  Still genuinely unproven: the pardon of a **dormant** hostile, which is the
+  case the verb exists for. A `--quicktest` map has no sleeping cluster and one
+  could not be constructed on it.
+- **Live testing produced findings no amount of source reading would have.**
+  An unknown argument name is silently ignored and falls back to a default —
+  passing `at:` instead of `pos:` put three spawns at the colony anchor while
+  reporting success. `data.at` echoes the TARGET cell while `spawned[].at` holds
+  where the thing landed, three cells away (`acee526`, now measured).
+  `threat-pardon` reports `ok:true, refused_count:0` when every pardon lapsed on
+  arrival. And `find-rect` approves a rect on its own cells while a workbench
+  also needs its **interaction spot**, which lies outside the footprint — the
+  suite's one SKIP, kept rather than papered over with a retry loop.
+- **A correction worth keeping.** This section previously ended at the struck
+  line above. It was true when written and false three hours later, which is
+  exactly the failure mode the workspace build rules devote an essay to. Struck
+  rather than deleted, because the point is that a status line goes stale on its
+  own and nothing warns you.
 - **Whether `664e9b9` closes is still Evan's call.** The run failed its hard
   criterion. Either it closes as evidence — the platform proved out, the colony
   did not — or M1 re-runs on a fresh seed with the four fixes the run produced.
