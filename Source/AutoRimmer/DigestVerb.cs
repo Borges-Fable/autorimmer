@@ -374,6 +374,7 @@ namespace AutoRimmer
         private static Dictionary<string, object> ThreatSection(Map map)
         {
             int hostiles = 0;
+            int pardoned = 0;
             var kinds = new Dictionary<string, int>();
             // Safe to iterate: AllPawnsSpawned returns the real pawnsSpawned
             // list, not a cache rebuilt on read (decompiled MapPawns.cs:327).
@@ -383,6 +384,11 @@ namespace AutoRimmer
                 var p = pawns[i];
                 if (p.Downed || p.Dead || !p.HostileTo(Faction.OfPlayer)) continue;
                 hostiles++;
+                // M1 finding D. Pardoned = the colony has RECORDED a decision not
+                // to fight this one (`threat-pardon`), and it is still dormant.
+                // Pure read: ThreatPardonComponent.Pardoned never prunes the
+                // scribed set, precisely so an observer cannot write.
+                if (ThreatPardonComponent.Pardoned(p)) pardoned++;
                 string kind = p.kindDef?.label ?? p.def.label;
                 kinds[kind] = kinds.TryGetValue(kind, out var c) ? c + 1 : 1;
             }
@@ -406,7 +412,15 @@ namespace AutoRimmer
                 // Recomputes every 101 ticks and re-enters FreeColonistsSpawned
                 // internally — called here outside every pawn loop on purpose.
                 ["danger"] = map.dangerWatcher.DangerRating.ToString(),
+                // `hostiles` KEEPS its meaning — the total, everything, always.
+                // A pardon is a recorded decision, not a filter, so it must never
+                // be able to shrink the field a reader has always trusted. The
+                // two new fields sit ALONGSIDE it (M1 finding D); their names are
+                // a fixed contract with accept/4.2-play-loop.py, which keys on
+                // `hostiles_unpardoned` and falls back to `hostiles` when absent.
                 ["hostiles"] = hostiles,
+                ["hostiles_pardoned"] = pardoned,
+                ["hostiles_unpardoned"] = hostiles - pardoned,
                 ["kinds"] = top,
             };
             // Alert_FireInHomeArea covers only the home area and no other
