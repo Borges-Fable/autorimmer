@@ -11,8 +11,11 @@ recurring cost, so this is the one file 4.4's hard cap binds.
 cap, so no merge-or-retire was owed; `checklists/README.md` §promotion).
 Adding past the cap forces a recorded merge-or-retire in the same commit,
 named in this file. Run at the first read after
-`digest.time.day_of_season` changes; log every item, every day, to the run
-ledger (`checklists/README.md`).
+`digest.time.day_of_season` changes **and at the session's first read**,
+which is a boundary too (`checklists/README.md`); on a new colony,
+`triggered.md`'s colony-start section runs first and an item it already
+answered logs `ok` naming that line rather than nothing. Log every item,
+every day, to the run ledger.
 
 ### freezer-below-zero
 - when: daily

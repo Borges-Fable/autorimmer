@@ -153,6 +153,46 @@ The rule the potato incident wrote:
 4. **Check scope before declaring conflict**: two lessons with different
    `applies-when` are not in conflict, they are a map.
 
+## Compliance findings — the execution-slip log
+
+`execution-slip` is the one class in step 3's table with no artifact: the
+playbook was right and unfollowed, so inventing an item would paper over the
+miss. It still has to be RECORDED somewhere or the class means nothing, and
+this is where. Findings are produced by running the auditor over a finished
+run — `python3 accept/4.2-play-loop.py RUNS/<run> --repo .` — which is what
+makes a silent skip a diff instead of a judgement.
+
+- **M1 `m1-20260831`, day 4 — three daily items missed. A clean slip.**
+  `freezer-below-zero`, `production-still-runs` and `apparel-margin` have no
+  ledger line for day 4; `armed-roster` does. The sweep was dropped while two
+  colonists were dying — `postmortem-trigger` and `roster-change` fired four
+  times that day between them. The expensive kind of slip: the day the sweep
+  is hardest to run is the day colony state is least likely to be normal. No
+  new item is owed; the finding is that the sweep is not optional under load.
+  It is also half the argument for the 2026-09-01 mod-rung decision — a
+  checklist line executes only if the session has attention to spare, and mod
+  code has no attention budget.
+- **M1 `m1-20260831`, day 1 — NOT a slip. An auditor/PLAY-LOOP disagreement
+  about when a day begins, fixed 2026-09-01.** No daily item logged on day 1;
+  the colony-start section ran instead. `accept/4.2-play-loop.py` keys
+  `daily-coverage` on the presence of `digests/day-<N>.json` and so demanded
+  four day-1 lines, while `PLAY-LOOP.md` keyed the sweep on
+  `digest.time.day_of_season` DIFFERING from the last read's — and on a
+  session's first read there is no last read, so the sweep the auditor
+  demanded could never fire on the opening day. The session obeyed the
+  playbook and failed the audit; that is a contract defect, not a lapse.
+  Resolved in the auditor's favour: **a session's first read is a day
+  boundary.** `PLAY-LOOP.md`, `checklists/README.md` and `daily.md` now say
+  so, and on a new colony the colony-start section runs first with any daily
+  item it already answered logging `ok` and naming the colony-start line —
+  never logging nothing.
+
+The day-4 gap WIDENS in the current tree, deliberately: `barracks-heat` was
+promoted into `daily.md` on 2026-09-01 (`checklists/README.md` §The promotion
+pass), so the closed M1 ledger now also misses it on days 1, 2 and 4. A closed
+run is a record, not something to re-run; a coverage count that moves when the
+item set moves is the diff working, not a new failure.
+
 ## Worked example — the acceptance dry-run
 
 Synthetic journal (constructed, not from a run — pinned synthetic per the

@@ -43,6 +43,9 @@ loaded eagerly. Two mechanics around it:
   | `down` | start the bench via `run-agent.sh` — `_RimWorld-Agent` only, the standing carve-out (DESIGN §Non-goals). On a machine whose rules forbid the agent launching anything (BORGES), escalate instead. **A `--quicktest` launch needs `autostart.rws` parked out of `Saves/` first** — otherwise map gen fails every time and lands right back on `menu`, which reads as bad luck with a seed ([[quicktest-and-autostart-collide]]) |
   | `stalled` / `starved` | remediate per `rwa/README.md` (windowrules, `rwa watch on`, relaunch through the launcher); never work around it by hammering commands |
 
+- **The session's first read is a day boundary** — `daily.md` runs at it, on
+  a new colony or a resumed one, and its snapshot is written like any other
+  day's (§read, step 5).
 - **On a NEW colony**: `triggered.md`'s colony-start section runs now, top to
   bottom, before the first advance — every line logging a verdict, `blocked`
   lines naming their issue ids (3.3, 3.6). This is SESSION-START position 3's
@@ -168,10 +171,18 @@ If you are waiting for one specific thing, that is an argument for an
    raid-end transitions, Zzzt, roster changes; one drill-down per firing,
    every firing logged.
 5. **Day boundary** — `digest.time.day_of_season` differs from the last
-   read's: run `daily.md` top to bottom, one ledger line per item per day
-   whatever the verdict (`n/a` for off-cadence or inapplicable items, so
-   coverage stays a diff, not a judgement), and snapshot the digest to
-   `RUNS/<run>/digests/day-<N>.json`.
+   read's, **or this is the session's first read**, which counts as a
+   boundary because there is no last read to differ from and the loop
+   snapshots that day anyway: run `daily.md` top to bottom, one ledger line
+   per item per day whatever the verdict (`n/a` for off-cadence or
+   inapplicable items, so coverage stays a diff, not a judgement), and
+   snapshot the digest to `RUNS/<run>/digests/day-<N>.json`. The rule is
+   keyed to the SNAPSHOT: a `digests/day-<N>.json` with no full set of daily
+   lines behind it is a compliance failure, which is exactly what
+   `accept/4.2-play-loop.py` checks. On a new colony `triggered.md`'s
+   colony-start section runs first, and a daily item it already answered
+   logs `ok` naming the colony-start line — not nothing. (M1 day 1 missed
+   all four items to this ambiguity; `postmortem.md` §Compliance findings.)
 
 ### think
 

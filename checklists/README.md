@@ -36,7 +36,7 @@ So the checklist is three files keyed to the moments the loop actually has:
 |---|---|---|---|
 | `turn.md` | every read | zero extra queries | thresholds over the digest already in hand |
 | `triggered.md` | when its trigger fires | one drill-down per firing | act-keyed checks, event-keyed responses, colony start |
-| `daily.md` | first read after a day boundary | the only unconditional queries | slow drift with no event, no alert, and no digest field |
+| `daily.md` | first read after a day boundary, and the session's first read | the only unconditional queries | slow drift with no event, no alert, and no digest field |
 
 **Why a daily rung survives at all.** Three reasons, all mechanical. The
 variables it watches (freezer temperature, armament vs roster, apparel decay)
@@ -46,6 +46,12 @@ the loop was going to make anyway — the sweep piggybacks on an existing pause
 and never forces one. And one verdict per item per day is exactly the evidence
 row 4.4's retirement ledger needs. Detect a boundary from the read in hand:
 `digest.time.day_of_season` differs from the last read's. No new mechanism.
+**A session's first read is also a boundary** — there is nothing for it to
+differ from, and the loop snapshots that day like any other, so the sweep is
+owed there too. (Under the older wording M1 ran no sweep at all on day 1,
+which `accept/4.2-play-loop.py` correctly failed: the auditor keys coverage
+on the presence of the day snapshot. Resolved in the auditor's favour,
+2026-09-01 — `postmortem.md` §Compliance findings.)
 
 **The checklist is the missing `condition` matcher, run by hand.** `advance
 until:` halts only on events — things that HAPPEN. Nothing fires when a
