@@ -54,6 +54,41 @@ namespace AutoRimmer
         private static int downTargetId = -1;
         private static bool downKill;
 
+        // -1 = disarmed. git-bug 280fb78's `alert-at` step, same shape as
+        // `down-at` and here for the same reason: the wake halt fires on an
+        // `alert_on` that happens WHILE TIME RUNS, and the shipped `alerts`
+        // step cannot produce one. `AlertScanner.Tick` runs from
+        // GameComponentUpdate — every frame, INCLUDING while paused — so an
+        // alert injected from the command drain is noticed and journaled before
+        // the next advance even starts, which proves nothing about an advance
+        // halting. Armed here, fired from GameComponentTick (inside
+        // DoSingleTick, inside the advance), the injection lands mid-advance
+        // and the scanner's next cadence frame emits `alert_on` there.
+        public static int AlertAtTick = -1;
+        private static string alertLabel = "[AutoRimmer] wake fixture alert";
+        private static bool alertCritical;
+
+        public static void TickAlertFixture()
+        {
+            if (AlertAtTick < 0) return;
+            int now;
+            try { now = Find.TickManager.TicksGame; }
+            catch { return; }
+            if (now < AlertAtTick) return;
+            AlertAtTick = -1;
+            try
+            {
+                Alert alert = alertCritical
+                    ? (Alert)new Alert_AutoRimmerFixtureCritical(alertLabel)
+                    : new Alert_AutoRimmerFixture(alertLabel, AlertPriority.Medium);
+                // Recalculate sets cachedActive/cachedLabel; Label is "" until
+                // it runs, and the journal row would carry an empty label.
+                alert.Recalculate();
+                AlertScanner.FixtureInject(alert);
+            }
+            catch { }
+        }
+
         public static void TickCasualtyFixture()
         {
             if (DownAtTick < 0) return;
@@ -266,6 +301,16 @@ namespace AutoRimmer
             // declaration is a thing two branches can each be right about
             // separately.
             "down_delay_ticks", "down_pawn", "down_kill",
+            // git-bug 280fb78's `alert-at` step. Same trap as the line above,
+            // and it is worth restating rather than assuming the comment was
+            // read: this list is a DECLARATION, and a branch that adds a step
+            // without adding its arguments here refuses every call to that step
+            // BEFORE any step runs.
+            "alert_delay_ticks", "alert_critical", "alert_label",
+            // …and `letter_def`, so the `letter` step can send a def other
+            // than NeutralEvent. 280fb78's acceptance is "a letter of ANY def
+            // halts", which a one-def fixture cannot show.
+            "letter_def",
         };
 
         [Verb("journal-selftest")]
@@ -315,10 +360,38 @@ namespace AutoRimmer
                         // the deterministic mid-advance stimulus for 1.3's
                         // until:letter acceptance.
                         int delay = ctx.Args.Int("letter_delay_ticks", 0);
+                        // git-bug 280fb78: the DEF is now selectable, defaulting
+                        // to the NeutralEvent this step has always sent. The
+                        // wake halt's acceptance is "a letter of ANY def halts,
+                        // including NeutralEvent and PositiveEvent", and the
+                        // ruling behind it is that a positive letter is exactly
+                        // the one a severity filter would have slept through —
+                        // an inspiration expires. A fixture that can only send
+                        // one def cannot test the rule that says the def does
+                        // not matter. Resolved through the DefDatabase and
+                        // REFUSED on a miss: a silently-wrong def would send a
+                        // NeutralEvent while the suite believed it had proved
+                        // PositiveEvent.
+                        string defName = ctx.Args.Str("letter_def");
+                        LetterDef ldef = LetterDefOf.NeutralEvent;
+                        if (!string.IsNullOrEmpty(defName))
+                        {
+                            ldef = DefDatabase<LetterDef>.GetNamedSilentFail(defName);
+                            if (ldef == null)
+                                throw new VerbArgsException(
+                                    $"no LetterDef named '{defName}' — e.g. NeutralEvent, "
+                                    + "PositiveEvent, NegativeEvent, ThreatSmall, ThreatBig, Death");
+                        }
                         Find.LetterStack.ReceiveLetter("AutoRimmer selftest",
                             "Deliberate selftest letter (journal acceptance, spec 1.2).",
-                            LetterDefOf.NeutralEvent, null, delay);
-                        if (delay > 0) target = $"delayed {delay} ticks";
+                            ldef, null, delay);
+                        target = ldef.defName + (delay > 0 ? $", delayed {delay} ticks" : "");
+                        extras["letter"] = new Dictionary<string, object>
+                        {
+                            ["def"] = ldef.defName,
+                            ["delay_ticks"] = delay,
+                            ["arrives_at_tick"] = Find.TickManager.TicksGame + delay,
+                        };
                         break;
                     }
                     case "message":
@@ -747,6 +820,56 @@ namespace AutoRimmer
                             ["faction"] = victim.Faction?.Name,
                             ["player_faction"] = victim.Faction != null && victim.Faction.IsPlayer,
                             ["kill"] = downKill,
+                        };
+                        break;
+                    }
+                    case "alert-at":
+                    {
+                        // git-bug 280fb78's wake halt, and the ONLY way its
+                        // acceptance can be driven from outside the game — see
+                        // TickAlertFixture's header for why the shipped
+                        // `alerts` step cannot do it (the scanner runs per
+                        // FRAME, so a paused injection is journaled before the
+                        // advance starts).
+                        //
+                        // TWO CLASSES, ON PURPOSE. `alert_critical` picks
+                        // `Alert_AutoRimmerFixtureCritical` instead of
+                        // `Alert_AutoRimmerFixture`, which gives the suite two
+                        // DISTINCT ids in one advance: mute one, leave the
+                        // other, and the halt that does or does not arrive is
+                        // the whole proof. Both are `Alert_Custom` subclasses,
+                        // excluded from AlertsReadout.allAlertTypesCached, so
+                        // the game never instantiates or removes them itself.
+                        // Dev-gated like every other step here, journaled as a
+                        // `dev` event, superseded by 3.1.
+                        int delay = ctx.Args.Int("alert_delay_ticks", 200);
+                        if (delay < 0 || delay > 600000)
+                            throw new VerbArgsException("alert_delay_ticks must be 0..600000");
+                        alertCritical = ctx.Args.Bool("alert_critical", false);
+                        alertLabel = ctx.Args.Str("alert_label")
+                            ?? "[AutoRimmer] wake fixture alert";
+                        int armedAt = Find.TickManager.TicksGame;
+                        AlertAtTick = armedAt + delay;
+                        string cls = alertCritical
+                            ? nameof(Alert_AutoRimmerFixtureCritical)
+                            : nameof(Alert_AutoRimmerFixture);
+                        target = $"{cls} at tick {AlertAtTick}";
+                        extras["alert_at"] = new Dictionary<string, object>
+                        {
+                            ["armed_at_tick"] = armedAt,
+                            ["fires_at_tick"] = AlertAtTick,
+                            // The id `alert_on` will publish and `alert-mute`
+                            // takes — `alert.GetType().Name` — handed back so
+                            // the suite never has to hard-code it.
+                            ["id"] = cls,
+                            ["label"] = alertLabel,
+                            ["priority"] = alertCritical ? "Critical" : "Medium",
+                            // The injection lands on the armed TICK; the
+                            // `alert_on` row lands on the scanner's next
+                            // cadence FRAME, which is up to Config.AlertScanFrames
+                            // frames later. JOURNAL.md's alert-timing note is
+                            // the long version.
+                            ["scan_frames"] = Config.AlertScanFrames,
                         };
                         break;
                     }
