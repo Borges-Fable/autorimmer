@@ -2403,3 +2403,145 @@ new artifact, and deliberately not papered over with an invented checklist item.
 No RUNLOG section, no post-mortem (mandatory — two deaths), no escalation, and
 **git-bug untouched**: `664e9b9` still carried the same six comments it had
 before the run. Every one of those is discharged in session 13.
+
+## Session 13 — 2026-09-01 (dorian's Linux box). Discharge M1's loose ends
+
+Opus orchestrator, five opus workers, each in its own git worktree. The session
+session 12's brief asked for: verify every claim, then do the work. Fifteen
+findings verified before any of them were acted on, and **four of the brief's
+own claims did not survive that pass** — which is the argument for doing it.
+
+### What the verification changed
+
+- **B is REFUTED, and the evidence for it never existed.** The brief said the
+  envelope publishes `overshoot: 1`, so "the driver appears to know it
+  overshoots". **There is no `overshoot` key on that envelope.** `TimeDriver`
+  emits `overshoot` only in `ticks` mode (`if (Target >= 0)`), so an
+  `until`+timeout advance never carries one. `advance` does not overshoot its
+  cap: 20/20 advances came in within `overshoot_bound`, max 21 against 30. The
+  FAIL was the auditor comparing `ticks_elapsed` against `timeout_ticks` alone.
+- **A's `ok:true` is CORRECT**, and reframing it was the point. A refusal is
+  information, not breakage (`PawnActs.cs:288`, PLAY-LOOP §act). The real defect
+  was underneath: the response carries a `failed` list and **the journal row
+  dropped it**, so the only surviving record of the refusal had no cause in it.
+- **D's premise is refuted and the FAIL still stands.** The six insects were not
+  a fog problem — seek marched all three colonists 60 cells to that hive in one
+  advance, so they were reachable. Killing them with three unarmed pawns was
+  simply not survivable.
+- **I4 is not a defect.** Vanilla `WoodLog` ships `<tools>` and
+  `<weaponClasses>Melee</weaponClasses>`; the weapons rollup was right.
+- Also: "3 PASS" was 4, and "1 commit unpushed" was 2.
+
+### Evan's ruling on D, and the verb it produced
+
+> 0 drafted, 0 hostiles **that we haven't pardoned**
+
+The insects "aren't hostile in the same way a normal hostile is, since they
+won't attack at will", and the run **should have explicitly declared it was not
+attacking them because it wasn't ready.** The decision must be a recorded ACT,
+not a silent exemption in a counter — so `threat-pardon` takes a REQUIRED reason
+and journals it, and `digest.threats` gained `hostiles_pardoned` /
+`hostiles_unpardoned` beside an unchanged `hostiles`.
+
+**The M1 run still fails that criterion, and that is the correct outcome.** The
+auditor falls back to `threats.hostiles` when the new field is absent, precisely
+so a pre-ruling run cannot be massaged green.
+
+The lapse predicate is real rather than invented: `LordJob_StructureThreatCluster`'s
+graph starts in `LordToil_Sleep` and every wake transition leaves it, so
+`CurLordToil is LordToil_Sleep` is exactly "still dormant". Where no predicate
+exists the pardon stays manual — no heuristic.
+
+### The auditor: 4 PASS / 2 WARN / 5 FAIL → 8 PASS / 2 WARN / 2 FAIL
+
+Three of the five failures were the auditor's own. **Both survivors are facts
+about the run.** `daily-coverage` actually WIDENED — days 1, 2 and 4 now, not 1
+and 4 — because `barracks-heat` was promoted into `daily.md` this session. A
+closed run is a record; a count that moves with the item set is the diff
+working. Banked at `RUNS/m1-20260831/audit-s13.txt`, because session 12 reported
+`EXIT=0` for this command by piping it to `tail` and reading tail's status.
+
+**F's day-1 half was not a slip.** The auditor keyed `daily-coverage` on the day
+digest; PLAY-LOOP keyed the sweep on `day_of_season` *differing from the last
+read*, which cannot fire on a session's first read. The session obeyed the
+playbook and failed the audit. Resolved in the auditor's favour: a session's
+first read is a day boundary. Day 4 remains a clean `execution-slip`.
+
+### The post-mortem, run in full for the first time
+
+Twelve root causes across six classes. Two were invisible before it ran:
+
+- **`Alert_ColonistNeedsTend` does not merely scope down — it INVERTS.** Its
+  getter excludes pawns needing rescue, so it goes OFF when the patient goes
+  DOWN. Silence means tended OR collapsed. It was the only pre-casualty signal
+  in the whole run, on at 205,979, and it self-silenced 8,620 ticks before the
+  first death.
+- **`BloodLoss` was CUT by the 20-row hediff cap in all four of Captain's health
+  reads** (`hediffs_more` 7 / 16 / 19 / 19). The observation surface truncated
+  away the thing that was killing him, four times, in favour of rows that did
+  not matter.
+
+The sharpest execution finding: **27 advances, ZERO `journal` calls, 10
+digests.** At tick 231,968, with Captain bleeding 118 cells away, the fix
+attempted was a work-priority flip — while **`rescue`, which is shipped, forces
+the job and interrupts `LayDown`, was called 0 times in 195 ops.** The verb that
+solves it existed and the run never reached for it. Bleed clock ~9,040 ticks
+against a ~2,810-tick walk, and neither number was published.
+
+The wealth check was done on real numbers rather than proxies —
+`HistoryAutoRecorder` decoded straight out of `Autosave-5.rws`, 11 samples at a
+30,000-tick cadence. Peak wealth 22,530.7 against `PointsPerWealthCurve`'s
+14,000 free floor; marginal 0.00622 points per silver. **Every named prevention
+costs zero wealth**, so no damping caveat applies, and the turret answer would
+have cost ~1.5 points and saved neither colonist.
+
+### The ruling that re-scoped the rest
+
+**A deterministic finding goes in the MOD, not in a note.** `postmortem.md` step
+5 said "lowest rung" and DESIGN said "deterministic goes in the mod"; Evan
+resolved it for DESIGN. Notes get ignored — and the proof was already in the
+repo: **all four M1 lessons were orphans**, cited by no checklist, while every
+pre-M1 lesson was cited by one. Mod code has no attention budget. M1 day 4
+missed three daily items while two colonists were bleeding out, which is exactly
+when a checklist line is worth most.
+
+So three of the post-mortem's outputs went to the mod rung, and 4.4 gained the
+**promotion pass** it never had — it could only ever shrink the checklists.
+Candidates are now COMPUTED off the ledger (ids with no `### <id>` behind them,
+plus lessons no checklist cites), so finding L becomes a grep instead of a
+sweep.
+
+### What landed
+
+`s13-rwa` `--id` reaches the verb and `cmd.json` is written before dispatch ·
+`s13-auditor` C, B and D · `s13-checklists` M, L, N, E, F and the
+`status.paused` invariant · `s13-mod` A, J, K, I1, D + one standalone `Build:` ·
+`s13-postmortem` the procedure · plus the `--quicktest` refusal, DESIGN's two
+new decisions, and this file's Session 12 section.
+
+`11ef46c` verified: pdb path names THIS worktree — the branch's own `Build:`
+named the agent's temporary worktree, which is why the rebuild happened on main.
+AssemblyConfiguration Release, Debug blob absent, `InformationalVersion` naming
+`ad29d6d`. IL unchanged from the branch artifact: 300 bytes across nine regions,
+all metadata, the 203-byte one at 714325 being the pdb path this rebuild exists
+to correct. New literals verified as UTF-16, never by ASCII grep.
+
+### git-bug, discharged serially from one place
+
+Escalation and the full spec-gap list on `664e9b9` · I5 on `1adc737` · N on
+`d32eadd` · OUT-1 on `722c951`, OUT-3 on `40ed42f`, OUT-6 on `cc8988c`. New:
+`65e7cf9` mod-side client liveness, `c8c0199` the quicktest collision
+(**resolved and CLOSED** — autostart stays parked, both launchers now refuse
+rather than warn), `40ed42f` doctor coverage, `722c951` advance refuses on an
+unread journal, `b1b3060` the posture verb, `61794cd` the bleed-out clock and
+the hediff cap that hid it. Serially, from one session, per `16b959a`.
+
+### What is NOT done, said rather than skipped
+
+- **None of the new mod surface has been exercised on a bench.**
+  `threat-pardon`, `digest.site`, the new `bench_ok`, the journal `extra` and
+  the `overshoot_bound` change are source-verified and compile-verified only.
+  No bench was launched this session.
+- **Whether `664e9b9` closes is still Evan's call.** The run failed its hard
+  criterion. Either it closes as evidence — the platform proved out, the colony
+  did not — or M1 re-runs on a fresh seed with the four fixes the run produced.
