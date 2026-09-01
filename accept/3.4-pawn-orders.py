@@ -138,6 +138,34 @@ def dig(obj, path, default=None):
     return default if cur is None else cur
 
 
+def has_key(obj, path):
+    """dig() cannot tell `absent` from `present and null`, and this driver
+    cares. `eq(…, None)` passes just as happily on a key that was never emitted
+    as on one deliberately published as null, so a MISTYPED DIG PATH goes green
+    while asserting nothing — the same class of bug as a check that was already
+    true before the act under test. has_key is the predicate that can tell
+    them apart; `shape` and `is_null` below are the two assertions built on it.
+
+    PER-DRIVER ON PURPOSE, not a shared accept/_shapes.py: every file in
+    accept/ stands alone and runs from a bare checkout, and a shared module
+    would let a shape change made for one spec silently update this one."""
+    parts = path.split(".")
+    cur = obj
+    for part in parts[:-1]:
+        if isinstance(cur, list):
+            try:
+                cur = cur[int(part)]
+            except (ValueError, IndexError):
+                return False
+        elif isinstance(cur, dict):
+            if part not in cur:
+                return False
+            cur = cur[part]
+        else:
+            return False
+    return isinstance(cur, dict) and parts[-1] in cur
+
+
 def as_list(v):
     """PowerShell's @() wrap. Deviates from PS on one point deliberately:
     `@($null)` is a one-element array there, which makes an absent list look
@@ -190,6 +218,31 @@ def ge(num, what, env, path, want):
 def has(num, what, haystack, needle):
     lst = as_list(haystack)
     check(num, what, needle in lst, "contains '%s'" % needle, haystack)
+
+
+def shape(num, verb, env, path, kind=None):
+    """Assert a key EXISTS, independently of its value — the claim `eq` cannot
+    make. Returns the truth of it so a caller can branch, but the check is
+    recorded either way."""
+    ok = has_key(env, path)
+    want = "the key to be PRESENT (absent is not null)"
+    if ok and kind is not None:
+        got = dig(env, path)
+        ok = isinstance(got, kind) and not (kind is not bool and isinstance(got, bool))
+        want += " and a %s" % "/".join(
+            k.__name__ for k in (kind if isinstance(kind, tuple) else (kind,)))
+    check(num, "`%s` publishes %s" % (verb, path), ok, want,
+          dig(env, path) if has_key(env, path) else "<absent>")
+    return ok
+
+
+def is_null(num, what, env, path):
+    """PRESENT and null — "this setting is deliberately cleared", which is a
+    different claim from "this key was never emitted". `eq(…, None)` conflates
+    the two and passes on both."""
+    there = has_key(env, path)
+    check(num, "%s (%s)" % (what, path), there and dig(env, path) is None,
+          "the key to be PRESENT and null", dig(env, path) if there else "<absent>")
 
 
 def note(num, text):
@@ -352,6 +405,24 @@ def phase0_journal():
     print("          manual priorities: %s -> %s (%s pawn work rows notified)"
           % (dig(e, "data.manual.before"), dig(e, "data.manual.after"),
              dig(e, "data.manual.pawns_notified")))
+
+    # 0.6  THE SHAPE CONTRACT for phase 3's dig paths, and it is here rather
+    #      than in phase 3 for one reason: all three are read with a DEFAULT
+    #      (`dig(…, 0)`, `pluck(dig(…))`), so a renamed or mistyped path
+    #      answers "0" and "[]" — an unclothed pawn with no insulation, which
+    #      is a perfectly plausible reading and a completely silent lie. These
+    #      three checks fail LOUDLY on absence instead, and they are `shape`
+    #      rather than `eq(…, None)` because eq passes on an absent key exactly
+    #      as happily as on a null one.
+    e = send("pawn", {"id": S["B"], "sections": ["apparel"]})
+    shape("0.6a", "pawn{apparel}", e, "data.apparel.worn", list)
+    shape("0.6b", "pawn{apparel}", e, "data.apparel.insulation_cold_total", (int, float))
+    shape("0.6c", "pawn{apparel}", e, "data.apparel.forced_count", int)
+    if has_key(e, "data.apparel.worn.0.def"):
+        shape("0.6d", "pawn{apparel}", e, "data.apparel.worn.0.def", str)
+    else:
+        note("0.6d", "B wears nothing, so worn[].def has no row to shape-check "
+                     "here; phase 3 stages clothes onto B and reads it there")
 
 
 # ------------------------------------------------------------------- phase 1 --
@@ -540,14 +611,187 @@ def phase2():
 
 
 # ------------------------------------------------------------------- phase 3 --
+#
+# THE START STATE IS STAGED, NOT INHERITED — and that is what this phase was
+# missing until 2026-08-31.
+#
+# It ran live that night: 147 PASS / 3 FAIL, zero red errors, and all three
+# failures were one fact. The bench colonist ALREADY wore exactly
+# Apparel_Parka + Apparel_Tuque, which is exactly what the `cold` policy
+# allows. Nothing was disallowed, so RemoveApparel had nothing to remove
+# (3.6c); nothing changed, so insulation could not rise (3.6b); and 3.2's "not
+# already wearing the parka" was plainly false.
+#
+# The FOURTH check is the one this rewrite exists for. 3.6a — "the pawn is
+# WEARING the parka" — PASSED, and it asserted nothing whatsoever: it was
+# already true before `policy-new` was ever sent. A green that was true before
+# the act under test is not evidence of the act; it is a red hat mistaken for
+# a green one. Fixing the three reds without fixing that green would have left
+# the phase exactly as blind as it was.
+#
+# So the driver drives the pawn OUT of the warm apparel first, proves it is
+# out, and only then makes the claim. Two policies, two advances, one bullet.
+#
+# THE FOUR DEFS, from Core's own XML (Data/Core/Defs/ThingDefs_Misc/
+# Apparel_Various.xml and Apparel_Headgear.xml):
+#
+#   def                 layer   body-part groups          StuffEffectMult_Cold
+#   Apparel_Pants       OnSkin  Legs                                     0.20
+#   Apparel_BasicShirt  OnSkin  Torso, Shoulders                         0.22
+#   Apparel_Parka       Shell   Torso, Neck, Shoulders, Arms             2.00
+#   Apparel_Tuque       OnHead  (head)                                   0.50
+#
+# Cloth's StuffPower_Insulation_Cold is 18 (Items_Resource_Stuff.xml), so the
+# staged pair insulates 3.6 + 4.0 = 7.6 and the warm pair 36.0 + 9.0 = 45.0.
+# 45.0 is EXACTLY what the 2026-08-31 live run read off the unstaged colonist,
+# which is the arithmetic checking out against a real observation rather than
+# against a guess. The gap is 37 points, so 3.6b is not a rounding argument.
+#
+# No layer collides: PLAIN is OnSkin and WARM is Shell + OnHead, so
+# ApparelUtility.CanWearTogether would allow all four at once. The pawn ends up
+# in WARM only because the `cold` filter STRIPPED the plain pair, never because
+# it ran out of body parts — which is what makes 3.6c a statement about
+# RemoveApparel rather than about wardrobe geometry.
+PLAIN = ["Apparel_Pants", "Apparel_BasicShirt"]
+WARM = ["Apparel_Parka", "Apparel_Tuque"]
+
+
+def read_apparel(pid):
+    """The three dig paths phase 3 leans on, read in one place. All three take
+    a DEFAULT, so a renamed path answers `[]` and `0` — a naked pawn, silently.
+    0.6 is the shape contract that makes that impossible; this is just the
+    reader."""
+    e = send("pawn", {"id": pid, "sections": ["apparel"]})
+    return (e,
+            pluck(dig(e, "data.apparel.worn"), "def"),
+            float(dig(e, "data.apparel.insulation_cold_total", 0) or 0),
+            int(dig(e, "data.apparel.forced_count", 0) or 0))
+
+
+def free_to_think(pid):
+    """JobGiver_OptimizeApparel fires at a FREE think tick and nowhere else, so
+    a pawn asleep or mid-meal simply does not re-dress. That is what the .md's
+    "rested pawns" fixture row was asking a human to arrange by hand; the
+    driver stages it itself now. Rest and Food are plain Needs, not
+    Need_Seekers, so dev:set-need's value STICKS rather than drifting back (the
+    verb publishes `data.volatile` to say which is which).
+
+    STAGED AND PRINTED, NEVER ASSERTED: a pawn that has no Rest need is not a
+    3.4 failure, and 3.0j's precondition is where an un-thinking pawn surfaces."""
+    out = []
+    for need in ("Rest", "Food"):
+        e = send("dev:set-need", {"pawn": pid, "need": need, "val": 1.0})
+        out.append("%s=%s" % (need, dig(e, "data.pct_after")
+                              if dig(e, "ok") is not False else "no such need"))
+    return ", ".join(out)
+
+
+def advance_for_apparel(pid, done, nums, why):
+    """One 5000-tick advance, then the documented 15000-tick fallback (20000
+    total) if `done(worn)` is not yet true. Returns the last read plus the
+    window it took, so the caller can say which one it needed.
+
+    Notify_OutfitChanged (fired by the apparel-policy setter) sets
+    nextApparelOptimizeTick to NOW, so the pawn is eligible on its next free
+    think tick instead of in 6000-9000. It still has to BE free, hence the
+    fallback. And JobGiver_OptimizeApparel calls SetNextOptimizeTick ONLY on
+    the paths that return null, never after issuing a job — so one advance
+    covers the whole cascade of removes and wears, not one garment per 6000."""
+    n_run, n_note, n_fallback = nums
+    e = send("advance", {"ticks": 5000, "max_tps": 600})
+    eq(n_run, "advance ran", e, "data.reason", "ticks")
+    e, worn, cold, forced = read_apparel(pid)
+    window = 5000
+    if not done(worn):
+        note(n_note, "%s within 5000 ticks; advancing the documented fallback "
+                     "window (the pawn may have been asleep, eating or mid-job)" % why)
+        f = send("advance", {"ticks": 15000, "max_tps": 600})
+        eq(n_fallback, "fallback advance ran", f, "data.reason", "ticks")
+        e, worn, cold, forced = read_apparel(pid)
+        window = 20000
+    return e, worn, cold, forced, window
+
 
 def phase3():
     banner("PHASE 3 - ACCEPTANCE BULLET 3: a 'cold' apparel policy assigned, and "
            "the pawn RE-DRESSES under advance")
     B = S["B"]
 
+    # 3.0 STAGE THE PRECONDITION. See the block comment above: without this the
+    #     whole phase is a coin toss on what the save's colonists happen to be
+    #     wearing, and on 2026-08-31 the coin came up "already dressed for the
+    #     answer".
+    e = send("dev:spawn-thing", {"def": "Apparel_Pants", "stuff": "Cloth", "count": 1,
+                                 "stockpile": True, "quality": "Normal"})
+    ge("3.0a", "plain pants landed (the staged wardrobe)", e, "data.placed", 1)
+    note("3.0b", "pants storage: %s" % dig(e, "data.stockpile"))
+    e = send("dev:spawn-thing", {"def": "Apparel_BasicShirt", "stuff": "Cloth", "count": 1,
+                                 "stockpile": True, "quality": "Normal"})
+    ge("3.0c", "a plain shirt landed too", e, "data.placed", 1)
+
+    e, orig_worn, orig_cold, orig_forced = read_apparel(B)
+    print("          original: worn=%s insulation_cold_total=%s forced=%d"
+          % (show(orig_worn), orig_cold, orig_forced))
+
+    # Already in a usable start state? Then do not burn 5000 ticks proving it.
+    # "Usable" is the exact negation of what 3.6 needs: not wearing anything the
+    # `cold` policy allows (so 3.6a cannot be pre-true) and wearing SOMETHING
+    # (so 3.6c cannot be vacuous).
+    staged = (not [d for d in orig_worn if d in WARM]) and len(orig_worn) > 0
+    if staged and not ARGS.dry_run:
+        note("3.0d", "the bench already supplies the start state (%s) - skipping "
+                     "the undress leg" % show(orig_worn))
+        worn, cold, forced = orig_worn, orig_cold, orig_forced
+        window = 0
+    else:
+        note("3.0d", "needs = %s" % free_to_think(B))
+        # A policy that allows ONLY the plain pair. Every warm garment the pawn
+        # has on is then disallowed, and JobGiver_OptimizeApparel's first loop
+        # issues RemoveApparel for each one unconditionally - no score maths, no
+        # season, no weather. This is the same mechanism 3.5 tests, run in the
+        # opposite direction to get to a known floor.
+        e = send("policy-new", {"kind": "apparel", "label": "acc34-plain",
+                                "disallow_all": True, "allow": PLAIN})
+        plain = dig(e, "data.id")
+        check("3.0e", "a throwaway plain-clothes policy was created",
+              dig(e, "ok") is True and plain is not None, "ok:true and an id", e.get("error") or plain)
+        S["plain_policy"] = plain
+        e = send("assign", {"pawns": [B], "apparel_policy": plain})
+        eq("3.0f", "the plain policy was assigned to B", e, "data.counts.accepted", 1)
+        e, worn, cold, forced, window = advance_for_apparel(
+            B, lambda w: not [d for d in w if d in WARM] and len(w) > 0,
+            ("3.0g", "3.0h", "3.0i"), "B has not settled into plain clothes")
+
+    # 3.0j THE PRECONDITION ITSELF, and the reason it is a precondition rather
+    #      than a check: an unmet fixture is exit 2 by this driver's own
+    #      contract, and three cascading FAILs for one unstaged wardrobe is
+    #      precisely the defect this rewrite is repairing.
+    still_warm = [d for d in worn if d in WARM]
+    precondition(
+        "3.0j",
+        "B is out of every garment the `cold` policy allows, and is wearing "
+        "something it will have to strip",
+        not still_warm and len(worn) > 0,
+        "after %d ticks B wears %s (cold=%s). Still allowed by `cold`: %s.\n"
+        "          forced_count=%d now - a force-worn garment is NEVER auto-dropped "
+        "(JobGiver_OptimizeApparel skips it via "
+        "Pawn_OutfitForcedHandler.AllowedToAutomaticallyDrop), and nothing in "
+        "3.4's surface un-forces one; a `wear` order is what sets it.\n"
+        "          READ THIS BEFORE FILING IT AS A FIXTURE GAP: exit 2 says "
+        "'could not stage', and the honest cases are a pawn that never got a "
+        "free think tick (asleep, drafted, downed, mental state, unreachable "
+        "storage) or plain apparel that did not land inside a stockpile. If B "
+        "was FREE and UNFORCED and still did not undress, this is not a fixture "
+        "gap at all - RemoveApparel did not run and bullet 3 is broken, which "
+        "exit 2 understates. Re-run with --echo and read B's job."
+        % (window, show(worn), cold, show(still_warm), forced))
+
     # 3.1 warm apparel, IN STORAGE. JobGiver_OptimizeApparel skips any candidate
-    #     failing IsInAnyStorage(), so `stockpile:true` is not a nicety.
+    #     failing IsInAnyStorage(), so `stockpile:true` is not a nicety. Spawned
+    #     AFTER the undress leg on purpose: these two are the only parka and
+    #     tuque guaranteed to be unforbidden and in a stockpile at the moment
+    #     the `cold` policy lands. B's own originals may be lying wherever
+    #     JobDriver_RemoveApparel's haul left them.
     e = send("dev:spawn-thing", {"def": "Apparel_Parka", "stuff": "Cloth", "count": 1,
                                  "stockpile": True, "quality": "Normal"})
     eq("3.1a", "a parka was spawned", e, "ok", True)
@@ -559,14 +803,26 @@ def phase3():
                                  "stockpile": True, "quality": "Normal"})
     ge("3.1d", "a tuque landed too", e, "data.placed", 1)
 
-    # 3.2 the BEFORE picture, in 2.2's apparel vocabulary
-    e = send("pawn", {"id": B, "sections": ["apparel"]})
-    before_worn = pluck(dig(e, "data.apparel.worn"), "def")
-    before_cold = float(dig(e, "data.apparel.insulation_cold_total", 0) or 0)
-    print("          before: worn=%s insulation_cold_total=%s"
-          % (show(before_worn), before_cold))
-    check("3.2", "the pawn is not already wearing the parka",
-          "Apparel_Parka" not in before_worn, "no Apparel_Parka worn", before_worn)
+    # 3.2 the BEFORE picture, in 2.2's apparel vocabulary. It is a re-read
+    #     rather than a reuse of 3.0's, because 3.1 sat between them.
+    e, before_worn, before_cold, before_forced = read_apparel(B)
+    print("          before: worn=%s insulation_cold_total=%s (nothing here is "
+          "allowed by `cold`, proved at 3.0j)" % (show(before_worn), before_cold))
+    # 3.2 IS NO LONGER "the pawn is not already wearing the parka". That claim
+    #     is 3.0j's, it exits 2 rather than FAILing, and re-asserting a proven
+    #     precondition as a PASS is a green that cannot go red — the habit this
+    #     phase is being rewritten to break.
+    #
+    #     What 3.2 asserts instead is the one thing 3.0j does NOT cover and that
+    #     would otherwise surface as a baffling 3.6c: a FORCE-worn garment is
+    #     never auto-dropped. JobGiver_OptimizeApparel's remove loop skips any
+    #     item failing Pawn_OutfitForcedHandler.AllowedToAutomaticallyDrop, so
+    #     one forced pair of pants makes 3.6c unsatisfiable no matter how well
+    #     the loop works. B can arrive forced from the save or from a `wear`
+    #     order in an earlier session — nothing in 3.4's surface un-forces one.
+    check("3.2", "no staged garment is force-worn, so the `cold` filter is free "
+                 "to strip all of them",
+          before_forced == 0, "forced_count 0", before_forced)
 
     # 3.3 the policy. THE MECHANISM IS THE FILTER, NOT THE WEATHER - see the .md:
     #     JobGiver_OptimizeApparel's `neededWarmth` comes from
@@ -601,33 +857,41 @@ def phase3():
     #     NOW, so the pawn re-optimizes at its next free think tick rather than
     #     in 6000-9000. It still has to BE free: asleep, eating or in a mental
     #     state all delay it, hence the documented fallback window.
-    e = send("advance", {"ticks": 5000, "max_tps": 600})
-    eq("3.5a", "advance ran", e, "data.reason", "ticks")
-    e = send("pawn", {"id": B, "sections": ["apparel"]})
-    worn = pluck(dig(e, "data.apparel.worn"), "def")
-    window = 5000
-    if "Apparel_Parka" not in worn:
-        note("3.5b", "not re-dressed within 5000 ticks; advancing the documented "
-                     "fallback window (the pawn may have been asleep or eating)")
-        e = send("advance", {"ticks": 15000, "max_tps": 600})
-        eq("3.5c", "fallback advance ran", e, "data.reason", "ticks")
-        e = send("pawn", {"id": B, "sections": ["apparel"]})
-        worn = pluck(dig(e, "data.apparel.worn"), "def")
-        window = 20000
+    note("3.5", "needs = %s" % free_to_think(B))
+    e, worn, after_cold, after_forced, window = advance_for_apparel(
+        B, lambda w: "Apparel_Parka" in w, ("3.5a", "3.5b", "3.5c"),
+        "B is not re-dressed")
 
-    # 3.6 THE BULLET
-    has("3.6a", "the pawn is WEARING the parka (within %d ticks)" % window,
+    # 3.6 THE BULLET — and every one of these three is now a claim about what
+    #     the ADVANCE did, because 3.0j proved the start state was the negation
+    #     of all three.
+    #
+    #     3.6a cannot be pre-true: at 3.0j B provably wore no Apparel_Parka, and
+    #     the only thing between 3.0j and here that can put one on a pawn is
+    #     JobDriver_Wear. This phase issues no `wear` order, so the only issuer
+    #     is JobGiver_OptimizeApparel. If the loop does not run, B is still in
+    #     the staged plain pair and 3.6a is RED.
+    has("3.6a", "the pawn is WEARING the parka - it was NOT at 3.0j, so this can "
+                "only be JobGiver_OptimizeApparel (within %d ticks)" % window,
         worn, "Apparel_Parka")
-    after_cold = float(dig(e, "data.apparel.insulation_cold_total", 0) or 0)
     check("3.6b", "cold insulation went UP", after_cold > before_cold,
-          "> %s" % before_cold, after_cold)
-    dropped = [d for d in before_worn if d not in worn]
-    check("3.6c", "the disallowed apparel was taken off "
+          "> %s (staged plain pair; cloth parka+tuque is 45.0)" % before_cold,
+          after_cold)
+    # STRICT, and provably so rather than leniently. TryGiveJob's remove loop
+    # RETURNS on the first disallowed worn item, so no Wear job is ever issued
+    # while ANY disallowed garment is still on. Every staged garment is
+    # disallowed by `cold` (3.0j) and none is forced (3.2), so "B has the parka"
+    # entails "B has none of the staged pair" — which makes the strict form the
+    # honest one. The old `or len(before_worn) == 0` escape is gone: it made a
+    # naked pawn pass a check about taking clothes OFF.
+    kept = [d for d in before_worn if d in worn]
+    check("3.6c", "EVERY previously-worn garment was taken off "
                   "(JobGiver_OptimizeApparel's RemoveApparel pass)",
-          len(dropped) > 0 or len(before_worn) == 0,
-          "at least one previously-worn item removed, or it started naked",
-          "before=%s after=%s" % (show(before_worn), show(worn)))
-    print("          after: worn=%s insulation_cold_total=%s" % (show(worn), after_cold))
+          len(before_worn) > 0 and not kept,
+          "none of %s still worn" % show(before_worn),
+          "before=%s after=%s still-on=%s" % (show(before_worn), show(worn), show(kept)))
+    print("          after: worn=%s insulation_cold_total=%s (+%s) forced=%d"
+          % (show(worn), after_cold, round(after_cold - before_cold, 1), after_forced))
 
     # 3.7 the policy database round-trips through 2.4's observer
     e = send("policies")
@@ -643,6 +907,15 @@ def phase3():
     eq("3.8a", "policy-delete refused (a live pawn is using it)", e, "data.ok", False)
     check("3.8b", "and the refusal is the game's own AcceptanceReport string",
           bool(str(dig(e, "data.reason") or "")), "a non-empty reason", dig(e, "data.reason"))
+
+    # 3.8c the OTHER half of the same gate, and the staging's own cleanup: B
+    #      moved off the plain policy at 3.4, so TryDelete's AcceptanceReport
+    #      now accepts. Deleting it keeps a re-run from stacking an
+    #      "acc34-plain" per run in the outfit database.
+    if S.get("plain_policy") is not None or ARGS.dry_run:
+        e = send("policy-delete", {"kind": "apparel", "policy": S.get("plain_policy")})
+        eq("3.8c", "the staging policy deletes cleanly now that nobody uses it",
+           e, "data.ok", True)
 
     no_red_errors("3.9", "ZERO red errors through phase 3")
 
@@ -847,10 +1120,16 @@ def phase5():
           isinstance(dig(e, "data.accepted.0.respects_area"), bool), "a bool",
           dig(e, "data.accepted.0.respects_area"))
 
-    # 5.7 area:null is a real setting, not an omission
+    # 5.7 area:null is a real setting, not an omission — and the assertion has
+    #     to be able to SAY that. `eq(…, None)` could not: it passes on an
+    #     absent key exactly as happily as on a null one, so it would have gone
+    #     green if `after.area` were renamed or dropped, which is the opposite
+    #     of the claim ("unrestricted is a real setting, not an omission").
+    #     is_null demands the key be PRESENT and null.
     e = send("assign", {"pawns": [A, B], "area": None})
     eq("5.7a", "area:null (unrestricted) accepted", e, "data.counts.accepted", 2)
-    eq("5.7b", "and the area is cleared", e, "data.accepted.0.after.area", None)
+    is_null("5.7b", "and the area is cleared - published as null, not omitted",
+            e, "data.accepted.0.after.area")
 
     # 5.8 an unknown area names 3.2 rather than failing blankly
     e = send("assign", {"pawns": [A], "area": "no-such-area-xyz"})
