@@ -880,14 +880,32 @@ def phase1():
            e, "data.designations_now", S["mine_count"])
     eq_int("1.2k", "and the count did not move across the call",
            e, "data.designations_before", S["mine_count"])
-    # The `action` block is the agent-facing ledger and it carries the tally
-    # under a DIFFERENT NAME. Both spellings are shipped
-    # (DesignationVerbs.Designate: `rejects_by_reason` on the data block,
-    # `rejected_by_reason` inside the action payload) and a driver that digs
-    # the wrong one gets None and passes.
-    shape("1.2l", "designate", e, "data.action.rejected_by_reason", dict)
-    eq("1.2m", "the journalled action carries the same tally",
-       e, "data.action.rejected_by_reason", {WHY_ALREADY: 1})
+    # Both spellings ship and they live in DIFFERENT PLACES, which is the whole
+    # trap: `rejects_by_reason` on the RESPONSE data block
+    # (DesignateEngine.PublishRejects), `rejected_by_reason` inside the JOURNAL
+    # ROW's action payload (DesignationVerbs.Designate). The response's `action`
+    # block is only `{journal_seq}` — measured live 2026-08-31, and an earlier
+    # draft of these two checks dug `data.action.rejected_by_reason` and got
+    # None for exactly that reason. Proving "the journalled action carries the
+    # same tally" therefore means READING THE JOURNAL at the seq it names, which
+    # is also the stronger check: it proves the row a later reader would find.
+    jseq = dig(e, "data.action.journal_seq")
+    payload = {}
+    if not ARGS.dry_run and jseq:
+        j = send("journal", {"since_seq": int(jseq) - 1, "types": ["action"],
+                             "limit": 20})
+        for ev in as_list(dig(j, "data.events")):
+            if isinstance(ev, dict) and ev.get("seq") == jseq:
+                payload = ev.get("payload") or {}
+                break
+    tally = payload.get("rejected_by_reason")
+    check("1.2l", "the JOURNAL ROW at data.action.journal_seq carries the tally "
+                  "under the action payload's own spelling `rejected_by_reason`",
+          ARGS.dry_run or isinstance(tally, dict),
+          "a dict on the row at seq %s" % show(jseq), tally)
+    check("1.2m", "and the journalled tally agrees with the data block's",
+          ARGS.dry_run or tally == {WHY_ALREADY: 1},
+          show({WHY_ALREADY: 1}), tally)
 
 
 # ------------------------------------------------------------------- phase 2 --
@@ -1352,11 +1370,16 @@ if __name__ == "__main__":
 #    not merely on "the first haulable" - otherwise 4.1e would be comparing a
 #    null against a sentence and would fail for a fixture reason.
 #
-# 6. TWO SPELLINGS OF THE TALLY SHIP, both correct, and a driver that digs the
-#    wrong one gets None and passes: `data.rejects_by_reason` on the data block
-#    (DesignateEngine.PublishRejects) and `data.action.rejected_by_reason`
-#    inside the journalled action payload (DesignationVerbs.Designate). 1.2l/m
-#    prove the second exists and agrees.
+# 6. TWO SPELLINGS OF THE TALLY SHIP, in TWO DIFFERENT PLACES, and a driver
+#    that digs the wrong one gets None and passes. `rejects_by_reason` is on the
+#    RESPONSE data block (DesignateEngine.PublishRejects).
+#    `rejected_by_reason` is on the JOURNAL ROW's action payload
+#    (DesignationVerbs.Designate) — NOT on the response's `action` block, which
+#    carries `journal_seq` and nothing else. Measured live 2026-08-31: a first
+#    draft of 1.2l/m dug `data.action.rejected_by_reason` and got None, which is
+#    the absent-key trap this suite exists to close, committed inside the suite
+#    itself. 1.2l/m now fetch the journal at the seq the action block names,
+#    which also proves the row a later reader would actually find.
 #
 # 7. RESIDUAL, recorded in DesignationVerbs.Designate and deliberately NOT
 #    asserted here because it is not the fixed behaviour: `designate mine` over
