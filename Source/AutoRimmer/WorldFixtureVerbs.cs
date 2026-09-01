@@ -49,6 +49,18 @@ namespace AutoRimmer
     {
         public const string FixtureLetterLabel = "[AutoRimmer] world-fixture choice letter";
 
+        // Message-only; see JournalVerbs.SelftestArgs for why a per-site list
+        // is not the per-verb registry session 15 rejected.
+        private static readonly string[] FixtureArgs =
+        {
+            "steps", "bench", "recipe", "ingredient_radius", "target_count",
+            "pause_when_satisfied", "unpause_when", "suspended", "clear_bills",
+            "stockpile_side", "growing_side", "growing_plant", "growing_set_plant",
+            "growing_allow_sow", "growing_allow_cut", "project", "letter_title",
+            "letter_timeout_ticks", "forbid_count", "forbid_value", "fire_size",
+            "fire_in_home", "skill_min", "skill_max",
+        };
+
         [Verb("world-fixture")]
         public static object Fixture(VerbContext ctx)
         {
@@ -57,6 +69,13 @@ namespace AutoRimmer
             var map = Find.CurrentMap ?? throw new VerbArgsException("world-fixture needs a current map");
 
             var steps = ctx.Args.StrList("steps");
+            // Third instance of the shape (git-bug 7382bdd comment #7): the
+            // default is non-empty and every step in it mutates — it spawns a
+            // bench, adds a bill, cuts two stockpiles, retargets a growing
+            // zone, completes a research project and pushes a letter. Less
+            // violent than `journal-selftest`'s default, identically silent.
+            ctx.Args.RefuseStray("world-fixture", FixtureArgs,
+                "Refused BEFORE any step ran, so nothing was mutated.");
             if (steps.Count == 0)
                 steps = new List<string> { "bench", "bill", "stockpiles", "growing", "research", "letter" };
 

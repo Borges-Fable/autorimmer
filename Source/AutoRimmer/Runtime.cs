@@ -121,6 +121,15 @@ namespace AutoRimmer
         public string ErrorDetail;
         public object Data; // MiniJson.Write-able tree; serialized off-thread
 
+        // git-bug 7382bdd: keys the caller supplied that the verb never read,
+        // with the keys it did read and a sentence saying so. Null on the
+        // overwhelmingly common clean call, so the envelope is unchanged for
+        // every correct command. Set by VerbRegistry.Execute from VerbArgs'
+        // read log; a top-level envelope field rather than part of `data`,
+        // because it is a statement about the CALL and not about the verb's
+        // answer — a failed call can carry one too.
+        public object IgnoredArgs;
+
         public static Result Success(string id, string op, object data)
             => new Result { Id = id, Op = op, Ok = true, Data = data };
 

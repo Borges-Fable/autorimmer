@@ -2090,3 +2090,102 @@ queue by default (an agent flailing mid-experiment must not page triage).
   finding is that `rescue` was shipped, forces the job, interrupts `LayDown` —
   and was called zero times in 195 ops while the response tried was a
   work-priority flip. `40ed42f`, `61794cd`.
+- 2026-09-01 (session 21) — **An unknown argument name is OBSERVED, not
+  declared: `VerbArgs` keeps a read log, `supplied − queried` is the
+  unknown-argument set, and it is REPORTED for every verb and REFUSED only
+  where a default mutates.** Session 15's rejection of the per-verb whitelist
+  stands and is not re-litigated — 120 verbs, 22 handlers that read nothing at
+  their own call site, 88 `(verb, key)` pairs the suites send through shared
+  helpers, five suite call sites that build their dict at runtime. But every
+  one of those is an objection to a SECOND SOURCE OF TRUTH, and none of them is
+  an objection to watching what the verb actually read. `VerbArgs` is one
+  sealed class over one `Dictionary<string, object>`, and every accessor —
+  `Has`, `Raw`, `Str`, `StrReq`, `Bool`, `Num`, `NumReq`, `Int`, `IntReq`,
+  `Long`, `StrList`, `NearMiss` — now funnels through one private `Look(key)`
+  that marks the key. **The 22-forwarder case is not a special case at all**,
+  because the log follows the OBJECT: `TimeDriver.Start(ctx.Command, ctx.Args)`
+  hands over the same `VerbArgs`, so its reads land on the parent's log.
+  Runtime-built caller dicts are likewise a non-issue, because nothing is
+  compared against a list. `trade-set` is the proof by construction: it reads
+  its singular sugar as `foreach (var k in new[]{"thing","index","count","buy",
+  "sell"}) if (ctx.Args.Has(k))` — a key that no static scan can see and that
+  the read log gets right for free. Nothing here needs updating when a verb
+  gains an argument, which is what worker B's `advance {unread_ok,
+  through_casualties}` and worker C's `posture` land into this round.
+  **THE FORWARDING AUDIT, because a linked child log would have been a bug.**
+  Nine `new VerbArgs(...)` exist. One is the dispatch root. Seven are NESTED
+  SUB-OBJECT parses over a value the parent already read through `Raw(key)` —
+  `until.event` (`TimeDriver`), `until.condition` (`StateWatch.Parse`),
+  `filter` (`DesignateEngine.FromFilter`), `set` (`SpatialVerbs.Landmark`),
+  `drugs[i]` (`PolicyVerbs`), `set[i]` (`PawnManageVerbs`), `elements[i]`
+  (`LayoutVerbs`) — and they must NOT union into the parent, or an inner key
+  would be counted as a top-level read. The ninth is `StarterKit.Sub`, the only
+  real forward, and it needs no link either: it hands the child a dict the
+  parent CONSTRUCTED, and to construct it the parent had to read its own args
+  through accessors that already marked them. **A nested object's own unknown
+  keys are therefore still unchecked** — `until.condition {pth: …}` is silent
+  except where `NearMiss` already covers it — and that is the acknowledged
+  remaining gap.
+  **WHY IT REPORTS RATHER THAN REFUSES, measured.** The read log is only
+  complete after the handler returns, and 729 accessor call sites were swept:
+  ~290 are conditional, and **73 keys across 26 verbs are read only on SOME
+  paths while the verb still returns success.** Four named shapes make a
+  blanket refusal unshippable. (1) `dry_run` skips the block that reads the
+  keys: `ZoneVerbs.Add` calls `Shape()` — the only reader of `label`,
+  `priority`, `filter`, `plant`, `allow_sow`, `allow_cut` — under `if
+  (!dryRun)`, so `zone {op:"add", plant, label, dry_run:true}`, the exact
+  preflight an agent should run, would be refused. (2) A fallback unread on the
+  happy path: `dev:spawn-thing` reads `pos` only when `stockpile` is absent or
+  storage refused, which is the documented "store it, else drop it here" call.
+  (3) `queue` sits after the per-pawn gates in twelve verbs (`attack`, `equip`,
+  `wear`, `drop`, `consume`, `extinguish`, `beat-fire`, `tend`, `repair`,
+  `man-turret`, `rest-until-healed`, `TakeToBed`), so `wear {pawn, thing,
+  queue:true}` refused by its gate is a success envelope with `queue` unread —
+  and `accept/4087644-order-honesty.py` is a suite about exactly those
+  refusals. (4) Whole-verb refusals return BEFORE the config block: `bill-add`
+  answers `NotAWorkTable` before `ValidateBillArgs` reads its twenty levers, so
+  refusing would replace an informative refusal with "unknown args". So
+  `Result` gains `IgnoredArgs`, the poller writes it as a top-level
+  **`ignored_args {keys, read, detail, journal_seq_from?, journal_seq_to?}`**
+  present ONLY when a key went unread, and `Log.Warning` — captured by
+  `JournalHooks`' patch on `Log.Warning` — puts the same finding in the journal
+  as a durable `warning` row so a ten-day run can be audited for dropped
+  arguments afterwards. The log half is main-thread only; a `MainThread=false`
+  handler runs on the poller thread and may not touch Verse. `advance` is the
+  one verb with no envelope of ours (it returns `DeferredResult` and
+  `TimeDriver` writes its own result), so the journal row is its only channel.
+  The suggestion in `detail` is Levenshtein against the keys THIS CALL READ —
+  derived, so it works for arguments added after it was written — while
+  `NearMiss`'s call-site alias list still covers `at` -> `pos`, an edit
+  distance of 3 that no conservative distance rule would ever find.
+  **WHERE IT DOES REFUSE, and why that is safe.** git-bug 7382bdd comment #7
+  named the shape: "a defaulted list argument whose default is non-empty and
+  whose steps mutate". The tree has exactly three — `journal-selftest` (default
+  `letter, message, error, downed, break`, of which `downed` is
+  `HealthUtility.DamageUntilDowned` and `break` starts a Berserk),
+  `pawn-fixture` (`wound, sadden, tatter`) and `world-fixture` (`bench, bill,
+  stockpiles, growing, research, letter`). All three now call
+  `VerbArgs.RefuseStray(op, ownArgs, …)` BEFORE the first step, unconditionally
+  rather than only when the default fires, so a typo is refused with nothing
+  mutated. `ownArgs` is the verb's full argument list written beside the code
+  that reads it, and it is a MESSAGE-ONLY list: the detection is the read log,
+  which consults it not at all, so its drift mode is a worse sentence and never
+  a refused legitimate call — which is precisely the asymmetry that made a
+  120-verb registry unacceptable and makes a three-site one fine. It is also
+  what makes refusing safe there despite the conditional-read finding above:
+  `journal-selftest`'s step-gated `save_name`, `power_lamps` and `error_text`
+  are in the list, so they are accepted whether or not their step ran.
+  `accept/s13-mod-surface.py` phase 9 re-derives all three lists from the
+  source and fails on drift (9.10a-c), and re-derives that every accessor
+  reaches the backing dictionary only through `Look()` (9.9a-b) — because an
+  accessor added later that read `raw` directly would make a legitimate key
+  look unread, which is the rejected declaration's failure mode sneaking back
+  in through the mechanism that replaced it.
+  **BULLET 1 AS LITERALLY WRITTEN IS STILL NOT MET, and this says so in those
+  words.** "A verb call carrying an unrecognised argument key is REFUSED with
+  `bad-args` naming the key" is true for the three fixture verbs and for the
+  `NearMiss` aliases, and false everywhere else, where the call succeeds and
+  publishes `ignored_args`. What IS met for all 120 verbs is the defect in the
+  issue's title — an unknown argument name is no longer SILENT — and the
+  destructive instance comment #7 filed is refused before it can act.
+  `7382bdd`.
