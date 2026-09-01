@@ -271,7 +271,21 @@ namespace AutoRimmer
                                         ["p"] = idx,
                                         ["at"] = Positions.Out(best.Position),
                                         ["size"] = new List<object> { (double)def.size.x, (double)def.size.z },
-                                        ["rot"] = best.Rotation.ToStringHuman(),
+                                        // ToStringWord, NOT ToStringHuman.
+                                        // Verse/Rot4.ToStringHuman is
+                                        // "North".Translate() — a LOCALIZED
+                                        // string — while ToStringWord is the
+                                        // invariant word. This is a data field
+                                        // the renderer keys on
+                                        // (baseviz/render.py, occupied_rect),
+                                        // and on a non-English install the
+                                        // comparison silently missed, so every
+                                        // rotated building's footprint was
+                                        // derived without the axis swap. Same
+                                        // class as 00a1be7: read by field,
+                                        // never through the game's sentence
+                                        // builder. git-bug 2a7c064.
+                                        ["rot"] = best.Rotation.ToStringWord(),
                                     });
                                 }
                                 else labelsCapped = true;
