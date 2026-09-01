@@ -1,0 +1,86 @@
+261f2e9 temperature acceptance — root /home/dorian/projects/rimworld/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer
+
+==============================================================================
+PHASE 0 — the shapes every later phase digs into
+==============================================================================
+  0.a     OK      precondition: the bench is up and a colony is loaded
+  0.1     PASS    `digest` still answers (ok)
+  0.2     PASS    `digest` publishes data.temperature
+  0.3     PASS    `digest` publishes data.temperature.ok
+  0.4     PASS    `digest` publishes data.temperature.out_of_range
+  0.5     PASS    `digest` publishes data.temperature.out_of_range_rooms
+  0.6     PASS    `digest` publishes data.temperature.outdoor_c
+  0.7     PASS    `digest` publishes data.temperature.tolerance_c
+  0.8     PASS    `digest` publishes data.temperature.controllers
+  0.9     PASS    `digest` publishes data.temperature.controllers_unpowered
+  0.10    PASS    `digest` publishes data.temperature.controllers_switched_off
+  0.11    PASS    `digest` publishes data.temperature.controllers_ineffective
+  0.12    PASS    `digest` publishes data.temperature.food_rooms_uncontrolled
+  0.13    PASS    `digest` publishes data.temperature.food_rooms_unfrozen
+  0.14    PASS    `digest` publishes data.temperature.rooms
+  0.15    PASS    `digest` publishes data.temperature.total
+  0.16    PASS    `digest` publishes data.temperature.more
+  0.17    PASS    `digest` publishes data.temperature.order
+  0.18    PASS    `digest` publishes data.temperature.note
+  0.19    PASS    the published tolerance is the one this suite reasons with
+  0.20    PASS    `digest` publishes data.resources.food_days
+  0.21    PASS    `digest` publishes data.resources.food_days_basis
+  0.22    PASS    `food_days_basis` says it is stockpile-only (data.resources.food_days_basis)
+  0.23    PASS    …and that it has no rot term (data.resources.food_days_basis)
+  0.24    PASS    `digest` publishes data.resources.food_rot
+  0.25    PASS    `digest` publishes data.resources.food_rot.ok
+  0.26    PASS    `digest` publishes data.resources.food_rot.warn_days
+  0.27    PASS    `digest` publishes data.resources.food_rot.days
+  0.28    PASS    `digest` publishes data.resources.food_rot.days_frozen
+  0.29    PASS    `digest` publishes data.resources.food_rot.nutrition
+  0.30    PASS    `digest` publishes data.resources.food_rot.nutrition_in_stockpiles
+  0.31    PASS    `digest` publishes data.resources.food_rot.nutrition_forbidden
+  0.32    PASS    `digest` publishes data.resources.food_rot.frozen
+  0.33    PASS    `digest` publishes data.resources.food_rot.refrigerated
+  0.34    PASS    `digest` publishes data.resources.food_rot.unrefrigerated
+  0.35    PASS    `digest` publishes data.resources.food_rot.imperishable
+  0.36    PASS    `digest` publishes data.resources.food_rot.spoiled_stacks
+  0.37    PASS    `digest` publishes data.resources.food_rot.spoiled_nutrition
+  0.38    PASS    `digest` publishes data.resources.food_rot.soonest_rot_days
+  0.39    PASS    `digest` publishes data.resources.food_rot.soonest_rot_nutrition
+  0.40    PASS    `digest` publishes data.resources.food_rot.worst_rot_pct
+  0.41    PASS    `digest` publishes data.resources.food_rot.stacks
+  0.42    PASS    `digest` publishes data.resources.food_rot.rottable_stacks
+  0.43    PASS    `digest` publishes data.resources.food_rot.fogged_stacks
+  0.44    PASS    `digest` publishes data.resources.food_rot.corpse_stacks_excluded
+  0.45    PASS    `digest` publishes data.resources.food_rot.uncounted_stacks_excluded
+  0.46    PASS    `digest` publishes data.resources.food_rot.scope
+  0.47    PASS    `digest` publishes data.resources.food_rot.basis
+  0.48    PASS    `digest` publishes data.resources.food_rot.note
+  0.49    PASS    the rot block says it is map-wide, not stockpile-scoped (data.resources.food_rot.scope)
+  0.50    PASS    …while the section around it still says stockpiles-only (data.resources.scope)
+  0.51    PASS    `food_days` is UNCHANGED in meaning — nutrition_in_stockpiles is the same number the shipped field divides
+  0.52    PASS    `temp-control` answers with no arguments (whole map) (ok)
+  0.53    PASS    `temp-control` publishes data.verb
+  0.54    PASS    `temp-control` publishes data.gate
+  0.55    PASS    `temp-control` publishes data.target_scope
+  0.56    PASS    `temp-control` publishes data.list
+  0.57    PASS    `temp-control` publishes data.total
+  0.58    PASS    `temp-control` publishes data.more
+  0.59    PASS    `temp-control` publishes data.order
+  0.60    PASS    `temp-control` publishes data.tolerance_c
+  0.61    PASS    `temp-control` publishes data.clamp_c
+  0.62    PASS    `temp-control` publishes data.outdoor_c
+  0.63    PASS    `temp-control` publishes data.note
+  0.64    PASS    `temp-control` publishes data.rejected
+  0.65    PASS    `temp-control` publishes data.rejects
+  0.66    PASS    `temp-control` publishes data.rejects_more
+  0.67    PASS    `temp-control` publishes data.rejects_by_reason
+  0.68    PASS    the read cites the WIDGET, not a field (data.gate)
+  0.69    PASS    the published clamp is the game's own
+  0.70    PASS    `temp-set` refuses with no target set
+  0.71    PASS    …and says why there is no whole-map default (error.detail)
+  0.72    NOTE    indoor rooms found: []
+
+==============================================================================
+PHASE 1 — `temp-control` READS, and reading mutates nothing
+==============================================================================
+  x.a     SKIP    precondition NOT MET: one enclosed, roofed, non-outdoor room of >= 4 cells
+          GenTemperature.ControlTemperatureTempChange returns 0 for a room that is null or UsesOutdoorTemperature, so a controller outdoors is a no-op and every temperature verdict here is undecidable. Build or load a colony with one sealed, roofed room.
+          This is a FIXTURE gap, not a failure of the spec.
+261f2e9 EXIT=2

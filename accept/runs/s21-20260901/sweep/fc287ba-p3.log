@@ -1,0 +1,82 @@
+AutoRimmer acceptance - advance until:{condition|layout} (fc287ba),
+                        construction --layout_id (36999fd),
+                        short_by from availability (54b0c9a)
+protocol root: /home/dorian/projects/rimworld/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer
+phases: 0 + 3
+
+==============================================================================
+PHASE 0 - the bench, the verbs, and THE SHAPE CONTRACT
+==============================================================================
+  0.1     OK      precondition: the bench answers `status`
+  0.2     PASS    `journal` publishes data.last_seq
+  journal watermark: seq0=14
+  0.3a    PASS    `digest` publishes data.time.hour
+  0.3b    PASS    `digest` publishes data.time.tick
+  0.3c    PASS    `digest` publishes data.construction.frames
+  0.3d    PASS    `digest` publishes data.construction.blueprints
+  0.3e    PASS    `digest` publishes data.resources.food_days
+  0.3f    PASS    `digest` publishes data.colonists.list
+  0.3g    PASS    `digest` publishes data.power.gen_w
+  0.4z    PASS    `status` publishes the registry
+  0.4a    PASS    the registry lists advance
+  0.4b    PASS    the registry lists construction
+  0.4c    PASS    the registry lists place-layout
+  0.4d    PASS    the registry lists cancel-layout
+
+==============================================================================
+PHASE 0b - THE REFUSALS: an ignored argument is the bug being fixed
+==============================================================================
+  0.5a    PASS    construction refuses an unknown layout id
+  0.5b    PASS    …and names what this session DOES know (error.detail)
+  0.5c    PASS    layout_id beside rect is a refusal, not a precedence rule
+  0.5d    PASS    the near-miss spelling `layout` is refused
+  0.6a    PASS    a MISSPELLED matcher is refused, not silently ignored
+  0.6b    PASS    two matchers in one advance is a refusal
+  0.6c    PASS    a path that does not resolve is refused AT ARM TIME
+  0.6d    PASS    …and names the keys that section really publishes (error.detail)
+  0.6e    PASS    `changed` is not a predicate section
+  0.6f    PASS    the issue's own example path is refused, because it is wrong
+  0.6g    PASS    `<` on a string is refused rather than coerced
+  0.6h    PASS    an unknown layout id is refused before the clock is touched
+  0.6i    PASS    an out-of-range cadence is refused
+  0.7a    PASS    every refusal left the game PAUSED (data.time.paused)
+  0.7b    PASS    …at speed Paused, not merely force-paused (data.time.speed)
+  0.7c    FAIL    …and the tick did not advance across nine refusals
+          expected: tick unchanged at 849
+          actual:   1239
+
+==============================================================================
+PHASE 3 - fc287ba: the CLOCK, and the edge
+==============================================================================
+  3.0     OK      precondition: the digest publishes an hour
+  clock: hour=6 tick=1239
+  3.1a    PASS    `advance` publishes data.until
+  3.1b    PASS    `advance` publishes data.until.path
+  3.1c    PASS    `advance` publishes data.until.true_when_armed
+  3.1d    PASS    `advance` publishes data.until.evaluations
+  3.1e    PASS    `advance` publishes data.until.eval_ms_avg
+  3.1f    PASS    `advance` publishes data.until.eval_ms_per_frame
+  3.1g    PASS    `advance` publishes data.until.every_frames
+  3.1h    PASS    an always-true predicate with the edge required does NOT halt on it (data.reason)
+  3.1i    PASS    …and says it was already true when it was armed (data.until.true_when_armed)
+  3.1j    PASS    …and that it never saw a false reading (data.until.saw_false)
+  3.1k    PASS    …having actually evaluated it (data.until.evaluations)
+  eval cost: 0.0328 ms/eval, 0.0019 ms/frame over 68 frames
+  3.2a    PASS    …and with edge:false the same predicate halts immediately (data.reason)
+  3.2b    PASS    …naming the path that tripped it (data.halted_on.path)
+  3.2c    PASS    `advance` publishes data.halted_on.observed
+  3.2d    PASS    …and identifying itself as a state halt (data.halted_on.kind)
+  3.2e    PASS    a state halt publishes NO halted_seq (it names no journal line)
+  3.2f    PASS    …and it halted at once, not after the timeout
+  advancing until hour 7 (it is 6) — no tick count is passed
+  3.3a    PASS    the clock predicate halts on the crossing (data.reason)
+  3.3b    PASS    …reporting the value that tripped it (data.halted_on.observed)
+  3.3c    PASS    …and the operator it was asked with (data.halted_on.op)
+  3.3d    PASS    …and it had to see a false reading first (data.until.saw_false)
+  3.3e    PASS    the game's own clock agrees it is that hour (data.time.hour)
+  3.3f    PASS    …and the advance left the game paused (data.time.paused)
+  it took 887 ticks. THE SUITE NEVER NAMED THAT NUMBER.
+
+==============================================================================
+RESULT: 1 FAILED of 52 checks - 0.7c
+fc287ba-p3 EXIT=1
