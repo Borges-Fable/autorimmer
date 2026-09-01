@@ -18,6 +18,22 @@ A "token" is a raw layout cell string (e.g. ``Wall_WoodLog`` or ``.``); the
 catalog's token parser interprets it for rendering. Grids are row-major; row 0 is
 the top row as written in the XML.
 
+**Row 0 is NORTH** (pinned 2026-09-01, git-bug bac4eba; see
+templates/INDEX.md). This docstring used to stop at "as written in the XML",
+which is an XML-order statement that takes no compass position — and a layout
+whose orientation is unstated cannot be placed, only round-tripped. North-up
+matches every other artifact that has an opinion: ``render.py`` ("row 0 is
+z = oz + h - 1"), AutoRimmer's ``CropRenderer`` ("north at top") and
+``map-dump``'s ``north_up: true``.
+
+A rotation suffix (``Wall_North``, ``Cooler_North``) is the **Rot4 value
+verbatim** — North/East/South/West as the game names them — and NOT a
+description of which way the thing faces. The two are not the same and the
+difference is not intuitive: a workbench's ``interactionCellOffset`` is
+``(0,0,-1)``, so a bench at ``Rot4.North`` is one a pawn uses from the SOUTH.
+Writing the suffix as a facing produced exactly one bug in the corpus and it
+took pinning this to find it.
+
 Vendored from rimworld-tools/baseviz @ eabba3e by spec 2.5, unchanged. See
 README.md in this directory. Note for whoever takes spec 3.3: XML -> IR is
 lossy at the edges — `_EXT_SCALAR`/`_EXT_LIST` are hardcoded whitelists,

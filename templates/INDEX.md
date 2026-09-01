@@ -22,20 +22,40 @@ comment channel, so the .md IS the "templates carry their lessons as
 comments" invariant; a patch that touches one half touches both or it is not
 done.
 
-**Row 0 = north is PROPOSED, not established — 3.3 pins it.** `ir.py`'s
-docstring says only that "row 0 is the top row as written in the XML"; it
-takes no position on compass direction, because XML order is all the
-round-trip needs. North-up is a different artifact's convention:
-`baseviz/render.py` ("Planes are north-up row-major: row 0 is z = oz + h - 1"),
-which is the map-DUMP renderer, not the layout IR. These two have never been
-reconciled, and this file previously cited the first as if it said the second.
+**ROW 0 IS NORTH — PINNED 2026-09-01** (git-bug `bac4eba`; it had been
+PROPOSED since session 10 and assigned to 3.3, which had not reached it). The
+pin moved off 3.3 because it is a decision about this directory and
+`baseviz/`, neither of which is C#: the mod has no opinion on IR orientation
+and would not acquire one until `place-layout` exists.
 
-It is load-bearing, so it cannot be left implicit: `Building_Cooler.TickRare`
+North-up was already the convention everywhere that had one —
+`baseviz/render.py` ("row 0 is z = oz + h - 1"), AutoRimmer's `CropRenderer`
+("north at top") and `map-dump`'s `north_up: true`. Only `ir.py` was silent,
+saying just "the top row as written in the XML", which is an XML-order
+statement that takes no compass position. It now says north; the format
+declares its own orientation rather than leaving it to each consumer.
+
+It was load-bearing, exactly as this file argued: `Building_Cooler.TickRare`
 cools `Position + IntVec3.South.RotatedBy(Rotation)` and vents to
 `Position + IntVec3.North.RotatedBy(Rotation)`, so `freezer-kitchen`'s two
-`Cooler_North` cells in row 0 chill row 1 only if row 0 is north. If 3.3 pins
-row 0 as SOUTH, that template heats its own freezer. Until 3.3 answers, each
-template's .md prose is normative and says which way it assumed.
+`Cooler_North` cells in row 0 chill row 1 only under north-up. Under south-up
+they would have refrigerated the outdoors.
+
+**And pinning it found a real bug — in the stove, not the coolers.** The
+corpus was checked against the pin rather than assumed to agree with it.
+`freezer-kitchen` carried `FueledStove_South`, whose interaction cell lands in
+the north wall: `FueledStove` is `interactionCellOffset (0,0,-1)`, so
+`Rot4.South` rotates the pawn's cell 180° to the NORTH of the stove, which is
+row 0 — a `Wall`. It is now `FueledStove_North`, interaction cell row 2, in
+the kitchen interior. The check is independent of the multi-cell anchor
+convention: it gives the same answer whether the token is read as a corner or
+as a centre.
+
+That is a convention bug rather than a typo, and pin 2 below is tightened to
+close it. `FueledStove` is the only interaction-cell-bearing rotated token in
+the whole corpus — `Bed`, `Battery`, `Cooler`, `TorchLamp`,
+`WoodFiredGenerator` and `FirefoamPopper` all have `hasInteractionCell`
+unset — so the audit is complete, not a sample.
 
 ## Parameters — the resolved open question
 
@@ -62,15 +82,32 @@ Do not invent a template interpreter ahead of the need.
 Four ambiguities ir.py leaves open, resolved here as PROPOSALS — 3.3 pins or
 overrides them, and each template's .md prose is normative meanwhile:
 
-0. **Row 0 = north.** The one above; restated here so a reader of this
-   section alone does not miss it. `ir.py` says "top row as written in the
-   XML" and nothing about compass direction.
+0. **Row 0 = north — PINNED**, no longer a proposal. The one above;
+   restated here so a reader of this section alone does not miss it. `ir.py`
+   now says so in its own docstring.
 1. **Multi-cell anchor**: the token sits in the footprint's north-west cell;
    remaining cells are `.`. (A token per occupied cell would make stuff-maps
    and diffs ambiguous.)
-2. **Rotation suffix**: `_North/_South/_East/_West` on rotatable defs —
-   the direction the def FACES (a bed faces its foot; a cooler's suffix is
-   its exhaust/hot side).
+2. **Rotation suffix — PINNED, and tightened.** `_North/_South/_East/_West`
+   is the **`Rot4` value, verbatim**, as the game names it and as `map-dump`
+   publishes it. It is NOT a description of which way the thing faces.
+
+   The old wording ("the direction the def FACES — a bed faces its foot; a
+   cooler's suffix is its exhaust/hot side") read naturally and was wrong in a
+   way that could not be caught by reading, because "faces" means something
+   different per def. A cooler at `Rot4.North` does vent north, so
+   `Cooler_North` happened to be right. A workbench at `Rot4.North` is one a
+   pawn uses from the SOUTH, because `interactionCellOffset` is `(0,0,-1)` in
+   the def's unrotated frame — so an author writing "the stove faces south"
+   wrote `FueledStove_South` and got a stove the pawn must stand in a wall to
+   use. One gloss, two opposite meanings, and only one of the two defs in the
+   corpus exercised the difference.
+
+   A `Rot4` value has exactly one meaning and round-trips through `map-dump`,
+   so the suffix is data now, not prose. Same rule as `00a1be7`: read by
+   field, never through a description. Where a template's .md wants to say
+   which way something faces, it says it in the .md — that is what the .md is
+   for.
 3. **Layer order**: `layers[0]` = buildings and furniture, `layers[1]` =
    conduits. Build order inside a layout (walls → door → roof → furniture) is
    3.3's open question, not encoded here.

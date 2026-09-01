@@ -7,7 +7,7 @@ built from this template, "check popper coverage" leaves the daily checklist
 for them (4.4: escalation removes) — what stays behind is the
 `power-incident` trigger, because the protection is one-shot.
 
-    W W W W W W W       row 0 = north (proposed — templates/INDEX.md)
+    W W W W W W W       row 0 = north (PINNED — templates/INDEX.md)
     W . . . . . W
     W G g . . B W       G = WoodFiredGenerator (2×2, anchor NW)
     * g g h h b W       B = Battery_South (1×2); * = Wall over PowerConduit

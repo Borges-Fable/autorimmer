@@ -5,7 +5,7 @@
   "layers": [
     [
       ["Wall", "Wall", "Cooler_North", "Cooler_North", "Wall", "Wall", "Wall", "Wall", "Wall", "Wall", "Wall"],
-      ["Wall", ".", ".", ".", ".", "Wall", "FueledStove_South", ".", ".", ".", "Wall"],
+      ["Wall", ".", ".", ".", ".", "Wall", "FueledStove_North", ".", ".", ".", "Wall"],
       ["Wall", ".", ".", ".", ".", "Wall", ".", ".", ".", ".", "Wall"],
       ["Wall", ".", ".", ".", ".", "Door", ".", ".", ".", ".", "Wall"],
       ["Wall", ".", ".", ".", ".", "Wall", ".", ".", ".", ".", "Wall"],

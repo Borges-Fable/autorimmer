@@ -4,7 +4,7 @@ The minimal room that reads as a Bedroom, sized to 3.3's own acceptance
 rehearsal ("parametric 5×7 bedroom"). Interior 3×5; bed head against the
 north wall, torch by the door, twelve free cells for the comfort pass later.
 
-    W W W W W        row 0 = north (IR order)
+    W W W W W        row 0 = north (PINNED — templates/INDEX.md)
     W . B . W        B = Bed_South (head at wall, faces its foot)
     W . b . W        b = the bed's second cell — '.' in the IR (anchor rule)
     W . . . W

@@ -1238,3 +1238,33 @@ queue by default (an agent flailing mid-experiment must not page triage).
   game answered, and the answers are the findings. **Bank the envelope beside
   the claim** — `accept/runs/<session>/results/` — at the time the issue is
   filed, not at the time someone needs it.
+- 2026-09-01 (session 14) — **Row 0 is NORTH, and a rotation suffix is the
+  `Rot4` value verbatim, not a description of which way a thing faces.**
+  `templates/INDEX.md` had carried "Row 0 = north is PROPOSED, not established
+  — 3.3 pins it" since session 10, and 3.3 had not reached it. Pinned here
+  instead, and moved off 3.3 deliberately: it is a decision about `templates/`
+  and `baseviz/`, neither of which is C#, and the mod holds no opinion on IR
+  orientation until `place-layout` exists. North-up was already the
+  convention in every artifact that had one — `render.py` ("row 0 is
+  z = oz + h - 1"), `CropRenderer` ("north at top"), `map-dump`'s
+  `north_up: true` — and only `ir.py` was silent, saying "the top row as
+  written in the XML", which is an XML-order statement that takes no compass
+  position. **The pin's value was not the orientation; it was what checking
+  the corpus against it turned up.** `freezer-kitchen` carried
+  `FueledStove_South`, and `FueledStove` is `interactionCellOffset (0,0,-1)`,
+  so `Thing.InteractionCell = Position + offset.RotatedBy(Rotation)` puts the
+  cook one cell NORTH of a `Rot4.South` stove — row 0, a wall. The stove was
+  unusable as drawn, and the same answer falls out whether the IR token is
+  read as a corner or as a centre. The cause was the dialect, not the
+  template: the suffix was documented as "the direction the def FACES", which
+  means opposite things for a cooler (vents toward its rotation) and a
+  workbench (used from the side OPPOSITE its rotation), so one gloss produced
+  two conventions and the corpus happened to exercise both. A `Rot4` value has
+  one meaning and round-trips through `map-dump`; a facing is prose and
+  belongs in the template's .md. Same rule as `00a1be7` and as the
+  `ToStringHuman` → `ToStringWord` fix landed the same day: read by field,
+  never through a description. `FueledStove` is the only
+  interaction-cell-bearing rotated token in the corpus (`Bed`, `Battery`,
+  `Cooler`, `TorchLamp`, `WoodFiredGenerator`, `FirefoamPopper` all leave
+  `hasInteractionCell` unset), so that audit is complete rather than a sample.
+  `bac4eba`, `1adc737`.

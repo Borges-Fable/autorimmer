@@ -4,9 +4,9 @@ Two 4×4 rooms and a doorway between them. The freezer (west) has no exterior
 door at all; the kitchen (east) is its airlock. Coolers sit in the freezer's
 north wall, hot side out.
 
-    W W C C W W W W W W W      row 0 = north (proposed — templates/INDEX.md)
+    W W C C W W W W W W W      row 0 = north (PINNED — templates/INDEX.md)
     W . . . . W S s s . W      C = Cooler_North (exhaust out)
-    W . . . . W . . . . W      S = FueledStove_South (3×1, anchor at west cell)
+    W . . . . W . . . . W      S = FueledStove_North (3×1, anchor at west cell)
     W . . . . D . . . . W      D = the only freezer door — through the kitchen
     W . . . . W . . . . W
     W W W W W W W W D W W      kitchen's exterior door, offset from the axis
@@ -16,12 +16,30 @@ Layer 1 is a `PowerConduit` spine down col 5 — under the shared wall, under
 the freezer door, and under the south wall, where the run continues out to the
 base grid. It is drawn separately because it shares cells with layer 0.
 
-**`Cooler_North`'s correctness depends on row 0 being north**, which is a
-PROPOSED dialect pin, not a settled one (`templates/INDEX.md`; 3.3 pins it).
+**`Cooler_North`'s correctness depends on row 0 being north**, and row 0 IS
+north — pinned 2026-09-01 (`templates/INDEX.md`, git-bug `bac4eba`), so this
+paragraph is now a statement rather than a bet.
 `Building_Cooler.TickRare` cools `Position + IntVec3.South.RotatedBy(Rotation)`
 and pushes the heat to `Position + IntVec3.North.RotatedBy(Rotation)`, so a
-`Cooler_North` in row 0 chills whatever is at row 1. If row 0 turns out to be
-SOUTH, these two coolers heat the freezer and refrigerate the outdoors.
+`Cooler_North` in row 0 chills whatever is at row 1. Had row 0 been pinned
+SOUTH, these two coolers would have heated the freezer and refrigerated the
+outdoors.
+
+**The stove was the thing the pin caught, and this file had it wrong.** It
+said `FueledStove_South` until 2026-09-01. `FueledStove` carries
+`interactionCellOffset (0,0,-1)`, and `Thing.InteractionCell` is
+`Position + offset.RotatedBy(Rotation)` — so `Rot4.South` turns that offset
+180° and puts the cook's cell one row NORTH of the stove, which here is row 0:
+a wall. The stove was unusable as drawn. It is `FueledStove_North` now, whose
+interaction cell is row 2, in the kitchen's own floor.
+
+The error was in the dialect, not in this template's judgement: the rotation
+suffix used to be documented as "the direction the def FACES", and a stove a
+cook stands south of is a stove at `Rot4.North`. The suffix is now pinned to
+the `Rot4` value verbatim (`INDEX.md` pin 2). Worth keeping visible rather
+than quietly correcting, because the wrong version read perfectly well —
+nothing about `FueledStove_South` in a north-wall kitchen looks wrong until
+you rotate the offset by hand.
 
 ## Lessons baked in
 
