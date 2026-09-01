@@ -801,3 +801,170 @@ queue by default (an agent flailing mid-experiment must not page triage).
   **A fixture that fails silently is indistinguishable from the defect it was
   built to detect** — so a staging step must assert that it staged (git-bug
   4087644, ac407f1).
+
+- 2026-08-31 — **Modal-dialog verbs transact the model and NEVER take the job,
+  because both vanilla entry points are jobs whose only payload is a window**
+  (specs 3.5 `20e5cda`, quest observer `548ef48`). The session-4 amendment
+  assumed `trade start` would be "order-then-advance-then-transact"; the
+  decompiled read says that buys nothing. `JobDriver_TradeWithPawn`'s final
+  toil is `if (Trader.CanTradeNow) Find.WindowStack.Add(new Dialog_Trade(actor,
+  Trader))`, `JobDriver_UseCommsConsole`'s is `commTarget.TryOpenComms(actor)`,
+  and both `TradeShip.TryOpenComms` and `Faction.TryOpenComms` are a
+  `WindowStack.Add`. `Dialog_Trade`'s constructor calls `TradeSession.SetupWith`
+  — the same static state the verb sets — and sets `forcePause = true`. So the
+  job produces IDENTICAL model state plus a force-pausing window, and 1.7 proves
+  a force-pausing window halts every subsequent `advance` at 0 ticks.
+  (`Dialog_Trade.PostOpen` can stack a second modal on top of it: a
+  `Dialog_MessageBox` when the negotiator's Talking or Hearing is below 0.95.)
+  **The gates the walk would have had to pass are reproduced in full** —
+  including `CanReach` on both routes — and every such verb publishes
+  `negotiator_walked:false` rather than implying a colonist crossed the map.
+
+- 2026-08-31 — **Three red errors are reachable from the model side of this
+  surface, and each is pre-empted by reproducing the widget clause that guards
+  it.** This is the gate-in-the-widget invariant paying for itself three times
+  in one spec, so the instances are named:
+  `QuestPart_Choice.PreQuestAccept` Log.Errors "still has a choice unresolved"
+  and auto-picks the first when `choices.Count >= 2` — so `quest-accept`
+  REQUIRES `choice` while one is outstanding, which is exactly what
+  `MainTabWindow_Quests.DoAcceptButton` does by not drawing the plain Accept
+  button at all in that case. `Transferable.AdjustTo` Log.Errors "Failed to
+  adjust transferable counts" on an out-of-range count — so `trade-set` asks
+  `CanAdjustTo` first and refuses with the game's own
+  `UnderflowReport`/`OverflowReport`, as `TradeUI.DrawTradeableRow` does by
+  pre-clamping to `GetMinimumToTransfer`/`GetMaximumToTransfer`.
+  `Building_CommsConsole.GetFailureReason`'s own last clause Log.Errors "could
+  not use comm console for unknown reason" — so `comms-call` reproduces the
+  solar-flare and power clauses that make it unreachable. A fourth is an NRE
+  rather than a red error and is the same shape: `TradeDeal.TryExecute`'s
+  cannot-afford branch calls
+  `Find.WindowStack.WindowOfType<Dialog_Trade>().FlashSilver()` unguarded, which
+  NREs on exactly the headless path, so `trade-confirm` pre-tests the exact
+  negation of that condition and returns "MessageColonyCannotAfford" itself.
+  **None of the four is caught; all four are made unreachable.** A caught
+  exception leaves the model half-validated and tells the caller nothing.
+
+- 2026-08-31 — **A confirmation modal becomes an ARGUMENT, never a window.**
+  Three vanilla paths in this spec end in `Dialog_MessageBox.CreateConfirmation`
+  or equivalent: the trader-short-funds confirm in
+  `Dialog_Trade.DoWindowContents` ("ConfirmTraderShortFunds"), the royal-favour
+  accepter confirm in `MainTabWindow_Quests.AcceptQuestByInterface`
+  ("QuestGivesRoyalFavor" + "WantToContinue"), and — outside this spec but the
+  same family — 3.4's `Bill.CreateNoPawnsWithSkillDialog`. Each is reproduced as
+  a default-false boolean arg (`allow_trader_short_funds`,
+  `confirm_accepter_warnings`) whose refusal carries the findings as RESULT
+  FIELDS. Default-false is the headless equivalent of the player clicking "Go
+  back", and it means an unattended run cannot be surprised into a decision the
+  game thought was worth asking about.
+
+- 2026-08-31 — **`quest.dismissed` is cosmetic filtering and is reported as
+  such, in the payload, every time.** `MainTabWindow_Quests.DoDismissButton`'s
+  label keys are literally "DismissQuest"/"UnDismissQuest"; it does not decline,
+  expire or end anything, and `Quest.Accept` sets `dismissed = false` on its way
+  past. An agent that reads it as "we said no" will be wrong, so `quests`,
+  `quest` and `quest-dismiss` all carry a `dismissed_means` / `note` string
+  rather than trusting a comment nobody will read.
+  **The tab's THIRD state is a HIDE, not a delete, and an earlier draft of this
+  entry said the opposite.** `DoDismissButton`'s historical branch is
+  `selected.hiddenInUI = true;` + `SoundDefOf.Tick_High` + `Select(null)` +
+  `return` — `QuestManager.Remove` is never called from that window at all (its
+  only vanilla callers are `Verse/DebugActionsQuests` and
+  `RimWorld/QuestPart_SubquestGenerator`). ONLY THE TOOLTIP KEY SAYS DELETE:
+  `string key = (selected.Historical ? "DeleteQuest" : ...)`. Reading that key
+  as a destructive call is what made `quest-dismiss` refuse historical quests
+  outright; it now reproduces the hide and reports `mode:"hide"`. The hide is
+  ONE-WAY — nothing in the game clears `hiddenInUI` — so the verb refuses
+  `dismissed:false` on a historical quest rather than inventing an un-hide no
+  player has.
+  Two further properties of the same button that a model-side write drops if it
+  is not looking: it is a **TOGGLE** (`selected.dismissed = !selected.dismissed`),
+  so `quest-dismiss` toggles when `dismissed` is omitted and only sets when it is
+  given; and it **PROPAGATES ONE LEVEL** —
+  `foreach (Quest subquest in selected.GetSubquests()) subquest.dismissed =
+  selected.dismissed;`. `QuestUtility.GetSubquests` walks the plain
+  `QuestManager.questsInDisplayOrder` list for `parent == quest` (direct children
+  only, no write-on-read), and writing the parent flag alone leaves a
+  parent/subquest split that no player can reach through the widget.
+
+- 2026-08-31 — **"Cancel leaves the trade untouched" is defined against the
+  world, not against the statics, and what opening a session costs is disclosed
+  rather than suppressed.** `TradeSession.Close()` is `trader = null;` and
+  nothing else — `deal`, `playerNegotiator` and `giftMode` stay set — so
+  "untouched" means NO `Tradeable.ResolveTrade` RAN AND COLONY SILVER AND STOCK
+  COUNTS ARE UNCHANGED. It cannot mean "nothing moved at all", because
+  `TradeDeal.AddAllTradeables` runs `ThingMaker.MakeThing(ThingDefOf.Silver)`
+  when the trader has no silver tradeable, and `Thing.PostMake` calls
+  `ThingIDMaker.GiveIDTo` -> `GetNextThingID()` (a `Scribe_Values`-scribed
+  counter) plus `def.startingHpRange.RandomInRange`. **Opening a trade burns a
+  scribed thing ID and a Rand call.** Small, unavoidable, and exactly what the
+  click does — so `trade-start` publishes it under `session_cost`, the same
+  call `orders` made for the job-ID counter. `TradeSession.Close()` has ZERO
+  vanilla callers (the window owned the lifecycle), so this verb set closes the
+  session itself on every exit path, and reproduces `Dialog_Trade.Close()`'s one
+  model effect — `TradeUtility.ReceiveQuestFromTrader` for a quest-giving trader
+  pawn — while dropping its sound.
+
+- 2026-08-31 — **TWO widget gates in this spec are deliberately WAIVED, and
+  both are named here so neither omission reads as a gap.**
+  **Waiver 1 — `Dialog_NodeTree.InteractiveNow`.** `Dialog_NodeTree.DrawNode`
+  calls `curNode.options[i].OptOnGUI(rect3, InteractiveNow)`, and `private bool
+  InteractiveNow => Time.realtimeSinceStartup >= makeInteractiveAtTime;` with
+  `makeInteractiveAtTime = RealTime.LastRealTime + 1f` under
+  `delayInteractivity: true`. That `active` argument is ANDed into the same
+  `Widgets.ButtonText` call as `!disabled`, so it is a real gate. It is waived
+  because it is an anti-misclick delay rather than a game rule, it is wall-clock
+  rather than tick-based, and reproducing it would put real-time dependence into
+  an otherwise deterministic verb. `ChoiceLetter.OpenLetter` and
+  `DeathLetter.OpenLetter` both pass `delayInteractivity: false`, so letters are
+  unaffected either way.
+  **Waiver 2 — `dialog-dismiss` closes a window no player could close.**
+  `Verse/Dialog_NodeTree`'s constructor sets `closeOnCancel = false`, and
+  `Verse/Window.OnCancelKeyPressed` closes only `if (closeOnCancel)`. So there is
+  NO PLAYER ROUTE that clears a node tree without pressing one of its options —
+  escape does nothing — and `dialog-dismiss` removes it anyway. The reason it is
+  waived rather than honoured: the spec's Scope requires an esc-equivalent that
+  ALWAYS works against a modded dialog nobody has read, and 1.7 proves an
+  unanswerable force-pausing window halts every subsequent `advance` at 0 ticks.
+  A faithful verb here would leave an unattended run wedged forever, which is the
+  failure this spec exists to prevent. The cost is stated in the verb's own
+  `note` rather than left for the agent to discover: dismissing a
+  `ChoiceLetter_*` node tree without choosing SKIPS the option's `action`, and
+  that closure is where `LetterStack.RemoveLetter` lives — so the LETTER SURVIVES
+  the dismissal and can re-open and re-wedge the run. `dialog-dismiss` is the
+  last resort; `letter-choose` / `dialog-choose` answer the decision.
+  Recorded here so the omissions are decisions, not gaps.
+
+- 2026-08-31 — **Where a vanilla option's `action` closure mixes a model effect
+  with presentation, the presentation is REVERTED by a window diff rather than
+  guessed at by label.** `ChoiceLetter.Option_ViewInQuestsTab`'s action is
+  `SetCurrentTab(Quests)` + `.Select(quest)` + `RemoveLetter(this)` and
+  `Option_JumpToLocation`'s is `CameraJumper.TryJumpAndSelect(target)` +
+  `RemoveLetter(this)` — the letter removal and any quest/faction mutation are
+  in the SAME closure as the UI drive and cannot be split from outside. So the
+  walker snapshots the window stack, runs the action, and closes any
+  `MainTabWindow` that appeared (`EscapeCurrentTab(playSound:false)`), reporting
+  it as `presentation_reverted`. Anything ELSE that appeared is REPORTED and
+  left standing, because a window an action raised is a real decision the agent
+  now owes and silently closing it would answer it for them. This generalises
+  3.2's flick-tutorial rule from "drop the known line" to "revert the observed
+  effect", which is what makes it safe against a modded letter nobody has read.
+
+- 2026-08-31 — **A letter is answered through the WINDOW it opened, not beside
+  it, and the two are different objects.** `ChoiceLetter.Choices` is an ITERATOR
+  that constructs a `new DiaOption(...)` on every enumeration, and `DiaOption
+  .dialog` is assigned in exactly one place — `Dialog_NodeTree.GotoNode`. So the
+  options a letter-side verb enumerates are NOT the objects inside an open
+  `Dialog_NodeTreeWithFactionInfo`: replaying one removes the LETTER while the
+  WINDOW stays up, still `forcePause`, and `LetterStack.OpenAutomaticLetters`
+  keeps early-returning — the 1.7 wedge, unanswered. `letter-choose` therefore
+  looks for the window first and routes through ITS option objects (`via:
+  "open-window"`), matching on the one deterministic link available: `Choice
+  Letter.OpenLetter` builds `new DiaNode(text)` from the letter's own `Text`, so
+  the open window's `curNode.text` starts with it (`DeathLetter.OpenLetter`
+  appends a battle-log tail, hence StartsWith rather than equality). A modded
+  letter that builds its node from something else simply does not match, and the
+  verb says so in `still_blocked` and points at `dialog-dismiss` rather than
+  reporting a clean answer over a halted run. Every result on this surface
+  carries 1.7's `ForcePausePayload` verbatim under `force_pause` — one window
+  vocabulary across `advance`, `status`, `interactions` and these verbs, never a
+  second.
