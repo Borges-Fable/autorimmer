@@ -160,10 +160,13 @@ Running the procedure:
    item watching structural fire coverage: **policy-gap + structural +
    no-signal**, one incident, three classes.
 3. *Outputs, lowest rungs that remove the cause*:
-   - **lesson** (policy decided): *a Zzzt letter is a fire already burning —
-     respond at the letter, not the alert; the alert is up to 2,000 ticks of
-     spread later.* (Would land as a prose file if the repo did not already
-     encode the response — see below.)
+   - **lesson** (policy decided): *a Zzzt letter is the ignition event itself
+     — respond at the letter, not the alert; our own advance sizing puts the
+     alert up to ~2,000 ticks of spread later.* (Would land as a prose file if
+     the repo did not already encode the response — see below. Note the lag is
+     OURS, not vanilla's: the readout re-checks within ~24 frames, and it is
+     `Config.AlertScanFrames` × the ticks-per-frame of a budgeted advance that
+     turns frames into thousands of ticks — [[zzzt-letter-is-a-fire-already-burning]].)
    - **checklist item** (signal originated): the `power-incident` event
      trigger — on Zzzt/fire, read `fires` (not the scoped alert), then
      confirm popper coverage standing.

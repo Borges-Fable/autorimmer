@@ -4,13 +4,24 @@ Two 4×4 rooms and a doorway between them. The freezer (west) has no exterior
 door at all; the kitchen (east) is its airlock. Coolers sit in the freezer's
 north wall, hot side out.
 
-    W W C C W W W W W W W      row 0 = north; C = Cooler_North (exhaust out)
-    W . . . . W S s s . W      S = FueledStove_South (3×1, anchor at west cell)
-    W . . . . W . . . . W
+    W W C C W W W W W W W      row 0 = north (proposed — templates/INDEX.md)
+    W . . . . W S s s . W      C = Cooler_North (exhaust out)
+    W . . . . W . . . . W      S = FueledStove_South (3×1, anchor at west cell)
     W . . . . D . . . . W      D = the only freezer door — through the kitchen
     W . . . . W . . . . W
     W W W W W W W W D W W      kitchen's exterior door, offset from the axis
     (sketch; the .ir.json is the artifact)
+
+Layer 1 is a `PowerConduit` spine down col 5 — under the shared wall, under
+the freezer door, and under the south wall, where the run continues out to the
+base grid. It is drawn separately because it shares cells with layer 0.
+
+**`Cooler_North`'s correctness depends on row 0 being north**, which is a
+PROPOSED dialect pin, not a settled one (`templates/INDEX.md`; 3.3 pins it).
+`Building_Cooler.TickRare` cools `Position + IntVec3.South.RotatedBy(Rotation)`
+and pushes the heat to `Position + IntVec3.North.RotatedBy(Rotation)`, so a
+`Cooler_North` in row 0 chills whatever is at row 1. If row 0 turns out to be
+SOUTH, these two coolers heat the freezer and refrigerate the outdoors.
 
 ## Lessons baked in
 
@@ -31,10 +42,30 @@ north wall, hot side out.
   `landmark {set:{name:"freezer", at:<freezer center cell>}}`. The daily item's read is
   `room-at` at that landmark; a template that creates the room also creates
   the name the playbook watches it by.
+- **The coolers need POWER, and this template has no generator.** Two
+  `Cooler`s draw 200 W each (`basePowerConsumption 200`) — **400 W standing**,
+  before the base's lights. Nothing here produces it: the stove is
+  `FueledStove` and burns wood, and the shell is unpowered. The layout is
+  half a room until it is tied into a grid that has 400 W of headroom
+  (`digest` → `power.gen_w` vs `power.draw_w`; see `power-deficit` in
+  `checklists/turn.md`).
+  **And the wiring rule here is the CONNECTOR rule, not the transmitter
+  rule.** A `Cooler` carries `CompProperties_Power` with
+  `compClass CompPowerTrader` and no `transmitsPower`, so `ThingDef
+  .ConnectToPower` is true: it is an appliance, and
+  `PowerConnectionMaker.BestTransmitterForConnector` finds it the nearest
+  transmitter inside `CellRect.SingleCell(pos).ExpandedBy(6)`. **Within 6
+  cells is enough; nothing has to touch.** That is the opposite of the rule
+  for batteries and conduits, which are transmitters and must physically abut
+  (`templates/power-room.md` §Why the bank needs the hidden conduit — the
+  confusion between the two shipped a broken power room). The col-5 spine is
+  inside 6 of both cooler cells with room to spare.
 - **A dirty kitchen poisons meals regardless of the cook.** A cooked meal
   rolls against the ROOM's `FoodPoisonChance` stat — a curve over room
   Cleanliness: 0% at ≥ −2, 2.5% at −3.5, 5% at −5; cooking roomless is a
-  flat 2% (`CompFoodPoisonable.cs:38`, `RoomStats.xml`). So: constructed
+  flat 2% (`CompFoodPoisonable.Notify_RecipeProduced`, which rolls
+  `pawn.GetRoom()?.GetStat(RoomStatDefOf.FoodPoisonChance)` and falls back to
+  the stat's `roomlessScore`; `RoomStats.xml`). So: constructed
   floor before first meal, butchering OUT of this room (its filth is the
   cleanliness sink — give it an alcove or the freezer edge), and cleaning
   reaches here. "Clean kitchen" is a number the `room` verb can read.
@@ -61,9 +92,23 @@ north wall, hot side out.
 
 ## Placement
 
-`place-layout templates/freezer-kitchen.ir.json --mode blueprint` (3.3).
-After the walls close: stockpile zone over the freezer interior (food filter,
-Important priority — configure the filter at creation, the same discipline as
-growing zones), then the landmark, then the meal bill (3.6). Zones and bills
-are not IR — a layout places things; the template's .md is what remembers the
-rest.
+`place-layout templates/freezer-kitchen.ir.json --mode blueprint` (3.3 — the
+verb does not exist yet; `1adc737` is open). After the walls close, in order:
+
+1. **Wire it.** Extend the col-5 conduit spine south from the template's edge
+   to a net that has a generator and 400 W of headroom. The coolers are
+   connectors, so they need a transmitter within 6 cells — they do NOT need
+   conduit in their own cell. Prove it landed: `power.gen_w` covers
+   `power.draw_w`, and `power.nets == power.nets_with_generator` (a gap means
+   some net has storage or appliances and no generator —
+   `templates/power-room.md` §Placement carries the argument).
+2. **Stockpile zone** over the freezer interior — food filter, Important
+   priority, filter configured at creation, the same discipline as growing
+   zones.
+3. **Landmark** `freezer`, so `checklists/daily.md` §freezer-below-zero has
+   something to read.
+4. **Meal bill** (3.6, `48f666c`) — and the worker who will take it
+   ([[who-will-actually-do-it]]).
+
+Steps 1–4 are not IR: a layout places things; the template's .md is what
+remembers the rest.

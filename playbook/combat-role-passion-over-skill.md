@@ -20,8 +20,17 @@ source: Evan, session 7
   passionate pawn will not close fourteen levels soon enough to matter.
 
 **What the mod already handles.** `FindSuitableWeaponAndAmmo` implements the
-trait half by itself — it tests `HasTrait(TraitDefOf.Brawler)` and sets
-`allowRanged = !brawler`. **Brawler needs nothing from us.**
+trait half by itself — `FSWA_MapComponent.TryArmPawn` tests
+`HasTrait(TraitDefOf.Brawler)` and sets `allowRanged = !brawler`.
+**Brawler needs nothing from us.**
+
+**And vanilla enforces half of Evan's rule for us, in the trait def.**
+`Brawler` carries `<conflictingPassions><li>Shooting</li></conflictingPassions>`,
+so **a Brawler can never have a shooting passion** — the case "Brawler with a
+shooting passion, which role?" does not exist and needs no tiebreak. The same
+def also carries `skillGains` `Melee +4` / `Shooting −10` and
+`statOffsets MeleeHitChance +4`, which is the mechanical content of "wastes
+the trait's melee bonus".
 
 **What cannot be expressed today.** FSWA's `WeaponPreference` is **mod-wide**
 (`FSWAMod.Settings.weaponPreference`), not per-pawn; the Brawler trait is its only

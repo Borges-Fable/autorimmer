@@ -9,19 +9,33 @@ stopped being a checklist line by becoming geometry.
 | template | footprint | research gate | the lessons it carries |
 |---|---|---|---|
 | `bedroom` | 5×7 | none (3.3's own rehearsal size) | enclosure, auto-roof, ownership-or-Barracks |
-| `freezer-kitchen` | 11×6 | AirConditioning | cold that is checked, clean that is measured, haul paths short |
-| `power-room` | 7×7 | Electricity (+Batteries, +Firefoam) | the popper, the one deliberate conduit, banks sized to their own explosion |
+| `freezer-kitchen` | 11×6 | AirConditioning (+Electricity for the conduit spine) | cold that is checked, clean that is measured, haul paths short, 400 W that has to come from somewhere |
+| `power-room` | 7×7 | Electricity (+Batteries, +Firefoam) | the popper, the one deliberate conduit, hidden conduit for the rest, banks sized to their own explosion |
 
 ## Format: annotated IR, in two halves
 
 Each template is a pair. **`<name>.ir.json`** is the machine half — the
 baseviz IR dialect (`baseviz/ir.py`): `defName`, `size [w,h]`, `layers` of
-row-major token grids, `terrain`, `roof`, with **row 0 = north** (the IR
-mirrors KCSG XML order; ir.py's own docstring). **`<name>.md`** is the lesson
+row-major token grids, `terrain`, `roof`. **`<name>.md`** is the lesson
 half — every placement decision that came from a lesson, cited. JSON has no
 comment channel, so the .md IS the "templates carry their lessons as
 comments" invariant; a patch that touches one half touches both or it is not
 done.
+
+**Row 0 = north is PROPOSED, not established — 3.3 pins it.** `ir.py`'s
+docstring says only that "row 0 is the top row as written in the XML"; it
+takes no position on compass direction, because XML order is all the
+round-trip needs. North-up is a different artifact's convention:
+`baseviz/render.py` ("Planes are north-up row-major: row 0 is z = oz + h - 1"),
+which is the map-DUMP renderer, not the layout IR. These two have never been
+reconciled, and this file previously cited the first as if it said the second.
+
+It is load-bearing, so it cannot be left implicit: `Building_Cooler.TickRare`
+cools `Position + IntVec3.South.RotatedBy(Rotation)` and vents to
+`Position + IntVec3.North.RotatedBy(Rotation)`, so `freezer-kitchen`'s two
+`Cooler_North` cells in row 0 chill row 1 only if row 0 is north. If 3.3 pins
+row 0 as SOUTH, that template heats its own freezer. Until 3.3 answers, each
+template's .md prose is normative and says which way it assumed.
 
 ## Parameters — the resolved open question
 
@@ -45,9 +59,12 @@ Do not invent a template interpreter ahead of the need.
 
 ## Proposed dialect pins (3.3's "IR dialect delta" question)
 
-Three ambiguities ir.py leaves open, resolved here as PROPOSALS — 3.3 pins or
+Four ambiguities ir.py leaves open, resolved here as PROPOSALS — 3.3 pins or
 overrides them, and each template's .md prose is normative meanwhile:
 
+0. **Row 0 = north.** The one above; restated here so a reader of this
+   section alone does not miss it. `ir.py` says "top row as written in the
+   XML" and nothing about compass direction.
 1. **Multi-cell anchor**: the token sits in the footprint's north-west cell;
    remaining cells are `.`. (A token per occupied cell would make stuff-maps
    and diffs ambiguous.)
@@ -64,7 +81,13 @@ Footprints and research gates were read from the bench's own def XML this
 session (Bed 1×2, FueledStove 3×1, WoodFiredGenerator 2×2, Battery 1×2,
 Cooler/TorchLamp/popper 1×1; Cooler needs AirConditioning + construction 5,
 WoodFiredGenerator needs Electricity, Battery needs Batteries, popper needs
-Firefoam + construction 5). The enforcing check is still 3.3's preflight —
+Firefoam + construction 5). Conduits added session 10: `PowerConduit` 1×1,
+1 Steel, Flammability 0.7; `HiddenConduit` 1×1, 2 Steel, Flammability 0,
+`canBeDamagedByAttacks false`, `WorkToBuild` 280 — a SEPARATE def with
+`ParentName="PowerConduit"`, so it transmits power but is never in
+`ShortCircuitUtility.GetShortCircuitablePowerConduits`, which matches
+`ThingsOfDef(ThingDefOf.PowerConduit)` by def. Both inherit **Electricity**
+and neither adds a further research gate. The enforcing check is still 3.3's preflight —
 every cell validated before anything places, per-cell failures in the
 `removal`/`reason` shape, nothing placed on any failure. A wrong claim in
 these files fails loudly at preflight, not silently on the map. Research

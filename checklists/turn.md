@@ -11,9 +11,16 @@ it becomes. Ledger: log only firings (`verdict:"action"`), per
 - when: turn
 - read: `digest` → `resources.food_days` (and `food_needers`)
 - flag: `food_days < 6` *(proposed)*
-- act: designate the next food batch — sow/harvest/hunt — and confirm a meal
-  bill is live (`production-still-runs` in daily.md). A designation, not a
-  bill retry: ingredient-finders haul what is already harvested, nothing more
+- act: grow the food supply at the right rung, and confirm a meal bill is
+  live (`production-still-runs` in daily.md). **Crops are NOT a designation:**
+  `WorkGiver_Grower.PotentialWorkCellsGlobal` walks `zoneManager.AllZones`
+  with no designation check, so a growing zone sows and harvests itself —
+  the act is `zone {op:"add", kind:"growing", rect:[x,z,w,h], plant:"…"}`, or
+  `zone {op:"expand", id:N, rect:…}` on the zone you have, or fixing
+  `allow_sow`/`allow_cut`. Wild plants and hunting DO need one:
+  `designate {type:"harvest", rect:[x,z,w,h]}` /
+  `designate {type:"hunt", …}`. Either way it is not a bill retry —
+  ingredient-finders haul what is already harvested, nothing more
   ([[materials-are-a-standing-loop]]).
 - why: three stacked lags. `Alert_LowFood` is muzzled for the first 150,000
   ticks — 2.5 game days — by `GetReport`'s
@@ -65,10 +72,14 @@ it becomes. Ledger: log only firings (`verdict:"action"`), per
 - read: `digest` → `resources.wood`, `resources.steel`
 - flag: `wood < 100` or `steel < 50` *(proposed)* with no matching designation
   batch outstanding
-- act: `designate chop` / `designate mine` over the next batch — one rect, one
-  call. Raw material only flows while a designation exists; colonists never
-  fell or mine on their own initiative ([[materials-are-a-standing-loop]],
-  Evan: "colonists don't put down trees themselves").
+- act: `designate {type:"chop", rect:[x,z,w,h]}` /
+  `designate {type:"mine", rect:[x,z,w,h]}` over the next batch — one rect,
+  one call. (`type` is an ARG: `DesignationVerbs.Designate` reads
+  `a.StrReq("type")`, and `rwa designate chop …` dies on the bare word.)
+  Wood and stone only flow while a designation exists; colonists never fell
+  or mine on their own initiative ([[materials-are-a-standing-loop]], Evan:
+  "colonists don't put down trees themselves"). Crops are the exception and
+  belong to `food-days-floor`, not here.
 - why: a bill stalling at zero input pages THIS item, not a bill retry — the
   retry hides the real correction. Stockpiles-only caveat applies here too.
 - retire-when: 1.6 predicate, or a mod-side standing-designation policy
@@ -104,7 +115,17 @@ exceptions are known, verified, and small enough to memorize:
 | `Alert_FireInHomeArea` | scoped | home-area only, `ThingDefOf.Fire` only — `fires` verb is the honest read |
 | `Alert_LowFood` | late twice | muzzled before tick 150,000; threshold overstates days ~1.6× (see `food-days-floor`) |
 | `Alert_NeedMealSource` | building ≠ food | tests only that a stove EXISTS, and is silent before day 2 (`GetReport`) — see `production-still-runs` |
-| armament | no alert exists | all 133 vanilla alerts checked; the gap is total ([[weapons-have-no-alert]]) |
+| armament | no alert exists | all 126 concrete vanilla alerts checked (133 `Alert_*` declarations, 7 abstract); the gap is total ([[weapons-have-no-alert]]) |
+
+**Two suppressions apply to the WHOLE table, not to any row in it**, and no
+per-alert reading finds them — they live in
+`AlertsReadout.AlertsReadoutUpdate`, which returns early below
+`Mathf.Max(TicksGame, Find.TutorialState.endTick) < 600` and clears
+`activeAlerts` outright when `Find.Storyteller.def.disableAlerts` is set. So
+`alerts.active` is empty by construction for the first 600 ticks of a colony,
+and permanently empty under such a storyteller. Read the storyteller once at
+colony start; treat an empty list before tick 600 as no information.
+([[alert-need-defenses-self-silences]])
 
 **Silence from a scoped or time-limited alert is not safety.** That sentence
 is the whole reason `daily.md` exists.

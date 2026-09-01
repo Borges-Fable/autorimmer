@@ -34,6 +34,31 @@ fourth that even the recommended `GenDate.DaysPassed` grep would miss —
 2.5 days of silence keyed on ticks, not days. Any future mining pass sweeps
 `Alert_*` for BOTH idioms before trusting an alert's early-game silence.
 
+**And there is a THIRD idiom, which is GLOBAL — no per-alert grep can find
+it, because it is not in any alert.** `AlertsReadout.AlertsReadoutUpdate`
+opens:
+
+    if (Mathf.Max(Find.TickManager.TicksGame, Find.TutorialState.endTick) < 600)
+        return;
+    if (Find.Storyteller.def.disableAlerts)
+    {
+        activeAlerts.Clear();
+        return;
+    }
+
+So **every alert in the game is suppressed for the first 600 ticks** (longer
+if a tutorial is running — the `endTick` term), and a storyteller with
+`disableAlerts` set silences the readout permanently, clearing the active
+list rather than skipping the scan. Neither fact is discoverable by sweeping
+`Alert_*` at all. The sweep has to include the readout that drives them.
+
+Practical consequences, both small and both real: a colony-start checklist
+that reads `digest.alerts` before tick 600 is reading an empty list and must
+not treat that as "all clear" (`checklists/triggered.md`'s colony-start
+section runs structurally for exactly this reason); and `turn.md`'s trust
+table is void wholesale under a `disableAlerts` storyteller, which is a
+one-time read at colony start, not a per-turn check.
+
 **Companion signals that ARE trustworthy**, so nobody re-derives them:
 `Alert_NeedWarmClothes` genuinely forecasts up to three twelfths ahead via
 `GenTemperature.AverageTemperatureAtTileForTwelfth`, and
