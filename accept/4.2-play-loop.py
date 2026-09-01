@@ -16,7 +16,9 @@ Checks (PASS/FAIL/WARN per check, exit 0 iff no FAIL):
                       item has a ledger line that day (silent skip = missing line)
   action-taken        >=1 verdict:"action" line with a non-empty note
   summary-written     RUNS/<run>/summary.md exists, non-empty
-  final-undrafted     digests/final.json: no colonist drafted, hostiles == 0
+  final-undrafted     digests/final.json: no colonist drafted, and no hostile
+                      left unpardoned (threats.hostiles_unpardoned, falling
+                      back to threats.hostiles on a pre-pardon run)
   advance-invariants  from transcript result envelopes: timeout_ticks <= 60000,
                       ticks_elapsed <= 60000 + the envelope's own overshoot_bound,
                       halt_on_error never false, no two consecutive 0-tick advances
@@ -164,13 +166,39 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
         d = d.get("data", d)  # accept a raw envelope or its data block
         colonists = d.get("colonists", {}).get("list", [])
         drafted = [c.get("name") for c in colonists if c.get("drafted")]
-        hostiles = d.get("threats", {}).get("hostiles", 0)
+        threats = d.get("threats", {}) or {}
+        # Evan's ruling (session 13): M1's insects "aren't hostile in the same
+        # way a normal hostile is, since they won't attack at will", and the
+        # run should have explicitly DECLARED it was not attacking them
+        # because it wasn't ready. So the criterion is not "0 hostiles" but
+        # "0 drafted, 0 hostiles that we haven't pardoned" — where a pardon is
+        # a deliberate, journalled act (the `threat-pardon` verb) and never a
+        # silent exemption. `hostiles` keeps its old meaning, the total.
+        hostiles = threats.get("hostiles", 0)
+        if "hostiles_unpardoned" in threats:
+            standing, keyed = threats.get("hostiles_unpardoned", 0), "hostiles_unpardoned"
+        else:
+            # A run recorded before threat-pardon shipped declared no pardons
+            # at all, so every hostile left standing is one nobody accounted
+            # for. Falling back to the total is the STRICT reading and is
+            # meant to be: m1-20260831 ends with six undeclared hostiles, and
+            # that FAIL is the correct verdict on it, not a gap to paper over.
+            standing, keyed = hostiles, "hostiles"
         if drafted:
             report("FAIL", "final-undrafted", f"drafted at end: {drafted}")
-        elif hostiles:
-            report("FAIL", "final-undrafted", f"threats.hostiles == {hostiles} at end")
+        elif standing and keyed == "hostiles_unpardoned":
+            report("FAIL", "final-undrafted",
+                   f"threats.hostiles_unpardoned == {standing} at end "
+                   f"({hostiles} hostile(s), {threats.get('hostiles_pardoned', 0)} pardoned)")
+        elif standing:
+            report("FAIL", "final-undrafted",
+                   f"threats.hostiles == {standing} at end, none declared — pre-pardon run, "
+                   "no threats.hostiles_unpardoned field to key on")
         else:
-            report("PASS", "final-undrafted", f"{len(colonists)} colonists, 0 drafted, 0 hostiles")
+            pardoned = threats.get("hostiles_pardoned", 0)
+            report("PASS", "final-undrafted",
+                   f"{len(colonists)} colonists, 0 drafted, 0 unpardoned hostiles"
+                   + (f" ({pardoned} of {hostiles} pardoned)" if pardoned else ""))
 
     # -- advance-invariants (needs the transcript's result envelopes) ------
     if transcript_dir and Path(transcript_dir).is_dir():
@@ -315,7 +343,11 @@ def build_fixture(root, repo):
     (run / "digests" / "day-2.json").write_text("{}", encoding="utf-8")
     (run / "digests" / "final.json").write_text(json.dumps({
         "colonists": {"list": [{"name": "A", "drafted": False}, {"name": "B", "drafted": False}]},
-        "threats": {"hostiles": 0},
+        # Hostiles STANDING at the end and the run still green, because every
+        # one of them was pardoned by a deliberate act. That is the shape
+        # Evan's ruling makes legal, so it is the shape the clean fixture
+        # pins — a check that only ever saw hostiles == 0 would not prove it.
+        "threats": {"hostiles": 6, "hostiles_pardoned": 6, "hostiles_unpardoned": 0},
     }), encoding="utf-8")
     (run / "summary.md").write_text("# selftest run\nlast seq read: 7\n0 drafted, 0 red.\n", encoding="utf-8")
 
@@ -370,16 +402,36 @@ def selftest(repo):
             failures.append("clean fixture FAILed a check")
 
         print("\n== selftest: each mutation must fail its own check ==")
-        for mutate, expect in [
-            (lambda: (run / "checklist.ndjson").write_text(
+        for label, mutate, expect in [
+            ("a daily item skipped silently",
+             lambda: (run / "checklist.ndjson").write_text(
                 "\n".join(l for l in (run / "checklist.ndjson").read_text(encoding="utf-8").splitlines()
                           if '"freezer-below-zero"' not in l) + "\n", encoding="utf-8"),
              "daily-coverage"),
-            (lambda: (run / "digests" / "final.json").write_text(json.dumps({
+            ("a colonist left drafted",
+             lambda: (run / "digests" / "final.json").write_text(json.dumps({
                 "colonists": {"list": [{"name": "A", "drafted": True}]},
                 "threats": {"hostiles": 0}}), encoding="utf-8"),
              "final-undrafted"),
-            (lambda: [(tr / "003-advance" / "result.json").write_text(json.dumps(
+            # A hostile nobody pardoned. The pardon is the whole point: five
+            # of six declared is still one left standing unaccounted for.
+            ("a hostile left unpardoned",
+             lambda: (run / "digests" / "final.json").write_text(json.dumps({
+                "colonists": {"list": [{"name": "A", "drafted": False}]},
+                "threats": {"hostiles": 6, "hostiles_pardoned": 5,
+                            "hostiles_unpardoned": 1}}), encoding="utf-8"),
+             "final-undrafted"),
+            # The pre-pardon shape: no hostiles_unpardoned field at all, so
+            # the fallback reads the total. This is m1-20260831's own shape
+            # and it must stay red — a run that never declared a pardon
+            # accounted for none of its hostiles.
+            ("a pre-pardon run with hostiles and no declaration",
+             lambda: (run / "digests" / "final.json").write_text(json.dumps({
+                "colonists": {"list": [{"name": "A", "drafted": False}]},
+                "threats": {"hostiles": 6}}), encoding="utf-8"),
+             "final-undrafted"),
+            ("two 0-tick advances back to back",
+             lambda: [(tr / "003-advance" / "result.json").write_text(json.dumps(
                 {"id": "c3", "op": "advance", "ok": True,
                  "data": {"reason": "dialog", "ticks_elapsed": 0}}), encoding="utf-8"),
                 (tr / "001-advance" / "result.json").write_text(json.dumps(
@@ -398,8 +450,8 @@ def selftest(repo):
             audit(run, repo, journal, tr)
             got = {c for s, c, _ in results if s == "FAIL"}
             if expect not in got:
-                failures.append(f"mutation for {expect} did not FAIL it (FAILs: {sorted(got)})")
-            print(f"-- mutation '{expect}': {'ok' if expect in got else 'MISSED'}\n")
+                failures.append(f"mutation '{label}' did not FAIL {expect} (FAILs: {sorted(got)})")
+            print(f"-- mutation '{label}' -> {expect}: {'ok' if expect in got else 'MISSED'}\n")
 
     if failures:
         print("SELFTEST FAIL:", *failures, sep="\n  ")
