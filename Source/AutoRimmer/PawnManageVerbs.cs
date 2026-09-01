@@ -1215,6 +1215,11 @@ namespace AutoRimmer
             var repaired = new List<object>();
             var stillUnder = new List<object>();
             var alreadyOk = new List<object>();
+            // git-bug 58794e4 — the promotions, as objects rather than as the
+            // report of them, so `coverage_after` can be PROJECTED for a dry run
+            // (WorkCoverage.Project). In a real run they have already been
+            // written and the map is re-read instead.
+            var planned = new List<KeyValuePair<WorkTypeDef, Pawn>>();
 
             foreach (var r in rows)
             {
@@ -1256,6 +1261,7 @@ namespace AutoRimmer
                             continue;
                         }
                     }
+                    planned.Add(new KeyValuePair<WorkTypeDef, Pawn>(r.Def, pawn));
                     repaired.Add(new Dictionary<string, object>
                     {
                         ["work"] = r.Def.defName,
@@ -1287,9 +1293,17 @@ namespace AutoRimmer
                         ["short_by"] = need - did,
                         ["enabled_this_call"] = did,
                         ["candidates_offered"] = ranked.Count,
+                        // POST-CALL, LIKE `have` BESIDE THEM. `have` has always
+                        // been `r.Have + did` — the projection — while these two
+                        // were the pre-call snapshot, so on any call that
+                        // promoted somebody the same row said `have:2` and
+                        // `available:1` about a floor measured on availability.
+                        // `capable` is genuinely unchanged by a promotion.
+                        // The pre-call values are still recoverable: subtract
+                        // `enabled_this_call` (git-bug 58794e4's second half).
                         ["capable"] = r.Capable.Count,
-                        ["enabled"] = r.Enabled.Count,
-                        ["available"] = r.Available.Count,
+                        ["enabled"] = r.Enabled.Count + did,
+                        ["available"] = r.Available.Count + did,
                         ["gate"] = ranked.Count == 0 ? "no-candidate" : "too-few-candidates",
                         ["reason"] = ranked.Count == 0
                             ? "no colonist on this map is capable of " + r.Def.defName
@@ -1323,10 +1337,31 @@ namespace AutoRimmer
             // Re-read rather than assume. The whole M1 lesson is that a verb
             // reporting what it INTENDED is not the same as the state
             // afterwards, and this one is cheap enough to just look again.
-            var after = dryRun ? WorkCoverage.Section(map) : WorkCoverage.Section(map);
+            //
+            // …EXCEPT IN A DRY RUN, WHERE THERE IS NOTHING TO RE-READ. Nothing
+            // was written, so a re-read reports the coverage BEFORE the repair
+            // under a field named `coverage_after` — the defect git-bug 58794e4
+            // is about, and the two arms of this ternary used to be identical.
+            // The dry-run arm now PROJECTS the promotions it just planned onto a
+            // fresh snapshot, so the field answers the question a dry run asks.
+            var after = dryRun ? WorkCoverage.Section(map, planned)
+                               : WorkCoverage.Section(map);
             bool covered = stillUnder.Count == 0;
 
-            long seq = (repaired.Count > 0 && !dryRun) || stillUnder.Count > 0
+            // THE EMIT GUARD IS ITS OWN ANSWER, not the seq it produced
+            // (git-bug 6fc75e3). A dry run that plans a CLEAN repair owes no
+            // journal line — `repaired > 0 && !dryRun` is false and there is
+            // nothing still under — so it emits nothing and `seq` stays 0. But
+            // `Stamp(0)` means "the emit FAILED" and says so in words: "the
+            // journal writer is closed … treat anything done in this session as
+            // unprovenanced." Neither clause was true, and 0 was doing double
+            // duty as both "nothing was owed" and "something was owed and it did
+            // not get written" — the same sentinel-conflation as
+            // `enabled_but_incapable`'s absent key, one level down. Keyed on the
+            // GUARD, `NoStamp()` says the honest thing and `Stamp(0)` keeps its
+            // warning for the case where `Journal.Emit` really did fail.
+            bool owedJournalLine = (repaired.Count > 0 && !dryRun) || stillUnder.Count > 0;
+            long seq = owedJournalLine
                 ? Act(V, dryRun ? "plan" : "cover",
                       repaired.Count + " promotion(s), " + stillUnder.Count + " still under",
                       new Dictionary<string, object>

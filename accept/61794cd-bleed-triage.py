@@ -1502,19 +1502,23 @@ def phase5():
     shape("5.1e", "work-cover", e, "data.still_under", list)
     shape("5.1f", "work-cover", e, "data.already_covered", list)
     shape("5.1g", "work-cover", e, "data.coverage_after", dict)
-    # `coverage_after`'s VALUE is deliberately NOT asserted for a dry run.
-    # git-bug 58794e4 (filed by the orchestrator off the s21 smoke, envelopes
-    # 12/13): in `dry_run` the field reports the coverage BEFORE the repair —
-    # `ok:false`, `under:["Doctor"]` — while `repaired` in the same envelope
-    # names the promotion that fixes it. A dry run exists to answer "would this
-    # fix it" and that field answers "is it fixed", which in a dry run is always
-    # no. Asserting either value here would make this suite go red the day
-    # 58794e4 is fixed, or green on the defect; what IS asserted is the thing
-    # that is true either way and that the acceptance bullet actually needs —
-    # that the dry run mutated nothing, proved from OUTSIDE the verb at 5.2.
-    note("5.1g2", "coverage_after's VALUE is not asserted in dry-run: it is "
-                  "pre-repair coverage, which is git-bug 58794e4. The real run "
-                  "at 5.3f asserts it where it is correct.")
+    # `coverage_after`'s VALUE IS NOW ASSERTED FOR A DRY RUN — git-bug 58794e4,
+    # fixed. It used to report the coverage BEFORE the repair (`ok:false`,
+    # `under:["Doctor"]`) while `repaired` in the SAME envelope named the
+    # promotion that fixes it, so the envelope contradicted itself and the field
+    # answered "is it fixed", which in a dry run is always no by construction.
+    # The dry-run arm now PROJECTS the planned promotions onto a fresh snapshot,
+    # so it answers the question a dry run is asked. The suite could not assert
+    # either value while the defect stood; now the value is the check.
+    eq("5.1g2", "…and in a DRY RUN `coverage_after` is the PROJECTED coverage: "
+                "the question a dry run asks is 'would this fix it', not 'is it "
+                "fixed'", e, "data.coverage_after.ok", True)
+    if not ARGS.dry_run:
+        proj_under = as_list(dig(e, "data.coverage_after.under"))
+        check("5.1g3", "…so Doctor is not in the projected `under`, even though "
+                       "nothing has been written",
+              DOCTOR not in proj_under,
+              "Doctor absent from %s" % (proj_under,), proj_under)
     shape("5.1h", "work-cover", e, "data.priority_set")
     shape("5.1i", "work-cover", e, "data.use_priorities")
     rep = as_list(dig(e, "data.repaired"))
@@ -2071,6 +2075,51 @@ def phase7():
           % (DIM, victims, keep, S["handless"], OFF))
 
     seq_before = 0 if ARGS.dry_run else watermark()
+
+    # ---- (b2) THE PROJECTION ON A COLONY SHORT BY TWO — git-bug 58794e4 ----
+    # 58794e4's second acceptance bullet asks for exactly this state, because
+    # phase 5's colony cannot produce it: there, one promotion clears the only
+    # shortfall, so `still_under:[]` is right whether the verb PROJECTS or
+    # merely REPORTS. Here Doctor is off across the roster (`available:0`
+    # against a floor of 2) and only ONE colonist can be promoted — everybody
+    # else is downed, and the handless one is excluded by `MissingCapacity`. So
+    # a projection that is honest has to come back saying the repair is still
+    # short, which is the opposite of the optimism a naive projection would
+    # produce and the opposite of the pre-repair reading the old code gave.
+    #
+    # It runs BEFORE (c)'s real call and mutates nothing, so (c) still meets the
+    # state it was written for.
+    e = send("work-cover", {"work": DOCTOR, "dry_run": True})
+    S["cover_few_dry"] = e
+    dsu = as_list(dig(e, "data.still_under"))
+    drep = as_list(dig(e, "data.repaired"))
+    check("7.2p1", "the dry run plans the ONE promotion the roster allows",
+          ARGS.dry_run or len(drep) == 1, "one planned promotion", drep)
+    check("7.2p2", "…and `still_under` is NOT empty, because one promotion "
+                   "against a floor of two is a PARTIAL repair — the case that "
+                   "tells projecting apart from reporting",
+          ARGS.dry_run or len(dsu) == 1, "one still_under row", dsu)
+    if not ARGS.dry_run and dsu:
+        eq("7.2p3", "…and `have` is the PROJECTED count, not the pre-repair 0",
+           e, "data.still_under.0.have", 1)
+        eq("7.2p4", "…one short of the floor rather than two", e,
+           "data.still_under.0.short_by", 1)
+        eq("7.2p5", "…and `available` no longer contradicts the `have` it is the "
+                    "floor for: both are post-call", e,
+           "data.still_under.0.available", 1)
+        eq("7.2p6", "…so the PROJECTED coverage says the floor is still unmet — "
+                    "a projection that lied would say the opposite, and the "
+                    "pre-repair reading this replaces would have said it for the "
+                    "wrong reason", e, "data.coverage_after.ok", False)
+        cu = as_list(dig(e, "data.coverage_after.under"))
+        check("7.2p7", "…with Doctor still named in it", DOCTOR in cu,
+              "Doctor in %s" % (cu,), cu)
+        # THE OTHER SIDE OF 6fc75e3's GUARD. 5.2c is a dry run that owed no
+        # journal line; this one falls short, so `stillUnder > 0` and it DOES
+        # owe one — and `step:"plan"` is reachable only here.
+        ge("7.2p8", "…and THIS dry run does owe a journal line, because a "
+                    "decision that could not be carried out is exactly the one "
+                    "the ledger must carry", e, "data.action.journal_seq", 1)
 
     # ---- (c) `too-few-candidates` ------------------------------------------
     e = send("work-cover", {"work": DOCTOR})
@@ -2646,15 +2695,18 @@ def phase9():
                  "data.repaired.0.chosen_by", "AverageOfRelevantSkillsFor")
         # 58794e4, banked rather than argued: the dry run's coverage_after is
         # the coverage BEFORE the repair it just described.
-        eq_val("9.6v", "banked read 12 is git-bug 58794e4: the dry run names the "
-                       "promotion in `repaired` AND reports coverage_after.ok "
-                       "false in the same envelope",
+        # THE OTHER TWO DEFECTS, PRESERVED FOR THE SAME REASON. Banked pre-fix,
+        # kept as the filed evidence for 58794e4 and 6fc75e3; 5.1g2/5.1g3 and
+        # 5.2c assert the fixed behaviour live.
+        eq_val("9.6v", "the banked PRE-FIX read 12 shows git-bug 58794e4 as "
+                       "filed: the dry run names the promotion in `repaired` AND "
+                       "reports coverage_after.ok false in the SAME envelope",
                (len(dig(cover_dry, "data.repaired") or []),
                 dig(cover_dry, "data.coverage_after.ok")), (1, False))
-        eq_val("9.6w", "…and its action.journal_seq is 0 carrying Stamp(0)'s "
-                       "'writer is closed' sentence, which is not why it is 0 "
-                       "(the guard is `repaired>0 && !dryRun`) — the 5.2c "
-                       "finding, banked",
+        eq_val("9.6w", "…and shows git-bug 6fc75e3 beside it: action.journal_seq "
+                       "is 0 carrying Stamp(0)'s 'writer is closed' sentence, "
+                       "which is not why it is 0 — the guard is "
+                       "`repaired>0 && !dryRun`, so nothing was OWED",
                (dig(cover_dry, "data.action.journal_seq"),
                 "writer is closed" in (dig(cover_dry, "data.action.provenance") or "")),
                (0, True))

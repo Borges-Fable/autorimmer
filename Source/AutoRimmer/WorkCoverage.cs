@@ -230,6 +230,47 @@ namespace AutoRimmer
             return rows;
         }
 
+        // ============================ git-bug 58794e4 =======================
+        // THE PROJECTION, AND WHY IT IS A MUTATION OF A SNAPSHOT AND NOT OF THE
+        // GAME. `work-cover {dry_run:true}` writes nothing to `workSettings`, so
+        // a re-read of the map necessarily reports the coverage BEFORE the
+        // repair — under a field named `coverage_after`. That is not a naming
+        // quibble: a dry run exists to answer "would this fix it", the field
+        // answered "is it fixed", and the same envelope's `repaired` list
+        // contradicted it. This applies the planned promotions to the ROWS, in
+        // memory, so the section that comes out is the one the caller asked
+        // about.
+        //
+        // A promotion moves a pawn into `Enabled` and, because `Ranked` only
+        // ever offers a pawn who is Capable, a Responder, has work settings and
+        // is missing no required capacity, into `Available` as well — which is
+        // the count Doctor's floor is measured against. Both are RE-CHECKED
+        // here rather than assumed, because a projection that lies is worse than
+        // no projection at all. `Capable` is deliberately untouched: enabling a
+        // work type does not change who could ever do it, which is why a
+        // capability-floored row can never be repaired by this verb.
+        private static void Project(List<Row> rows,
+            List<KeyValuePair<WorkTypeDef, Pawn>> promotions)
+        {
+            if (rows == null || promotions == null) return;
+            for (int i = 0; i < promotions.Count; i++)
+            {
+                var w = promotions[i].Key;
+                var p = promotions[i].Value;
+                if (w == null || p == null) continue;
+                for (int j = 0; j < rows.Count; j++)
+                {
+                    var r = rows[j];
+                    if (r.Def != w) continue;
+                    if (!r.Enabled.Contains(p)) r.Enabled.Add(p);
+                    if (!r.Available.Contains(p) && Responder(p)
+                        && MissingCapacity(p, w) == null)
+                        r.Available.Add(p);
+                    break;
+                }
+            }
+        }
+
         private static List<object> Names(List<Pawn> ps, int cap)
         {
             var l = new List<object>();
@@ -241,10 +282,24 @@ namespace AutoRimmer
         // The digest block. Under-covered rows carry the diagnosis and are
         // never dropped; covered rows are three fields and are what the cap
         // eats.
-        internal static Dictionary<string, object> Section(Map map)
+        internal static Dictionary<string, object> Section(Map map) => Section(map, null);
+
+        // `projected` is the promotions a DRY RUN would make — work type paired
+        // with the pawn it would enable. Applied to a freshly computed snapshot
+        // so a dry run's `coverage_after` answers the question a dry run asks,
+        // "WOULD this fix it", instead of "IS it fixed", which in a dry run is
+        // always no by construction (git-bug 58794e4). Pass null — as the digest
+        // does — for "the coverage as it stands", which is the only correct
+        // reading there.
+        internal static Dictionary<string, object> Section(Map map,
+            List<KeyValuePair<WorkTypeDef, Pawn>> projected)
         {
             List<Row> rows;
-            try { rows = Compute(map); }
+            try
+            {
+                rows = Compute(map);
+                Project(rows, projected);
+            }
             catch (Exception e)
             {
                 return new Dictionary<string, object>
