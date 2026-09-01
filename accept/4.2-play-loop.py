@@ -203,17 +203,55 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
     # -- advance-invariants (needs the transcript's result envelopes) ------
     if transcript_dir and Path(transcript_dir).is_dir():
         advances = []
+        problems = []
+        # One entry per advance DIRECTORY, in order: True/False for a readable
+        # envelope, None for one we could not read. The None is load-bearing —
+        # see the wedge check below.
+        zeros = []
         for cmd_dir in sorted(Path(transcript_dir).iterdir()):
             if not cmd_dir.is_dir() or not re.search(r"-advance$", cmd_dir.name):
                 continue
-            try:
-                cmd = json.loads((cmd_dir / "cmd.json").read_text(encoding="utf-8"))
-                res = json.loads((cmd_dir / "result.json").read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as e:
-                report("WARN", "advance-invariants", f"{cmd_dir.name}: unreadable ({e})")
+            cmd_file, res_file = cmd_dir / "cmd.json", cmd_dir / "result.json"
+            # rwa writes cmd.json to disk BEFORE dispatching, so the two ways a
+            # directory can come up short are distinguishable and they do not
+            # mean the same thing.
+            if not cmd_file.is_file():
+                # Nothing on disk at all: a pre-fix recording artifact from
+                # before rwa wrote cmd.json first. There is no verb, no args
+                # and no envelope to name, so the cause is unrecoverable — all
+                # this can honestly say is that an advance is missing here.
+                report("WARN", "advance-invariants",
+                       f"{cmd_dir.name}: empty command dir — cause unrecoverable, "
+                       "the client wrote nothing before dying")
+                zeros.append(None)
                 continue
-            advances.append((cmd_dir.name, cmd.get("args", {}), res.get("data", {})))
-        problems = []
+            try:
+                cmd = json.loads(cmd_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as e:
+                report("WARN", "advance-invariants", f"{cmd_dir.name}: cmd.json unreadable ({e})")
+                zeros.append(None)
+                continue
+            if not res_file.is_file():
+                # cmd.json on disk and no result: the client died MID-CALL.
+                # The game kept running with nobody watching and no envelope
+                # was ever written, so every invariant below is unenforceable
+                # over that span. In m1-20260831 that cost ~60000 unobserved
+                # ticks, more than once. This is a FAIL, not a WARN.
+                problems.append(
+                    f"{cmd_dir.name}: client died mid-call — cmd.json has verb "
+                    f"'{cmd.get('op', '?')}' {cmd.get('args', {})}, no result.json "
+                    "(the advance ran unobserved)")
+                zeros.append(None)
+                continue
+            try:
+                res = json.loads(res_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as e:
+                report("WARN", "advance-invariants", f"{cmd_dir.name}: result.json unreadable ({e})")
+                zeros.append(None)
+                continue
+            data = res.get("data", {}) or {}
+            advances.append((cmd_dir.name, cmd.get("args", {}), data))
+            zeros.append(data.get("ticks_elapsed", None) == 0)
         for name, args, data in advances:
             if args.get("timeout_ticks", 0) > MAX_ADVANCE_TICKS or args.get("ticks", 0) > MAX_ADVANCE_TICKS:
                 problems.append(f"{name}: cap exceeded ({args})")
@@ -249,8 +287,13 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
                 problems.append(
                     f"{name}: ticks_elapsed {elapsed} exceeded cap "
                     f"{MAX_ADVANCE_TICKS}+{bound} overshoot_bound ({args})")
-        zeros = [d.get("ticks_elapsed", None) == 0 for _, _, d in advances]
-        if any(a and b for a, b in zip(zeros, zeros[1:])):
+        # The wedge rule is about two advances that ACTUALLY ran back to back.
+        # Building this list from readable envelopes alone closed the gap left
+        # by a skipped directory and made two advances either side of it look
+        # adjacent — so a run with an unreadable advance between them could
+        # false-FAIL, and a real wedge hiding behind one could pass. None is
+        # neither True nor False, so a gap breaks the adjacency run instead.
+        if any(a is True and b is True for a, b in zip(zeros, zeros[1:])):
             problems.append("two consecutive 0-tick advances (wedge rule violated)")
         if problems:
             report("FAIL", "advance-invariants", "; ".join(problems))
@@ -437,6 +480,12 @@ def selftest(repo):
                 (tr / "001-advance" / "result.json").write_text(json.dumps(
                     {"id": "c1", "op": "advance", "ok": True,
                      "data": {"reason": "dialog", "ticks_elapsed": 0}}), encoding="utf-8")],
+             "advance-invariants"),
+            # cmd.json on disk with no result.json: rwa writes the command
+            # before dispatching, so this shape means the client died mid-call
+            # and the advance ran unobserved. FAIL, not WARN.
+            ("the client died mid-call",
+             lambda: (tr / "003-advance" / "result.json").unlink(),
              "advance-invariants"),
         ]:
             # rebuild clean, then break one thing
