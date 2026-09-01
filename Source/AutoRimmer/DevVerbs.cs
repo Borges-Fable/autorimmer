@@ -216,11 +216,44 @@ namespace AutoRimmer
         // Position with a default. dev verbs default to the colony anchor
         // rather than refusing, because a fixture that has to compute its own
         // coordinates is a fixture nobody writes.
+        //
+        // TWO GUARDS ON THAT DEFAULT (git-bug 7382bdd). A default that fires on
+        // a typo is worse than no default: it turns a caller error into a
+        // plausible-looking result, and the result is journalled as though it
+        // were intended. On bench 20260901T121508 three consecutive
+        // `dev:spawn-thing` calls aimed at [999,999], [107,119] and [90,90] all
+        // landed at [125,129] and all reported `ok:true, placed:1`, because the
+        // cell argument had been spelled `at` — which is this verb's own OUTPUT
+        // key and the obvious guess. Nothing in any envelope said an argument
+        // had been dropped, and the wrong conclusion drawn from it ("direct mode
+        // ignores its cell argument") was filed as a bug.
+        //
+        //  1. A NEAR MISS IS REFUSED, never defaulted. The alias list below is
+        //     read by nothing that calls this helper — audited 2026-09-01 over
+        //     all six call sites AND over StarterKit's and world-fixture's
+        //     forwarded arg dicts, which pass only `pos` and `around` — so one
+        //     of those keys arriving here is unambiguously a caller mistake.
+        //  2. THE SOURCE IS PUBLISHED. `source` is "arg" or "anchor-default",
+        //     and the caller puts it in the envelope AND in the journal row, so
+        //     a fallback is visible even when it was intended.
         public static IntVec3 PosArg(Map map, VerbArgs args, string key)
+            => PosArg(map, args, key, out _);
+
+        public static IntVec3 PosArg(Map map, VerbArgs args, string key, out string source)
         {
             object raw = args.Raw(key);
-            return raw == null ? Anchor(map) : Positions.Resolve(map, raw);
+            if (raw != null) { source = "arg"; return Positions.Resolve(map, raw); }
+            args.NearMiss(key, CellAliases);
+            source = "anchor-default";
+            return Anchor(map);
         }
+
+        // Keys that look like a cell argument and are read by no verb that
+        // defaults one. Deliberately NOT `to`, `target`, `from`, `near` or
+        // `around`: those are real argument names elsewhere in the surface, and
+        // a guess list overlapping a real name would refuse a correct call.
+        private static readonly string[] CellAliases =
+            { "at", "cell", "position", "loc", "location", "where" };
 
         // First free colonist, else map centre — pawn-fixture's AnchorCell, kept
         // identical on purpose so both stimulus layers stage in the same place.
@@ -403,6 +436,19 @@ namespace AutoRimmer
             };
             if (t.Stuff != null) d["stuff"] = t.Stuff.defName;
             if (t.Spawned) d["at"] = Positions.Out(t.Position);
+            // The facing AS SPAWNED, by field and never through a description
+            // — Rot4.ToStringWord, the vocabulary map-dump publishes and
+            // Rotations.Arg accepts, so a rotation round-trips. ToStringHuman
+            // is "North".Translate() and would not (session 14, git-bug
+            // 2a7c064).
+            if (t.Spawned) d["rot"] = t.Rotation.ToStringWord();
+            // Presence is the signal, as with `forbidden` below: a multi-cell
+            // thing publishes the rect it actually occupies, which is how
+            // "the pos we were handed round-trips" is proved by field rather
+            // than by re-deriving GenAdj.AdjustForRotation on the caller's
+            // side. A 1x1 thing's rect is its own cell and says nothing.
+            if (t.Spawned && t.def != null && (t.def.Size.x != 1 || t.def.Size.z != 1))
+                d["rect"] = Footprint.Out(t.OccupiedRect());
             var q = t.TryGetComp<CompQuality>();
             if (q != null) d["quality"] = q.Quality.ToString();
             // Present only when true, the same "presence is the signal"
@@ -501,6 +547,26 @@ namespace AutoRimmer
             if (mode != "near" && mode != "direct")
                 throw new VerbArgsException("mode must be 'near' or 'direct'");
 
+            // WHICH WAY IT FACES. There was no way to say until now: the verb
+            // passed whatever `ThingMaker.MakeThing` left, which is
+            // `Thing.rotationInt`'s field initialiser, i.e. always North. You
+            // cannot place a blueprint without a facing, and an interaction
+            // cell MOVES with rotation — the bench refusal git-bug 8b4839f was
+            // filed for is a cell one row south of a north-facing bench, and
+            // the same bench facing east wants a different cell entirely.
+            //
+            // North is kept as the DEFAULT, deliberately, and it is not the
+            // game's universal default. This verb models
+            // Verse/DebugThingPlaceHelper.DebugSpawn, which reaches
+            // `GenSpawn.Spawn(def, c, map, wipeMode)` — the overload that
+            // hard-codes `Rot4.North`. `Designator_Build` starts at
+            // `def.defaultPlacingRot` instead, which is what the siting reads
+            // (site-survey, find-rect {def}) default to, and 76 vanilla defs
+            // set it to something other than North. Flipping this default would
+            // silently re-face every building every shipped suite stages. Two
+            // verbs, two models, each citing its own.
+            Rot4 rot = Rotations.Arg(a, "rot", Rot4.North);
+
             Faction faction = a.Has("faction") ? Dev.FactionArg(a.Str("faction")) : null;
             bool factionGiven = a.Has("faction");
 
@@ -509,21 +575,27 @@ namespace AutoRimmer
             // a starter kit actually wants and coordinates are the fallback.
             string stockpileNote = null;
             IntVec3 target;
+            // WHERE THE CELL CAME FROM, published (git-bug 7382bdd). Three
+            // sources reach `target` and two of them are not the caller's
+            // coordinates, so the envelope and the journal row both say which
+            // one won. "arg" | "anchor-default" | "stockpile".
+            string posSource;
             if (a.Has("stockpile") && !(a.Raw("stockpile") is bool bb && !bb))
             {
                 object raw = a.Raw("stockpile");
                 string wanted = raw as string;
                 target = FindStoreCell(map, def, stuff, wanted, out stockpileNote);
+                posSource = "stockpile";
                 if (!target.IsValid)
                 {
-                    target = Dev.PosArg(map, a, "pos");
+                    target = Dev.PosArg(map, a, "pos", out posSource);
                     stockpileNote = (stockpileNote ?? "no storage accepted it")
                         + "; fell back to " + (a.Has("pos") ? "pos" : "the colony anchor");
                 }
             }
             else
             {
-                target = Dev.PosArg(map, a, "pos");
+                target = Dev.PosArg(map, a, "pos", out posSource);
             }
 
             var spawned = new List<object>();
@@ -542,6 +614,11 @@ namespace AutoRimmer
                 Thing thing = ThingMaker.MakeThing(def, stuff);
                 if (quality.HasValue) thing.TryGetComp<CompQuality>()?.SetQuality(quality.Value, ArtGenerationContext.Colony);
                 if (minified && thing.def.Minifiable) thing = thing.MakeMinified();
+                // GenPlace.TryPlaceThing takes no rotation and reads the
+                // thing's own, so the facing has to be on the thing before
+                // either branch runs. The setter's spawned-thing guard
+                // (Verse/Thing.Rotation) is not in play: this one is unspawned.
+                thing.Rotation = rot;
                 if (thing.def.CanHaveFaction)
                 {
                     // DebugSpawn's rule, with an explicit override: insect
@@ -564,24 +641,17 @@ namespace AutoRimmer
                     // checked first so a refusal is an error result rather than
                     // a vanilla Log.Error (which the journal would record as a
                     // red_error, breaking the standing zero-red-errors rule).
-                    if (!GenSpawn.CanSpawnAt(def, target, map, thing.Rotation, canWipeEdifices: true))
+                    if (!GenSpawn.CanSpawnAt(def, target, map, rot, canWipeEdifices: true))
                     {
                         ok = false;
-                        string why = WhyNoSpawn(def, target, map, thing.Rotation)
+                        var no = WhyNoSpawn(def, target, map, rot);
+                        string why = no?.Reason
                             ?? "GenSpawn.CanSpawnAt refused this cell for " + def.defName;
-                        failures.Add(new Dictionary<string, object>
-                        {
-                            ["at"] = Positions.Out(target),
-                            ["reason"] = why,
-                            // Was Blockers.Describe(target.GetFirstBuilding(map)),
-                            // which is null for every refusal that is not an
-                            // edifice — i.e. for most of them (M1 finding A).
-                            ["blocker"] = Blockers.At(map, target, why),
-                        });
+                        failures.Add(FailureRow(map, target, why, no));
                     }
                     else
                     {
-                        result = GenSpawn.Spawn(thing, target, map, thing.Rotation, WipeMode.VanishOrMoveAside);
+                        result = GenSpawn.Spawn(thing, target, map, rot, WipeMode.VanishOrMoveAside);
                         ok = result != null;
                     }
                 }
@@ -600,20 +670,20 @@ namespace AutoRimmer
                         // reason when there is one, and its absence is itself
                         // the finding: the anchor would have taken it and the
                         // whole disc was still full.
-                        string branch = WhyNoSpawn(def, target, map, thing.Rotation);
+                        var branch = WhyNoSpawn(def, target, map, rot);
                         string why = "GenPlace.TryPlaceThing found no spot for " + def.defName
                             + " in mode " + mode
                             + (branch != null
-                                ? "; at the target cell: " + branch
+                                ? "; at the target cell: " + branch.Reason
                                 : "; the target cell itself would take it, so every cell in the "
                                   + "radial search was refused (stack limits, a storage that "
                                   + "declines it, or an unreachable room)");
-                        failures.Add(new Dictionary<string, object>
-                        {
-                            ["at"] = Positions.Out(target),
-                            ["reason"] = why,
-                            ["blocker"] = Blockers.At(map, target, branch ?? why),
-                        });
+                        // The row's `reason` is the Near sentence; the BLOCKER's
+                        // `refused` stays the branch's own clause, which is what
+                        // 1.6i in accept/s13-mod-surface.py keys on.
+                        var row = FailureRow(map, target, branch?.Reason ?? why, branch);
+                        row["reason"] = why;
+                        failures.Add(row);
                     }
                 }
 
@@ -660,6 +730,15 @@ namespace AutoRimmer
                     ["stuff"] = stuff?.defName,
                     ["count"] = count,
                     ["at"] = Positions.Out(target),
+                    // The ROW is the durable record of a mutation, so the
+                    // facing goes in it: a building staged the wrong way round
+                    // is invisible in a `placed:1` and permanent in a save.
+                    ["rot"] = rot.ToStringWord(),
+                    // Which source `at` above came from. The row is the durable
+                    // record, and a spawn that silently used the colony anchor
+                    // instead of the coordinates it was given is exactly what
+                    // 7382bdd was filed for.
+                    ["pos_source"] = posSource,
                     ["forbid"] = forbid,
                 },
                 ["placed"] = placed,
@@ -693,6 +772,11 @@ namespace AutoRimmer
                 ["requested"] = count,
                 ["placed"] = placed,
                 ["at"] = Positions.Out(target),
+                // What was ASKED for. What a def with randomizeRotationOnSpawn
+                // actually got is in `spawned[].rot`, which is read off the
+                // spawned thing — GenSpawn.Spawn overrides `rot` for those.
+                ["rot"] = rot.ToStringWord(),
+                ["pos_source"] = posSource,
                 ["mode"] = mode,
                 ["spawned"] = spawned,
                 ["dev"] = stamp,
@@ -724,15 +808,105 @@ namespace AutoRimmer
             return data;
         }
 
-        // WHICH branch of GenSpawn.CanSpawnAt refused, in the game's own order.
+        // WHICH TIER of the placement gate refused. Published on every failure
+        // row as `cell_role`, so a reader knows the blocker is off-footprint
+        // without doing the arithmetic (git-bug 8b4839f).
         //
-        // Verse/GenSpawn.cs CanSpawnAt is one boolean over six distinct
+        // 8b4839f named four — footprint, interaction, terrain, bounds. Walking
+        // Verse/GenSpawn.cs CanSpawnAt against the 1.6 source turned up two more
+        // branches it did not know about, and they are kept apart rather than
+        // folded in, because each is a different remedy for the agent:
+        // `blocks-interaction` is cleared by moving OUR building, never by
+        // clearing the cell it names, and `def` names no cell at all.
+        internal static class SpawnTier
+        {
+            // A cell of the occupied rect is off the map.
+            public const string Bounds = "bounds";
+            // A cell the thing itself would occupy: not walkable, or held by an
+            // occupant that SpawningWipes cannot destroy.
+            public const string Footprint = "footprint";
+            // The footprint's terrain cannot carry the def.
+            public const string Terrain = "terrain";
+            // OUR interaction cell is blocked (GenConstruct.InteractionCellStandable).
+            public const string Interaction = "interaction";
+            // Our footprint would cover a NEIGHBOUR's interaction cell
+            // (GenConstruct.NotBlockingAnyInteractionCells). The cell named is
+            // inside our own rect; the thing named is the neighbour.
+            public const string BlocksInteraction = "blocks-interaction";
+            // ThingDef.CanSpawnAt's own override said no. There is no cell.
+            public const string Def = "def";
+            // GenSpawn.CanSpawnAt accepted the target cell and GenPlace still
+            // found nowhere to put the stack: no single cell refused, so there
+            // is no tier to name. Covers both the Near radial search and a
+            // Direct placement the cell's item limit turned away.
+            public const string PlaceSearch = "place-search";
+        }
+
+        // What WhyNoSpawn now answers with. `Cell` is the cell that REFUSED,
+        // which is the target only by coincidence; `Thing` is what the game's
+        // own predicate found there, when it found anything.
+        internal sealed class NoSpawn
+        {
+            public readonly string Tier;
+            public readonly IntVec3 Cell;
+            public readonly Thing Thing;
+            public readonly string Reason;
+
+            public NoSpawn(string tier, IntVec3 cell, Thing thing, string reason)
+            {
+                Tier = tier;
+                Cell = cell;
+                Thing = thing;
+                Reason = reason;
+            }
+        }
+
+        // The failure row both spawn branches publish. `at` stays the cell the
+        // CALLER asked for — an echo of its own argument, and unchanged. `cell`
+        // and `cell_role` are new: the cell that actually refused and which tier
+        // of the gate it belongs to. `blocker` is now asked about THAT cell, and
+        // is handed the thing the re-walk already identified.
+        private static Dictionary<string, object> FailureRow(Map map, IntVec3 target, string why, NoSpawn no)
+        {
+            var cell = no != null ? no.Cell : target;
+            return new Dictionary<string, object>
+            {
+                ["at"] = Positions.Out(target),
+                ["reason"] = why,
+                ["cell"] = Positions.Out(cell),
+                ["cell_role"] = no != null ? no.Tier : SpawnTier.PlaceSearch,
+                // Was Blockers.Describe(target.GetFirstBuilding(map)), which is
+                // null for every refusal that is not an edifice — i.e. for most
+                // of them (M1 finding A) — and then Blockers.At(map, TARGET),
+                // which described the wrong cell (8b4839f).
+                ["blocker"] = Blockers.At(map, cell, why, no?.Thing),
+            };
+        }
+
+        // WHICH branch of GenSpawn.CanSpawnAt refused, WHICH CELL refused, and
+        // WHAT is standing on it.
+        //
+        // Verse/GenSpawn.cs CanSpawnAt is one boolean over seven distinct
         // conditions — ThingDef.CanSpawnAt, IntVec3.InBounds, IntVec3.Walkable,
         // an occupant that SpawningWipes would have to destroy and cannot,
-        // GenConstruct.CanBuildOnTerrain (buildings only) and
-        // GenConstruct.InteractionCellStandable — and a caller that only knows
-        // "false" cannot say anything an agent can act on. Re-walked here in the
-        // same order so the refusal names its own cause (M1 finding A).
+        // GenConstruct.CanBuildOnTerrain (buildings only),
+        // GenConstruct.InteractionCellStandable and
+        // GenConstruct.NotBlockingAnyInteractionCells — and a caller that only
+        // knows "false" cannot say anything an agent can act on. Re-walked here
+        // in the same order so the refusal names its own cause (M1 finding A).
+        // (An eighth, `!canWipeEdifices && map.edificeGrid[item] != null`, is
+        // unreachable from here: dev:spawn-thing passes canWipeEdifices:true.)
+        //
+        // THE STRUCT, NOT A STRING (git-bug 8b4839f). This used to return the
+        // sentence alone, and the caller then asked Blockers.At about the cell
+        // it had ASKED for. Those are different cells whenever the refusal is
+        // off-footprint, and the bench proved it: bench 20260901T121508 refused
+        // a HiTechResearchBench with "Interaction spot is blocked by granite."
+        // while the blocker named a WoodLog on the target cell with
+        // removal:"none" — the exact opposite of the truth, since the granite
+        // one cell south clears by MINING. Every branch below therefore carries
+        // the cell it objected to, the thing it found there when it found one,
+        // and its tier.
         //
         // The ORDER here is vanilla's with one deliberate change: vanilla tests
         // the opaque `ThingDef.CanSpawnAt` first, and this walks the concrete,
@@ -747,47 +921,187 @@ namespace AutoRimmer
         // the occupied rect (`!c.Walkable(map)` and the `c.GetThingList(map)`
         // wipe scan, Verse/GenSpawn.cs CanSpawnAt) — a quirk, and reproduced
         // rather than corrected, because the job is to name the branch the game
-        // took. Only `InBounds` really is per-cell, and is walked as such.
+        // took. `InBounds` really is per-cell and is walked as such; so is the
+        // terrain check, whose own loop lives inside CanBuildOnTerrain and is
+        // re-walked here to name the offending cell rather than the centre.
         //
         // Read-only: grid lookups, def flags and terrain reads. The one
         // non-obvious call is GenConstruct.CanBuildOnTerrain, which is what
         // Designator_Build runs under the cursor every frame.
-        private static string WhyNoSpawn(ThingDef def, IntVec3 c, Map map, Rot4 rot)
+        private static NoSpawn WhyNoSpawn(ThingDef def, IntVec3 c, Map map, Rot4 rot)
         {
             try
             {
-                foreach (var item in GenAdj.OccupiedRect(c, rot, def.Size))
+                var rect = GenAdj.OccupiedRect(c, rot, def.Size);
+                foreach (var item in rect)
                     if (!item.InBounds(map))
-                        return def.defName + " at " + c.x + "," + c.z
-                            + " would extend past the map edge (" + item.x + "," + item.z + ")";
-                if (!c.Walkable(map)) return "the cell is not walkable";
+                        return new NoSpawn(SpawnTier.Bounds, item, null,
+                            def.defName + " at " + c.x + "," + c.z
+                            + " would extend past the map edge (" + item.x + "," + item.z + ")");
+                if (!c.Walkable(map))
+                    return new NoSpawn(SpawnTier.Footprint, c, c.GetEdifice(map),
+                        "the cell is not walkable");
                 foreach (var t in c.GetThingList(map))
                     if (t?.def != null
                         && GenSpawn.SpawningWipes(def, t.def, ignoreDestroyable: true)
                         && !t.def.destroyable)
-                        return "'" + t.def.defName + "' holds the cell and cannot be destroyed to make room";
+                        return new NoSpawn(SpawnTier.Footprint, c, t,
+                            "'" + t.def.defName + "' holds the cell and cannot be destroyed to make room");
                 if (def.category == ThingCategory.Building
                     && !GenConstruct.CanBuildOnTerrain(def, c, map, rot))
-                    return "terrain '" + map.terrainGrid.TerrainAt(c)?.defName + "' cannot carry " + def.defName;
+                {
+                    var bad = FirstBadTerrainCell(def, c, map, rot);
+                    return new NoSpawn(SpawnTier.Terrain, bad, null,
+                        "terrain '" + map.terrainGrid.TerrainAt(bad)?.defName + "' cannot carry " + def.defName);
+                }
                 if (def.HasSingleOrMultipleInteractionCells)
                 {
                     // Returns an AcceptanceReport, so the game's own sentence is
                     // available and is preferred over one of ours — the same
-                    // rule Blockers.Classify follows.
-                    var cell = GenConstruct.InteractionCellStandable(def, c, rot, map);
-                    if (!cell.Accepted)
-                        return string.IsNullOrEmpty(cell.Reason)
-                            ? def.defName + "'s interaction cell is not standable"
-                            : cell.Reason;
+                    // rule Blockers.Classify follows. It names the thing's LABEL
+                    // and nothing else, so the cell and the thing come from
+                    // repeating the walk it did.
+                    var report = GenConstruct.InteractionCellStandable(def, c, rot, map);
+                    if (!report.Accepted)
+                    {
+                        FirstBlockedInteractionCell(def, c, map, rot, out var cell, out var culprit);
+                        return new NoSpawn(SpawnTier.Interaction, cell, culprit,
+                            string.IsNullOrEmpty(report.Reason)
+                                ? def.defName + "'s interaction cell is not standable"
+                                : report.Reason);
+                    }
+                }
+                // THE BRANCH THAT WAS MISSING, and it is not hypothetical: this
+                // is the second half of the interaction-spot rule — not "is our
+                // own spot free" but "would our footprint cover a NEIGHBOUR's".
+                // Without it a WouldBlockInteractionSpot refusal fell through to
+                // the residual below and was reported as "ThingDef.CanSpawnAt
+                // refused", naming the wrong branch and no cell at all.
+                var neighbours = GenConstruct.NotBlockingAnyInteractionCells(def, c, rot, map);
+                if (!neighbours.Accepted)
+                {
+                    FirstCoveredInteractionCell(def, c, map, rot, rect, out var cell, out var neighbour);
+                    return new NoSpawn(SpawnTier.BlocksInteraction, cell, neighbour,
+                        string.IsNullOrEmpty(neighbours.Reason)
+                            ? def.defName + " would cover a neighbour's interaction cell"
+                            : neighbours.Reason);
                 }
                 return GenSpawn.CanSpawnAt(def, c, map, rot)
                     ? null
-                    : "ThingDef.CanSpawnAt refused " + def.defName + " here at rotation " + rot.ToStringHuman();
+                    // ThingDef.CanSpawnAt is `return true;` on the base class, so
+                    // this is always a def's own override talking and there is no
+                    // cell to point at — the target is published as the locus,
+                    // and `def` is the tier that says so.
+                    : new NoSpawn(SpawnTier.Def, c, null,
+                        "ThingDef.CanSpawnAt refused " + def.defName + " here at rotation " + rot.ToStringWord());
             }
             catch (Exception e)
             {
-                return "GenSpawn.CanSpawnAt refused this cell (" + e.GetType().Name
-                    + " while naming which branch)";
+                return new NoSpawn(SpawnTier.Def, c, null,
+                    "GenSpawn.CanSpawnAt refused this cell (" + e.GetType().Name
+                    + " while naming which branch)");
+            }
+        }
+
+        // The first cell of the occupied rect whose terrain cannot carry the
+        // def, walked the way RimWorld/GenConstruct.CanBuildOnTerrain walks it:
+        // the rect clipped inside the map, the affordance from
+        // ThingUtility.GetTerrainAffordanceNeed, and IntVec3.GetAffordances
+        // (which prefers TerrainGrid.FoundationAt over TerrainAt). stuffDef is
+        // null here because GenSpawn.CanSpawnAt itself passes no stuff — a
+        // vanilla quirk that matters for useStuffTerrainAffordance defs, and
+        // reproduced rather than corrected, since the job is to name the branch
+        // the game took.
+        //
+        // Falls back to the centre when nothing fails, which happens when
+        // CanBuildOnTerrain refused on one of its two other clauses (a crater
+        // def over preventCraters terrain, or a TerrainDef blueprint already on
+        // the cell whose affordances do not cover the need).
+        private static IntVec3 FirstBadTerrainCell(ThingDef def, IntVec3 c, Map map, Rot4 rot)
+        {
+            var need = def.GetTerrainAffordanceNeed();
+            if (need == null) return c;
+            var rect = GenAdj.OccupiedRect(c, rot, def.Size).ClipInsideMap(map);
+            foreach (var item in rect)
+                if (!item.GetAffordances(map).Contains(need)) return item;
+            return c;
+        }
+
+        // GenConstruct.InteractionCellStandable's own walk, repeated for the
+        // cell and the thing its AcceptanceReport does not carry: out of bounds
+        // first, then the two predicates in the game's order — an occupant that
+        // is not Standable or is this very def, then the same test against an
+        // occupant's entityDefToBuild (an unstandable blueprint standing where
+        // the pawn would).
+        //
+        // ThingUtility.InteractionCellsWhenAt returns the SHARED static
+        // tmpInteractionCells list, cleared and refilled on every call, so it is
+        // copied before anything else can call it. Read-only otherwise:
+        // ThingsListAtFast is Map.thingGrid's stored list.
+        private static void FirstBlockedInteractionCell(ThingDef def, IntVec3 c, Map map, Rot4 rot,
+            out IntVec3 cell, out Thing culprit)
+        {
+            cell = c;
+            culprit = null;
+            var cells = new List<IntVec3>(ThingUtility.InteractionCellsWhenAt(def, c, rot, map));
+            for (int i = 0; i < cells.Count; i++)
+            {
+                var ic = cells[i];
+                if (!ic.InBounds(map)) { cell = ic; return; }
+                var list = map.thingGrid.ThingsListAtFast(ic);
+                for (int j = 0; j < list.Count; j++)
+                {
+                    var t = list[j];
+                    if (t?.def == null) continue;
+                    if (t.def.passability != Traversability.Standable || t.def == def)
+                    {
+                        cell = ic; culprit = t; return;
+                    }
+                    var built = t.def.entityDefToBuild;
+                    if (built != null && (built.passability != Traversability.Standable || built == def))
+                    {
+                        cell = ic; culprit = t; return;
+                    }
+                }
+            }
+            // Nothing matched: the cells list itself is the answer, so point at
+            // the first one rather than at the centre.
+            if (cells.Count > 0) cell = cells[0];
+        }
+
+        // GenConstruct.NotBlockingAnyInteractionCells' own walk, repeated for
+        // the cell and the thing. The refusing CELL is the neighbour's
+        // interaction cell that our footprint would sit on — inside our rect,
+        // which is why `cell_role` is what tells a reader this is a neighbour's
+        // complaint and not our own. The THING is the neighbour.
+        //
+        // Vanilla resolves a Blueprint's or a Frame's entityDefToBuild before
+        // asking about interaction cells, so a planned bench blocks a placement
+        // exactly as a built one does; reproduced here.
+        private static void FirstCoveredInteractionCell(ThingDef def, IntVec3 c, Map map, Rot4 rot,
+            CellRect rect, out IntVec3 cell, out Thing neighbour)
+        {
+            cell = c;
+            neighbour = null;
+            foreach (var item in GenAdj.CellsAdjacentCardinal(c, rot, def.Size))
+            {
+                if (!item.InBounds(map)) continue;
+                var list = item.GetThingList(map);
+                for (int i = 0; i < list.Count; i++)
+                {
+                    var t = list[i];
+                    if (t?.def == null) continue;
+                    ThingDef other;
+                    if (t is Blueprint || t is Frame) other = t.def.entityDefToBuild as ThingDef;
+                    else other = t.def;
+                    if (other == null) continue;
+                    if (!other.HasSingleOrMultipleInteractionCells
+                        || (def.passability == Traversability.Standable && def != other)) continue;
+                    var cells = new List<IntVec3>(
+                        ThingUtility.InteractionCellsWhenAt(other, t.Position, t.Rotation, map));
+                    for (int j = 0; j < cells.Count; j++)
+                        if (rect.Contains(cells[j])) { cell = cells[j]; neighbour = t; return; }
+                }
             }
         }
 
@@ -902,7 +1216,7 @@ namespace AutoRimmer
             Faction faction = a.Has("faction")
                 ? Dev.FactionArg(a.Str("faction"))
                 : FactionUtility.DefaultFactionFrom(kind.defaultFactionDef);
-            var at = Dev.PosArg(map, a, "pos");
+            var at = Dev.PosArg(map, a, "pos", out string posSource);
             int count = a.Int("count", 1);
             if (count < 1 || count > 20) throw new VerbArgsException("count must be 1..20");
             bool violence = a.Bool("violence_capable", false);
@@ -955,6 +1269,11 @@ namespace AutoRimmer
                         ["kind"] = kind.defName,
                         ["faction"] = faction?.def?.defName,
                         ["at"] = Positions.Out(at),
+                        // Same guard as dev:spawn-thing's: a fixture that
+                        // silently staged at the colony anchor instead of the
+                        // cell it was given must say so in the durable record
+                        // (git-bug 7382bdd).
+                        ["pos_source"] = posSource,
                         ["count"] = count,
                     },
                     ["ids"] = IdsOf(made),
@@ -968,6 +1287,7 @@ namespace AutoRimmer
                 ["faction"] = faction?.Name,
                 ["faction_def"] = faction?.def?.defName,
                 ["at"] = Positions.Out(at),
+                ["pos_source"] = posSource,
                 ["spread"] = spread,
                 ["pawns"] = made,
                 ["dev"] = stamp,

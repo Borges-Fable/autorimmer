@@ -127,6 +127,38 @@ namespace AutoRimmer
             return (long)d;
         }
 
+        // THE NARROW HALF OF git-bug 7382bdd. Refuse a key that is obviously a
+        // misspelling of one this verb reads and that would otherwise fall
+        // through to a DEFAULT — the case where being wrong looks like being
+        // right. Same disposition as this class's header ("present with the
+        // wrong type => bad-args even for optionals — the caller is a program,
+        // and silently coercing its mistakes hides them"), applied to the KEY
+        // rather than to the value.
+        //
+        // SCOPED, not global. A per-verb declared arg set over all 120
+        // registered verbs was attempted first, as that issue's comment #1
+        // pre-authorized, and rejected on measurement: 22 verbs forward
+        // `ctx.Args` wholesale into a helper, ~50 more read their arguments
+        // through shared helpers rather than at the handler's own call sites,
+        // and five shipped suite call sites build their argument dict at
+        // runtime. A declaration could not be derived from or checked against
+        // the code, and its drift mode is refusing a LEGITIMATE call mid-run.
+        // DESIGN's 2026-09-01 entry carries the numbers.
+        //
+        // Aliases are supplied by the CALL SITE and never guessed globally: a
+        // list that overlapped a real argument name somewhere else would refuse
+        // a correct call, which is a worse bug than the one being fixed.
+        public void NearMiss(string key, params string[] aliases)
+        {
+            if (aliases == null || raw.ContainsKey(key)) return;
+            for (int i = 0; i < aliases.Length; i++)
+                if (raw.ContainsKey(aliases[i]))
+                    throw new VerbArgsException(
+                        $"unknown arg '{aliases[i]}' — did you mean '{key}'? This verb does "
+                        + $"not read '{aliases[i]}', and '{key}' is absent, so the call would "
+                        + $"have used a default for '{key}' and reported success");
+        }
+
         public List<string> StrList(string key)
         {
             var result = new List<string>();

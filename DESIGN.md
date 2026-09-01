@@ -1268,3 +1268,181 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `Cooler`, `TorchLamp`, `WoodFiredGenerator`, `FirefoamPopper` all leave
   `hasInteractionCell` unset), so that audit is complete rather than a sample.
   `bac4eba`, `1adc737`.
+- 2026-09-01 (session 15) — **A refusal names the cell that refused, and
+  `GenSpawn.CanSpawnAt` has SEVEN branches, not six.** `DevVerbs.WhyNoSpawn`
+  returned a bare sentence, and its caller then asked `Blockers.At` about the
+  cell it had ASKED for — different cells whenever the refusal is off-footprint,
+  which is the whole of `8b4839f`. It now returns `{tier, cell, thing, reason}`
+  and every failure row carries `cell` (the refusing cell) and `cell_role` (the
+  tier) beside the unchanged `at` (the caller's own argument echoed back).
+  Re-walking `Verse/GenSpawn.CanSpawnAt` member by member to write the tiers
+  turned up a branch the mod never reproduced:
+  **`GenConstruct.NotBlockingAnyInteractionCells`** runs there as well as inside
+  `CanPlaceBlueprintAt`, so a placement refused for covering a NEIGHBOUR's
+  interaction cell was reported as `ThingDef.CanSpawnAt refused` — the wrong
+  branch, and no cell at all. That is the same defect as `8b4839f` one level up:
+  a refusal describing something other than what refused. Seven tiers rather
+  than the four the issue named, because the two extra ones are different
+  REMEDIES: `blocks-interaction` is cleared by moving our own building and never
+  by clearing the cell it names, `def` names no cell, and `place-search` is the
+  honest answer when `CanSpawnAt` accepted the target and `GenPlace` still found
+  nowhere. `8b4839f`.
+- 2026-09-01 (session 15) — **`rot` is a first-class argument, and the default
+  is the verb's OWN model rather than one project-wide answer.**
+  `dev:spawn-thing` had no `rot` at all; it passed whatever `ThingMaker.MakeThing`
+  left, which is `Thing.rotationInt`'s field initialiser, i.e. always North. Its
+  default stays North — the verb models
+  `Verse/DebugThingPlaceHelper.DebugSpawn`, which reaches the
+  `GenSpawn.Spawn(def, c, map, wipeMode)` overload that hard-codes `Rot4.North`
+  — while the siting reads (`site-survey`, `find-rect {def}`) default to
+  `def.defaultPlacingRot`, because they model `Designator_Build`, which starts
+  there. **76 vanilla defs set `defaultPlacingRot` to something other than
+  North**, so unifying the two would silently re-face every building every
+  shipped suite stages, and would do it without a diff to show for it. Two
+  verbs, two models, each citing its own in a comment. The vocabulary is one
+  vocabulary though: `Rot4.ToStringWord`'s four words or the bare 0..3, the same
+  token `map-dump` publishes and `templates/INDEX.md` pinned — and NOT
+  `Verse/Rot4.FromString`, which `Log.Error`s on an unrecognised string and so
+  would let an agent's typo raise a red error, the same trap
+  `ListerThings.ThingsOfDef` sets for MinifiedThing. The corner-to-centre
+  inverse lands with it (`Footprint.TryCentreFor`) and is CHECKED against
+  `GenAdj.OccupiedRect` on every call rather than trusted, because a one-cell
+  placement slide is cumulative on a module grid (`bac4eba`) and a wrong inverse
+  is invisible until it is. `8b4839f`, `c718e4a`.
+- 2026-09-01 (session 15) — **`Designator_Build.Visible` has TEN clauses, and
+  every count on record was low.** `1adc737` amendment #1 named two (research,
+  `maxTechLevelToBuild`); its own verification comment #4 corrected that to six
+  and titled the correction "amendment #1's gate list is one clause of six". The
+  1.6 member has ten: godMode, `minTechLevelToBuild`, `maxTechLevelToBuild`,
+  `IsResearchFinished`, `minMonolithLevel` (Anomaly), `difficulty.AllowedToBuild`,
+  the `PlaceWorkers` × `IsBuildDesignatorVisible` loop, **`buildingPrerequisites`
+  via `ListerBuildings.ColonistsHaveBuilding`**, **`discoveryPrerequisites` via
+  `HiddenItemsManager.Hidden`**, and **`requireInspectedGravEngine` (Odyssey)**.
+  The last three are named nowhere in the issue record, and they are the same
+  class of gap the amendment was arguing about: a verb that reproduces only the
+  research clause is a god-hand for prerequisite- and DLC-restricted defs. All
+  ten are now in `SiteGate.Selectable`, each as a TOKEN an agent can branch on
+  (`min-tech`, `research`, `building-prerequisite`, …) with the prose in a
+  separate `detail` field — read by field, never through a description.
+  Two rulings that came out of writing it:
+  **the godMode clause is published and NOT honoured.** Vanilla's first line is
+  `if (DebugSettings.godMode) return true;`, and reproducing it would turn every
+  player verb into a god-hand the moment a dev session left the flag on, with
+  `ok:true` to show for it. The clauses are evaluated regardless; `god_mode_on`
+  rides in the envelope as a fact about the session. A caller that wants the
+  bypass asks a `dev:*` verb, which says so itself.
+  And **an unreadable research route REFUSES rather than shrugging.**
+  `WorldSafe.Finished` returns "unfinished" for everything if its field ref
+  failed, so a shrug would silently refuse every buildable while looking like a
+  research answer; the clause `research-unreadable` says which of the two
+  happened. That is `PawnSafe.Policies`'s `source` discipline applied to a gate:
+  "not researched" and "we could not look" must never read alike. `c718e4a`,
+  `1adc737`.
+- 2026-09-01 (session 15) — **`site-survey`'s four resolutions, all of them
+  about not letting one field mean two things.** (1) **`pos` and `at` are
+  mutually exclusive and passing both is `bad-args`.** They are different
+  conventions — the game's placement centre versus the footprint's south-west
+  corner — and for an even-sized def they name different cells, so accepting
+  both and preferring one would reproduce exactly the bench failure the verb
+  exists to prevent. `pos_source` rides in the envelope either way, which is
+  `7382bdd`'s narrow fix arriving here on its own merits. (2) **The overlay is a
+  SECOND grid, not extra glyphs in the crop.** Mixing tier markers into
+  `map-view`'s grid would change what a char means, which by `CropRenderer`'s
+  own rule obliges a bump of `map-view/ascii-1` and of `map-dump`'s
+  `distinct_from` — the identity `accept/e6faa51-channel-alphabet.py` enforces.
+  Two grids over one origin/w/h cost nothing and keep both alphabets true:
+  `site-survey/overlay-1` says which TIER a cell is in and nothing about what is
+  on the ground. (3) **The margin tier publishes rows for NOTABLE cells and
+  tallies the rest.** All three tiers keep one row shape, so a consumer written
+  for the footprint reads the margin — but a 3x survey of an 11x6 def is 594
+  margin cells, and 594 rows of "fine" is not a read an agent can use mid-loop.
+  Rows for what is fogged, unstandable, roofed or a door (capped at 40, with
+  `more`); counts for everything; and the picture carries the whole ring, which
+  is what the picture is for. (4) **The two gate tiers test fog and the
+  identical-thing scan PER CELL where vanilla tests only the centre.** Strictly
+  more informative, and it cannot contradict the verdict, because the verdict is
+  `CanPlaceBlueprintAt`'s own answer published verbatim beside the rows rather
+  than re-derived from them. Said out loud in the code because a reader
+  comparing the two will notice the difference. `c718e4a`.
+- 2026-09-01 (session 15) — **`find-rect {def}` is a second verb behind one
+  name, and the size path is untouched by construction.** `c718e4a`'s acceptance
+  demands `find-rect {w,h}` output be what it always was, byte for byte, and the
+  cheapest proof of that is a diff with zero deletions: `def` branches at the
+  top into its own routine and nothing below it moved. Six resolutions came out
+  of writing it. (1) **One candidate per cell — the first rotation in
+  `def.defaultPlacingRot`-first order that the gate accepts, not the cross
+  product.** Four rotations of one cell are one site as far as "where can this
+  go" is concerned, and the cross product spends `max` four times on the same
+  ground; a caller that wants a specific facing pins `rot`, and `rot_order` is
+  published so the choice is legible. (2) **`center` is DROPPED in def mode
+  rather than relabelled.** `CellRect.CenterCell` is not the placement centre of
+  an even-sized rect, and a field that looks like the value to pass and is off by
+  one exactly where it matters is the bench failure this verb was fixed for.
+  `pos` is the argument; `at`/`w`/`h` are the identity. (3) **`dist` is measured
+  to `pos`, which is also the key the ring walk terminates on.** 2.6 blocker 1
+  was terminating on one key and sorting by another, which selects the wrong set
+  rather than merely ordering it badly; def mode keeps the two identical and says
+  so where the break is. The rotation rank is the tie-break, never a sort key.
+  (4) **`require` narrows the def gate and never replaces it.** `buildable` and
+  `walkable` are REFUSED as subsumed — refusing beats accepting-and-ignoring,
+  which is `7382bdd`'s whole failure mode — while `roofed`/`unroofed` are honest
+  extra filters. And **`reachable-from:P` changes meaning, which is the fix for
+  `c718e4a`'s third complaint**: in size mode it tests the rect's CENTRE cell,
+  which for a workbench is a cell no pawn ever stands on; with a def in hand it
+  tests the INTERACTION cells, falling back to touching the footprint for a def
+  that has none. The echoed `require` block says which question was answered.
+  (5) **`Designator_Build.Visible` is asked ONCE, before the walk**, because it
+  is def-level; an unselectable def returns no candidates anywhere and saying so
+  in a `selectable` block is a different fact from "no room". It also saves
+  thousands of `CanPlaceBlueprintAt` calls, which is why the def path's examine
+  cap is 2000 against the size path's 6000 and why `gate_calls` is published.
+  (6) **No per-cell blocker tally in def mode.** The refusing cell of a rejected
+  candidate is frequently not the cell that was walked — `8b4839f` is exactly
+  that mistake once — and describing the walked cell for thousands of rejects is
+  that defect at scale. `rejected` tallies the game's own sentences, `refusals`
+  carries a few worked examples, and one `site-survey` on a chosen candidate
+  names the cells for real. `c718e4a`, `8b4839f`.
+- 2026-09-01 (session 15) — **The per-verb argument whitelist was ATTEMPTED and
+  REJECTED ON MEASUREMENT; `7382bdd` ships its narrow half, and the measurement
+  is the finding.** `7382bdd` comment #1 pre-authorized either shape and named
+  the fallback trigger: "a verb that forwards args to a sub-verb ... is the
+  whitelist being too invasive, and one such case is enough to take the fallback
+  for the whole change". The audit found not one case but a structural one.
+  Measured against the shipped tree and the shipped suites, statically, because
+  a worker never launches a bench:
+  **120 registered verbs. 22 handlers read no argument at their own call sites**
+  — some take none, the rest forward `ctx.Args` wholesale into a helper
+  (`advance` into `TimeDriver.Start`, `bill-set` and `bill-remove` into
+  `BillVerbs`' helpers, `draft`/`undraft`/`clear-priority-work` into
+  `PawnOrderVerbs`', and fifteen more). **88 (verb, key) pairs that the shipped
+  suites actually send, across 53 verbs, are read through shared helpers rather
+  than at the handler** — `pawns`, `pawn`, `thing`, `target`, `bench`, `ticks`,
+  `max_tps`, `letter`, `quest`, `kind`, `rect`, `targets` and the rest, every one
+  legitimate. **And five suite call sites build their argument dict at RUNTIME**
+  (`advance`, `designate`, `quest-accept`, `surgery-add`, `things`), so a
+  whitelist cannot be validated statically at all.
+  So a declared arg set could be neither derived from the code nor checked
+  against it — it would be a second source of truth over 120 verbs, and this
+  repo has a worked example of what that costs: the `Build:` tally in the
+  workspace CLAUDE.md went stale three times in one day and misled two review
+  agents. Worse, its drift mode is asymmetric in the wrong direction: a missing
+  declaration REFUSES a legitimate call, mid-run, on a live bench. Shipping that
+  unmeasured against a ten-day run is not a trade this project makes.
+  **What ships instead is the narrow fix, sharpened.** `Dev.PosArg` publishes
+  `pos_source` (`arg` | `anchor-default` | `stockpile`) into both the envelope
+  and the journal row for `dev:spawn-thing` and `dev:spawn-pawn` — so the
+  fallback is never silent even when it was intended — and it REFUSES a near
+  miss rather than defaulting past it: `at`, `cell`, `position`, `loc`,
+  `location` and `where` are read by nothing that defaults a cell (audited over
+  all six `PosArg` call sites and over `StarterKit`'s and `world-fixture`'s
+  forwarded dicts, which pass only `pos` and `around`), so one of them arriving
+  is unambiguously a caller mistake. That satisfies the issue's own worked
+  example — `at` -> `pos` on `dev:spawn-thing`, which is the call that produced
+  three wrong results in a row on bench 20260901T121508 — at the entry point of
+  the one argument whose default is dangerous, with the check exposed as
+  `VerbArgs.NearMiss(key, aliases)` so any verb with a defaulted positional
+  adopts it in one line. **Aliases are supplied by the call site and never
+  guessed globally**: a list that overlapped a real argument name elsewhere
+  would refuse a CORRECT call, which is a worse bug than the one being fixed —
+  and `site-survey` reading both `pos` and `at` legitimately is the live proof
+  that such overlaps exist. `7382bdd`.

@@ -682,6 +682,17 @@ def phase1():
     eq("1.3r", "…while `reason` stays Classify's answer (null for a plain item: not "
                "mineable, not a building, so the game has no sentence to give)",
        e, "data.failed.0.blocker.reason", None)
+    # 1.3s-u THE 8b4839f KEYS on the branch where the refusing cell really IS
+    #        the target. `at` echoes the caller's argument and always did;
+    #        `cell` is the cell that refused and `cell_role` is which tier of
+    #        the gate refused it. Here WhyNoSpawn named no branch at all —
+    #        CanSpawnAt accepted this cell and GenPlace still found nowhere —
+    #        so the pair must say exactly that rather than pointing at a tier.
+    shape("1.3s", "dev:spawn-thing", e, "data.failed.0.cell", list)
+    eq("1.3t", "with no branch to name, the refusing cell IS the target",
+       e, "data.failed.0.cell", dig(e, "data.failed.0.at"))
+    eq("1.3u", "…and cell_role says so instead of naming a tier",
+       e, "data.failed.0.cell_role", "place-search")
 
     # 1.4 THE FINDING PROPER: the same facts in the JOURNAL ROW.
     seq = dig(e, "data.dev.journal_seq")
@@ -731,6 +742,28 @@ def phase1():
         one_of("1.5g", "the blocker says HOW it clears (Blockers.Classify)",
                dig(e, "data.failed.0.blocker.removal"),
                ["mine", "deconstruct", "attack", "none"])
+        # 1.5h-j THE DEFECT 8b4839f WAS FILED FOR. Bench 20260901T121508 refused
+        #        a HiTechResearchBench for granite on the interaction cell one
+        #        row SOUTH of the footprint, and then described a WoodLog on the
+        #        target cell with removal:"none" — the opposite of the truth,
+        #        since the granite clears by mining. The tier is what makes that
+        #        readable without arithmetic.
+        shape("1.5h", "dev:spawn-thing", e, "data.failed.0.cell", list)
+        one_of("1.5i", "cell_role names which tier of the gate refused",
+               dig(e, "data.failed.0.cell_role"),
+               ["bounds", "footprint", "terrain", "interaction",
+                "blocks-interaction", "def"])
+        if dig(e, "data.failed.0.cell_role") == "interaction":
+            check("1.5j", "the interaction tier reports the REFUSING cell, which is "
+                          "OFF the footprint — the whole of 8b4839f",
+                  dig(e, "data.failed.0.cell") != dig(e, "data.failed.0.at"),
+                  "failed[0].cell != failed[0].at",
+                  {"cell": dig(e, "data.failed.0.cell"), "at": dig(e, "data.failed.0.at")})
+        else:
+            note("1.5", "cell_role is %s, not 'interaction', so the off-footprint case "
+                        "is not exercised on this cell. Stage rock one cell south of a "
+                        "research bench's footprint to hit it."
+                        % show(dig(e, "data.failed.0.cell_role")))
     else:
         note("1.5", "the research bench PLACED on that cell (direct mode wipes with "
                     "WipeMode.VanishOrMoveAside), so the CanSpawnAt branch was not "
@@ -791,6 +824,51 @@ def phase1():
         shape("1.6j", "the journal row", row, "payload.failed.0.blocker", dict)
         eq("1.6k", "the row carries the near-arm reason too", row,
            "payload.failed.0.reason", r)
+        # The ROW is the durable record, so the 8b4839f keys have to be in it
+        # too — a response-only field is a field that is gone by the next run.
+        shape("1.6l", "the journal row", row, "payload.failed.0.cell", list)
+        shape("1.6m", "the journal row", row, "payload.failed.0.cell_role")
+
+    # 1.8 THE TYPO THAT REPORTED SUCCESS (git-bug 7382bdd). `at` is
+    #     dev:spawn-thing's own OUTPUT key and the obvious guess for its input;
+    #     `Dev.PosArg` used to read `pos`, get null, and silently return the
+    #     colony anchor, so three consecutive spawns aimed at [999,999],
+    #     [107,119] and [90,90] all landed at [125,129] and all reported
+    #     ok:true, placed:1. The refusal must NAME the key and SUGGEST the
+    #     right one.
+    e = send("dev:spawn-thing", {"def": "WoodLog", "count": 1, "at": cell,
+                                 "mode": "direct"})
+    eq("1.8a", "an unknown cell-argument name is refused, not defaulted",
+       e, "ok", False)
+    eq("1.8b", "…as bad-args", e, "error.code", "bad-args")
+    detail = str(dig(e, "error.detail", ""))
+    contains("1.8c", "the refusal names the key that was not read", detail, "'at'")
+    contains("1.8d", "…and suggests the one that would have been", detail, "'pos'")
+    # A refused call must not have MUTATED anything: a failed envelope carries
+    # no data at all, and the guard fires before ThingMaker is ever reached.
+    absent("1.8e", "a refused call publishes no data block", e, "data")
+
+    # 1.9 AND WHEN THE DEFAULT LEGITIMATELY FIRES, IT SAYS SO. The narrow fix's
+    #     other half: `pos_source` is in the envelope AND in the journal row, so
+    #     "the caller's coordinates" and "the colony anchor" never read alike.
+    e = send("dev:spawn-thing", {"def": "WoodLog", "count": 1, "pos": cell,
+                                 "mode": "direct"})
+    shape("1.9a", "dev:spawn-thing", e, "data.pos_source")
+    eq("1.9b", "a cell that came from the argument says so",
+       e, "data.pos_source", "arg")
+    row = journal_row(dig(e, "data.dev.journal_seq"), ["dev"])
+    eq("1.9c", "and the ROW carries it, because the row is the durable record",
+       row, "payload.args.pos_source", "arg")
+    ids = [d.get("id") for d in as_list(dig(e, "data.spawned")) if isinstance(d, dict)]
+    if ids:
+        send("dev:destroy", {"things": ids})
+
+    e = send("dev:spawn-thing", {"def": "WoodLog", "count": 1, "mode": "direct"})
+    eq("1.9d", "…and a cell that came from the colony anchor says THAT",
+       e, "data.pos_source", "anchor-default")
+    ids = [d.get("id") for d in as_list(dig(e, "data.spawned")) if isinstance(d, dict)]
+    if ids:
+        send("dev:destroy", {"things": ids})
 
     # 1.7 tidy: the staged log is left where it is (it is one wood log), but the
     #     run must not have raised a red error doing any of this.
