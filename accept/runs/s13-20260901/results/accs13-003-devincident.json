@@ -1,0 +1,1 @@
+{"id":"accs13-003-devincident","op":"dev:incident","ok":false,"error":{"code":"bad-args","detail":"missing required arg 'def' (string)"},"state":{"gameLoaded":true,"tick":1780,"paused":true},"sid":"20260901T121508","ts":"2026-09-01T12:51:34.1020920Z"}

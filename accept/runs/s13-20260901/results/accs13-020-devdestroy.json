@@ -1,0 +1,1 @@
+{"id":"accs13-020-devdestroy","op":"dev:destroy","ok":false,"error":{"code":"bad-args","detail":"dev:destroy needs 'thing', 'things' or 'def' (+ optional near/radius)"},"state":{"gameLoaded":true,"tick":1782,"paused":true},"sid":"20260901T121508","ts":"2026-09-01T12:51:49.6336560Z"}
