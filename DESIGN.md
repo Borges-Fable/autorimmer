@@ -968,3 +968,72 @@ queue by default (an agent flailing mid-experiment must not page triage).
   carries 1.7's `ForcePausePayload` verbatim under `force_pause` — one window
   vocabulary across `advance`, `status`, `interactions` and these verbs, never a
   second.
+- 2026-08-31 — **Three gates nobody had written down, and they share a shape:
+  the widget's most consequential behaviour is often not its precondition at
+  all — it is a filter on what the dropdown OFFERS, a side effect that fires
+  after the click, or a cost the read itself pays.** Spec 3.6 (git-bug
+  `48f666c`) hit all three in one file, and each was invisible from the model
+  side, so each is recorded here rather than only in a comment.
+
+  **(a) `Dialog_BillConfig.FillOutputDropdownOptions` never offers an
+  UNGROUPED storage building as a bill's output, and no vanilla
+  `Building_Storage` can be offered.** The collection clause is
+  `else if (!(slotGroup.parent is Building_Storage building_Storage) ||
+  building_Storage is IRenameable)` — so a slot group whose parent is a
+  `Building_Storage` is admitted *only* when that building implements
+  `IRenameable`, and **no vanilla `Building_Storage` does**. The branch above it
+  admits `slotGroup.StorageGroup` unconditionally. Net effect: the "store in…"
+  and "Include from" dropdowns list **stockpile zones and STORAGE GROUPS, and
+  nothing else** — a bare shelf or crate is never a bill's specific output, and
+  linking it into a group with `storage-link` is the thing that makes it
+  offerable. `Bill_Production.SetStoreMode(mode, group)` accepts the shelf's
+  own `SlotGroup` perfectly happily, so a verb that resolves a target and calls
+  the setter hands the agent an output the player cannot select, on a bill the
+  player then cannot see the reason for. `bill-set {store_target}` and
+  `bill-set {include_from}` therefore both refuse it with
+  `gate:"ungrouped-storage-building"` and name `storage-link` as the route.
+  **The general form is the one worth carrying: a dropdown's CANDIDATE FILTER
+  is a gate, and it is the easiest kind to miss, because there is no `if` in
+  front of the setter to notice — the restriction lives in the code that built
+  the list.** Same class as `BillDialogUtility.GetPawnRestrictionOptionsForBill`
+  drawing an unclickable null-action row for a pawn whose work type is
+  disabled: the model would take that write too.
+
+  **(b) `targetCount` and `unpauseWhenYouHave` are COUPLED by the widget, and
+  the coupling is in the drawing code, not in either field's setter.**
+  `Dialog_BillConfig.DoWindowContents` reads the old value, draws the
+  `IntEntry`, and then unconditionally runs
+  `bill.unpauseWhenYouHave = Mathf.Max(0, bill.unpauseWhenYouHave +
+  (bill.targetCount - oldTargetCount));` — i.e. the unpause threshold TRACKS
+  the target by delta, every frame the dialog is open. A verb that writes
+  `targetCount` alone leaves a threshold the player never chose, and the bill
+  then unpauses at a number nothing in the UI would ever have produced. This is
+  the same shape as `work-priorities` needing
+  `Notify_UseWorkPrioritiesChanged` (2026-08-31, above) and it is the second
+  time the rule has paid: **a widget's non-obvious SIDE EFFECT is as much a
+  part of the click as its precondition, and a verb that reproduces only the
+  gate is half a verb.** `bill-set {repeat:"target", target:N}` reports BOTH
+  `target` and `unpause_when_you_have` in `configured`, so the coupling is
+  visible in the result rather than inferred — and 3.6's acceptance asserts
+  both, because a suite checking only `target` passes against the half-verb.
+
+  **(c) Constructing a `Bill` to ASK A QUESTION burns a scribed id.** Every
+  `Bill` ctor ends in `InitializeAfterClone()`, which assigns
+  `loadID = Find.UniqueIDsManager.GetNextBillID()` — a counter that
+  `UniqueIDsManager.ExposeData` scribes. So `new Bill_Production(recipe)` in a
+  READ path permanently advances the save's bill-id counter, once per call, per
+  recipe. `bill-options` needs `RecipeWorkerCounter.CanCountProducts(bill)` for
+  every recipe on a bench to say whether "do until you have X" is even
+  offerable, and the obvious implementation would burn one id per recipe per
+  call, forever. It passes `null` instead: all three vanilla counters ignore
+  the argument (the base is
+  `specialProducts == null && products != null && products.Count == 1`, and
+  `RecipeWorkerCounter_ButcherAnimals` / `_MakeStoneBlocks` both `return
+  true`), and a modded counter that dereferences it throws into a catch that
+  falls back to the base predicate. **This is WorldSafe Class A reached from an
+  unusual direction — not a lazy getter that writes, but a CONSTRUCTOR whose
+  cost is the write — and the rule it leaves is: before instantiating a game
+  type to interrogate it, check whether its ctor touches a `UniqueIDsManager`
+  counter, and prefer passing `null` to a worker that will ignore it.** DESIGN
+  already records the `nextJobID` burn `orders` pays; that one is unavoidable
+  because the job must exist. This one was entirely avoidable.
