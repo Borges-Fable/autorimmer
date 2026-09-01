@@ -334,6 +334,29 @@ namespace AutoRimmer
             return null;
         }
 
+        // ==================================================== git-bug 1113019 ==
+        // THE ENFORCEMENT AND THE PUBLISHED FIELD READ ONE BACKING FIELD EACH.
+        //
+        // `TimeDriver.UnreachableHalt` refuses an advance whose halt cannot
+        // happen — already true at arm time, `edge` required, no positive bound
+        // — and Evan's ruling is that it must be DERIVED from `true_when_armed`
+        // rather than from a second computation of the same thing, "so the field
+        // and the enforcement cannot disagree". These two properties are that
+        // derivation, and `Report()` below publishes THEM rather than the fields
+        // directly, so there is exactly one route to each answer.
+        public bool TrueWhenArmed => armedTrue;
+        public bool EdgeRequired => edge;
+
+        // The predicate and the reading that satisfied it, for a refusal that
+        // has no `data` block to put them in (Poller.BuildResultJson drops
+        // `data` on a failure, so every number a refusal reports has to be in
+        // `error.detail`).
+        public string DescribeAtArm()
+        {
+            string q = quantify == null ? "" : $" quantify={quantify}";
+            return $"{path} {op} {Show(want)}{q} observed={Show(lastValue)}";
+        }
+
         public override bool Poll(int tick, out Dictionary<string, object> evidence)
         {
             evidence = null;
@@ -388,13 +411,22 @@ namespace AutoRimmer
                 ["op"] = op,
                 ["value"] = want,
                 ["quantify"] = quantify,
-                ["edge"] = edge,
+                // Through the properties, not the fields — see the 1113019 note
+                // beside them: the arm-time refusal is derived from the same two
+                // accessors, so what the envelope says and what the mod enforced
+                // are one answer and not two.
+                ["edge"] = EdgeRequired,
                 // True when the predicate was ALREADY satisfied at arm time. With
                 // edge:true that means the advance waited for it to go false and
                 // true again; with edge:false it halted on the first frame. Either
                 // way the caller should know it asked a question that was already
                 // answered.
-                ["true_when_armed"] = armedTrue,
+                //
+                // 1113019: with edge:true and no positive `timeout_ticks` that
+                // wait can never end, so THAT combination is now refused at arm
+                // time and this field is the refusal's own evidence. It still
+                // ships true here for the bounded case, which is unchanged.
+                ["true_when_armed"] = TrueWhenArmed,
                 ["saw_false"] = sawFalse,
                 ["first_false_tick"] = firstFalseTick >= 0 ? (object)firstFalseTick : null,
                 ["observed_last"] = lastValue,

@@ -90,6 +90,20 @@ namespace AutoRimmer
         private static string filterB;             // event contains
         private static bool haltOnError;
         private static int timeoutTicks;
+        // "caller" | "default" | "none" — see the ruling at the read site.
+        private static string timeoutSource;
+
+        // git-bug 1113019. ONE IN-GAME DAY, applied to any `until` advance that
+        // supplies no `timeout_ticks` of its own.
+        //
+        // NOT a `Config` knob, deliberately. Everything in `Config` is a
+        // MACHINE-shaped tunable — scan cadences, the tps ceiling, the stall
+        // watchdog's frame count, the thermal sensor — and its header says the
+        // file "exists for bench tuning, not play". This number is a statement
+        // about the PLAY LOOP: how long the agent may sleep when nothing is
+        // asking for it. A bench that could set it to 0 would spell the exact
+        // unbounded advance this constant exists to remove.
+        public const int DefaultUntilTimeoutTicks = 60000;
 
         // ==================================================== git-bug 722c951 ==
         // THE READ OBLIGATION, and it is created BY AN ADVANCE.
@@ -406,8 +420,48 @@ namespace AutoRimmer
             }
 
             haltOnError = args.Bool("halt_on_error", true);
-            timeoutTicks = args.Int("timeout_ticks", until == Until.Ticks ? 0 : 600000);
 
+            // ==================================================== git-bug 1113019 ==
+            // THE DEFAULT BOUND, AND WHAT THE NUMBER MEANS.
+            //
+            // An `until` advance that supplies no `timeout_ticks` gets
+            // `DefaultUntilTimeoutTicks` — ONE IN-GAME DAY. This replaces a
+            // 600000 (ten in-game days) that had been here since 1.3 and was
+            // never a decision: it was "big enough not to get in the way",
+            // which is the same as no bound at all for anything a human would
+            // notice.
+            //
+            // Evan's ruling, 2026-09-01, and it is a reframing rather than a
+            // number: "a full day without doing anything while you're fully set
+            // is pretty typical. Lots of things the colony does itself day to
+            // day and ideally if something bad happens, you'll be woken up, you
+            // won't have to check."
+            //
+            // So this is NOT a safety net bolted onto an error path. A quiet day
+            // is the NORMAL idle unit of the play loop — a set-up colony runs
+            // itself and the agent is supposed to be able to say "advance" and
+            // go away — and an advance that runs a full day and returns is the
+            // system working, not a wedge being cut short. The consequence is
+            // that the HALTS are the wake-up mechanism and this number is
+            // merely "eventually return control even when nothing interesting
+            // happened". 722c951's own-faction casualty halt is therefore the
+            // primary interrupt, not a guard rail; and the open question this
+            // bound puts weight on — what ELSE should wake the agent (a raid
+            // letter, a breakdown, a mood collapse, a food cliff) — is its own
+            // issue, because a day of quiet is only safe to sleep through if
+            // the halt set is good enough.
+            //
+            // `timeoutSource` distinguishes the caller's own bound from ours.
+            // It is ONE field with three values rather than a bound plus a
+            // boolean, for the same reason 1113019 requires the refusal below to
+            // be derived from `true_when_armed`: two fields carrying one fact
+            // can disagree, and one cannot.
+            bool timeoutGiven = args.Has("timeout_ticks");
+            timeoutTicks = args.Int("timeout_ticks",
+                                    until == Until.Ticks ? 0 : DefaultUntilTimeoutTicks);
+            timeoutSource = timeoutGiven ? "caller"
+                          : until == Until.Ticks ? "none"
+                          : "default";
 
             // ---- which speed to run at ---------------------------------
             //
@@ -643,20 +697,25 @@ namespace AutoRimmer
             // left running.
             if (watch != null)
             {
-                string refusal = watch is PathWatch pw ? pw.Arm(Find.CurrentMap, startTick)
+                var pw = watch as PathWatch;
+                string refusal = pw != null ? pw.Arm(Find.CurrentMap, startTick)
                     : watch is LayoutWatch lw ? lw.Arm(startTick)
                     : null;
                 if (refusal != null)
+                    return UnarmAndFail(command, Err.BadArgs, refusal);
+
+                // ---- 1113019: REFUSAL 3, the halt that cannot happen -------
+                //
+                // Runs HERE and nowhere else, because it is the first moment
+                // the answer exists: `true_when_armed` is what `Arm` just
+                // computed, and the whole point of this refusal is that it is
+                // DERIVED from the field the envelope already publishes rather
+                // than computed a second time. See UnreachableHalt.
+                if (pw != null)
                 {
-                    // `cmd` was claimed above; release it before returning the
-                    // failure, or a later exit would enqueue a SECOND result
-                    // for a command that has already been answered. (The
-                    // `cannot-set-speed` refusal above does not need this only
-                    // because it returns before the claim.)
-                    System.Threading.Interlocked.Exchange(ref cmd, null);
-                    watch = null;
-                    RestorePause();
-                    return Result.Fail(command.Id, command.Op, Err.BadArgs, refusal);
+                    string unreachable = UnreachableHalt(pw, timeoutGiven);
+                    if (unreachable != null)
+                        return UnarmAndFail(command, ErrUnreachableHalt, unreachable);
                 }
             }
 
@@ -688,6 +747,19 @@ namespace AutoRimmer
         public const string ErrUnreadJournal = "unread-journal";
         public const string ErrBleedoutDeadline = "bleedout-deadline";
 
+        // git-bug 1113019. The third refusal, and it is the same class as the
+        // two above rather than `bad-args`: every argument is individually
+        // well-formed, and THE IDENTICAL CALL IS VALID ON A DIFFERENT WORLD
+        // STATE. That is what makes it an answer about the world — the same
+        // reason `unread-journal` and `bleedout-deadline` have their own codes
+        // — and it is not academic, because the trigger is a RACE: `time.tick
+        // >= now + 60` is false when the caller computes it off a `digest` and
+        // true by the time the `advance` arms, two protocol round trips later
+        // at a 0.25-1 s floor each (rwa/README.md). A caller branching on
+        // `bad-args` would conclude its call was malformed, which is the one
+        // thing it is not.
+        public const string ErrUnreachableHalt = "unreachable-halt";
+
         // A per-call escape's reason. Required, non-empty, a string — a blank
         // one would let "unread_ok" become a bare boolean by another name.
         private static string Reason(VerbArgs args, string key)
@@ -702,6 +774,101 @@ namespace AutoRimmer
                     + $"Example: {key}:\"burning 3 days unattended to reach the caravan, "
                     + "casualties accepted\".");
             return s;
+        }
+
+        // Every arm-time refusal unwinds the same way, and it is easy to get
+        // wrong in a way nothing catches until an advance answers twice.
+        //
+        // `cmd` was claimed above; release it before returning the failure, or a
+        // later exit would enqueue a SECOND result for a command that has
+        // already been answered. The clock was set above too, so it is put back:
+        // a refusal must leave the colony exactly as it found it, which is the
+        // invariant `accept/fc287ba-until-state.py` 0.7a-c assert across every
+        // refusal in one go. (The `cannot-set-speed` refusal does not route
+        // through here only because it returns before the claim.)
+        private static Result UnarmAndFail(PendingCommand command, string code, string detail)
+        {
+            System.Threading.Interlocked.Exchange(ref cmd, null);
+            watch = null;
+            RestorePause();
+            return Result.Fail(command.Id, command.Op, code, detail);
+        }
+
+        // ==================================================== git-bug 1113019 ==
+        // "YOU HAVE ASKED FOR A HALT THAT CANNOT HAPPEN." Returns null when it
+        // can.
+        //
+        // WHAT WENT WRONG, from the bench on 2026-09-01. A caller did exactly
+        // what this project's rules tell it to — no guessed tick counts, read
+        // the clock off the game — and sent
+        // `advance {until:{condition:{path:"time.tick", op:">=", value:949}}}`
+        // with the map at tick 949. Session 19's rule is that a `condition`
+        // requires a false->true EDGE (`time.hour >= 6` is true all afternoon,
+        // so "advance until dawn" at 14:00 must not return instantly), and
+        // `time.tick >= N` is MONOTONICALLY true once true — there is no second
+        // edge, ever. With no `timeout_ticks` the advance had no other exit
+        // either. It ran 187,541 ticks, three in-game days, and was stopped only
+        // by 722c951's own-faction casualty halt, which had shipped hours
+        // earlier. `ok: true`.
+        //
+        // WHY IT IS DERIVED FROM `TrueWhenArmed` AND `EdgeRequired` AND NOT
+        // RECOMPUTED. The mod was never blind to this: session 19 put
+        // `true_when_armed`, `saw_false` and `first_false_tick` in the envelope
+        // for exactly this case, and that envelope said
+        // `true_when_armed: true, saw_false: false, first_false_tick: null`
+        // while the advance burned three days. So this is an ENFORCEMENT gap,
+        // not an observation one, and a second computation of "is it already
+        // true" would be a second thing to keep in sync. Both properties read
+        // the same backing fields `PathWatch.Report()` publishes, so the
+        // refusal and the envelope cannot disagree (Evan's requirement).
+        //
+        // AND WHY THE DEFAULT BOUND IS NOT ENOUGH ON ITS OWN. It bounds the
+        // damage; it does not answer the caller. A `timeout_ticks` default turns
+        // "runs until something else stops it" into "sits for an in-game day and
+        // returns having halted on nothing" — better, and still not what was
+        // asked. The refusal is what hands back the call the caller meant.
+        //
+        // AND WHY THE REFUSAL IS NOT ENOUGH ON ITS OWN — the race, again. Refuse
+        // with no default and the SAME call fails or succeeds depending on
+        // protocol latency, which is a flaky refusal rather than a fix. The two
+        // together are what make the outcome well-defined in every case:
+        //   - no bound + already true + edge      -> refused, with the fix named
+        //   - a bound  + already true + edge      -> session 19, unchanged: it
+        //                                            waits for a re-crossing and
+        //                                            stops at the caller's bound
+        //   - no bound + false at arm (or no edge)-> the 60,000 default applies
+        private static string UnreachableHalt(PathWatch pw, bool timeoutGiven)
+        {
+            if (!pw.TrueWhenArmed || !pw.EdgeRequired) return null;
+            // The literal ruling is "no `timeout_ticks` was supplied". A
+            // supplied NON-POSITIVE one is folded in because it is the same
+            // shape and strictly worse: an unreachable halt with the default
+            // bound explicitly switched off. Nothing in the repo spells it; a
+            // caller that means "wait indefinitely for a re-crossing" can still
+            // pass a large finite number and gets session 19's behaviour.
+            if (timeoutGiven && timeoutTicks > 0) return null;
+            string bound = timeoutGiven ? timeoutTicks.ToString() : "absent";
+            return "the predicate was ALREADY TRUE when this advance armed, `edge` is true (the "
+                 + "default), and no positive `timeout_ticks` was given — so this advance has no "
+                 + "reachable halt and would run until something else stopped it. "
+                 + $"true_when_armed=true edge=true timeout_ticks={bound} "
+                 + $"predicate={pw.DescribeAtArm()}. "
+                 + "WHY: `until.condition` requires a false->true EDGE by default (DESIGN, "
+                 + "session 19: `time.hour >= 6` is true all afternoon, so \"advance until dawn\" "
+                 + "issued at 14:00 must not return instantly), and a predicate that is already "
+                 + "true has no crossing left to wait for — a monotonic one like `time.tick >= N` "
+                 + "never will. On 2026-09-01 this exact call ran 187,541 ticks, three in-game "
+                 + "days, and was stopped only by the own-faction casualty halt (git-bug "
+                 + "1113019). "
+                 + "FIX, and it is almost certainly what you meant: add `edge:false` to the "
+                 + "condition — the \"assert now\" reading, \"stop as soon as this holds\" — which "
+                 + "halts on the first evaluation. "
+                 + "Or keep the edge and bound the wait with `timeout_ticks:N` (an `until` "
+                 + $"advance that omits it gets {DefaultUntilTimeoutTicks}, one in-game day). "
+                 + "If the value came from a clock read, note that reading the tick and arming "
+                 + "the advance are TWO protocol round trips at a 0.25-1 s floor each "
+                 + "(rwa/README.md), so at ~30 tps the clock moves 60-120 ticks in between and a "
+                 + "short `time.tick >= now + N` lead loses that race.";
         }
 
         private static string Breakdown(Dictionary<string, int> counts)
@@ -1292,6 +1459,20 @@ namespace AutoRimmer
                 ["ticks_elapsed"] = ticks,
                 ["wall_seconds"] = wall,
                 ["avg_tps"] = wall > 0 ? ticks / wall : 0,
+
+                // 1113019: the bound that was in force, and WHOSE it was.
+                // Always present, including on `advance {ticks:N}` — a key that
+                // appears only sometimes cannot be asserted, and `eq(…, None)`
+                // passes on an absent key.
+                //   caller  — the caller passed `timeout_ticks` and got it
+                //   default — an `until` advance passed none, so
+                //             DefaultUntilTimeoutTicks (one in-game day) was
+                //             APPLIED. This is the value the reader needs in
+                //             order to tell our bound from its own.
+                //   none    — `advance {ticks:N}` with no `timeout_ticks`; the
+                //             tick target is the bound and this is 0.
+                ["timeout_ticks"] = timeoutTicks,
+                ["timeout_source"] = timeoutSource,
 
                 // 1.8: which of vanilla's speeds actually ran, what was asked
                 // for, and where the number came from. `speed_nominal_tps` is

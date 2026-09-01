@@ -273,6 +273,26 @@ afternoon, so "advance until dawn" issued at 14:00 waits for midnight and then
 "assert now" reading. The result's `until.true_when_armed` says whether the
 question was already answered when it was asked.
 
+**An `until` advance that names no `timeout_ticks` gets 60,000 — one in-game
+day** (git-bug 1113019). Not a safety net: a quiet day is the normal idle unit
+of the play loop, so an advance that runs a day and comes back `reason:"timeout"`
+is the system working. Every advance publishes `timeout_ticks` and
+`timeout_source` (`caller` | `default` | `none`), so a caller can tell its own
+bound from ours without re-deriving it.
+
+**An already-true predicate with the edge required and no bound is REFUSED**
+(`error.code: "unreachable-halt"`). The edge can never come, so the halt cannot
+happen, and before this the advance ran until something else stopped it — on a
+bench on 2026-09-01, 187,541 ticks. The refusal names the fix: add
+`--until.condition.edge false` if you meant "stop as soon as this holds", or
+pass `--timeout_ticks N` to keep the edge and bound the wait.
+
+**Watch the race on a `time.tick` target.** Reading the clock and arming the
+advance are two round trips at a 0.25–1 s floor each (above), so at ~30 tps the
+clock moves 60–120 ticks in between: `time.tick >= now + 60` is regularly true
+by the time it arms. Lead by more than a round trip, arm it while paused, or
+just say what you mean with `--until.condition.edge false`.
+
 Every advance with a state matcher publishes a `data.until` block: the predicate
 as parsed, `every_frames`, `evaluations`, `eval_ms_avg`, `eval_ms_per_frame`,
 and — for `layout` — `built`/`cancelled`/`unresolved`/`done` plus, when it did
@@ -293,15 +313,17 @@ every 204 ticks whatever the cadence says. And a halt can be one cadence window
 late by construction — at Ultrafast a frame is up to 30 ticks, so 15 frames
 bounds the lateness at ~450 ticks.
 
-## `advance` refuses, and halts, by default (git-bug 722c951 / 40ed42f)
+## `advance` refuses, and halts, by default (git-bug 722c951 / 40ed42f / 1113019)
 
-Three behaviours that are NOT `until` matchers and are not opt-in. They are why
-`rwa advance` can come back `ok:false` on a bench that is perfectly healthy.
+Four behaviours that are not opt-in. They are why `rwa advance` can come back
+`ok:false` on a bench that is perfectly healthy. The first three are independent
+of `until`; the fourth is a refusal to arm an `until` whose halt cannot fire.
 
 | what | code / reason | it means |
 |---|---|---|
 | refusal | `error.code: "unread-journal"` | the PREVIOUS advance journaled events that no `journal` call has read. No ticks ran. |
 | refusal | `error.code: "bleedout-deadline"` | a bleeding own-faction pawn dies sooner than the nearest capable rescuer can reach them. No ticks ran. |
+| refusal | `error.code: "unreachable-halt"` | an `until.condition` that was ALREADY TRUE when armed, with the edge required and no positive `timeout_ticks`. The halt cannot fire. No ticks ran. |
 | halt | `data.reason: "casualty"` | an own-faction pawn went DOWN or DIED while time ran; the advance stopped at that tick. `halted_on` names the pawn, `pawn_id`, the event class and the tick. |
 
 The refusals are `ok:false` deliberately, and that is not the same call as a
@@ -309,9 +331,10 @@ refused `dev:spawn-thing` returning `ok:true`: a spawn refusal is an ANSWER
 ABOUT THE WORLD, and these are the mod refusing to ACT at all. Nothing was
 armed, the clock was never touched, and a caller that branches on `ok` must land
 in its error path rather than read a `data` block and conclude time passed.
-Both details carry their numbers as `key=value` tokens — `unread=`, `seq_from=`,
-`bleedout_ticks=`, `rescue_ticks=`, `margin_ticks=` — so a script can parse what
-a human is meant to read.
+All three details carry their numbers as `key=value` tokens — `unread=`,
+`seq_from=`, `bleedout_ticks=`, `rescue_ticks=`, `margin_ticks=`,
+`true_when_armed=`, `edge=`, `timeout_ticks=` — so a script can parse what a
+human is meant to read.
 
 **Clearing the unread refusal is `rwa journal`, and nothing else.** The verb now
 publishes `read_watermark`, `watermark_was`, `watermark_moved` and
