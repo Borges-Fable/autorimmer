@@ -3,15 +3,32 @@ name: weapons-have-no-alert
 trigger: day 0, and after any roster change, raid, or colonist death
 severity: Critical
 confidence: verified-in-source
-source: session 9 sweep of all 133 vanilla Alert_ classes; IncidentWorker_Raid.cs:171
+source: session 9 sweep of every vanilla Alert_ class, recounted session 10; IncidentWorker_Raid.TryExecuteWorker
 ---
 
 **What.** Count armed colonists against the roster and act on the gap. Nothing in
 the game will ever tell you about it.
 
-**Why.** Across all 133 vanilla alert classes, **none covers armament.** The three
-weapon-related alerts are per-pawn mismatches (shield belt with a ranged weapon,
-and its pair), not "you have six colonists and two guns". `Alert_NeedDefenses` is
+**Why.** Across every vanilla alert class, **none covers armament.** The count,
+because "133" was quoted here as a census and is a count of DECLARATIONS:
+**133 `class Alert_*` declarations, 7 of them abstract, so 126 concrete
+alerts.** (The 133rd is `Alert_PermitAvailable`, which the decompiler emits
+nested inside `Alert_UnusableMeditationFocus.cs` rather than in a file of its
+own — 132 `Alert_*.cs` files, one extra class inside one of them.) The
+abstract seven are `Alert_Critical`, `Alert_Precept`, `Alert_Thought`,
+`Alert_Scenario`, `Alert_ActionDelay`, `Alert_JoyBuildingNoChairs`,
+`Alert_Analyzable`.
+
+The **three** weapon-related alerts are all per-pawn mismatches, never
+coverage — name them, because this file previously said "three" and listed
+two:
+
+1. `Alert_ShieldUserHasRangedWeapon`
+2. `Alert_HunterHasShieldAndRangedWeapon`
+3. `Alert_BrawlerHasRangedWeapon` — `HasTrait(TraitDefOf.Brawler) &&
+   equipment.Primary != null && equipment.Primary.def.IsRangedWeapon`
+
+None of them says "you have six colonists and two guns". `Alert_NeedDefenses` is
 buildings-only and self-silences on day 6. Meanwhile vanilla's own tutor treats
 pre-combat equipping as `OpportunityType.Critical` on EVERY raid — the developers
 consider it critical and still ship no standing signal for it.

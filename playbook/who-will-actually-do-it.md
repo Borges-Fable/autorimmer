@@ -30,9 +30,12 @@ observed.
 This bit twice in one session: a bionic-leg install with the only doctor as the
 patient, and 3.4's own acceptance bullet 4, which failed for the identical reason.
 
-**How to apply.** `pawn {sections:["work"]}` returns the full row with a priority
-per work type. Read it for the whole roster and confirm at least one non-patient
-pawn is non-zero for the relevant work. Generalises past medicine: a bill on any
+**How to apply.** `pawn {id:<n>, sections:["work"]}` returns the full row with
+a priority per work type. **`pawn` is SINGLE-PAWN and `id` is required**
+(`PawnVerbs.PawnDetail` → `ctx.Args.IntReq("id")`), so "read it for the whole
+roster" is **one call per colonist — N round-trips**; take the roster from
+`pawns` first. Confirm at least one non-patient pawn is non-zero for the
+relevant work. Generalises past medicine: a bill on any
 bench needs someone with that work checked who is not otherwise pinned.
 **"Nobody is assigned" is a silent failure mode, not an error.**
 

@@ -31,7 +31,9 @@ ledger (`checklists/README.md`).
 
 ### armed-roster
 - when: daily (and re-fired by `roster-change` / `raid-end` triggers)
-- read: `pawn {sections:["equipment"]}` per colonist (the `primary` flag);
+- read: `pawn {id:<n>, sections:["equipment"]}` per colonist — `pawn` is
+  single-pawn and `id` is required, so this is N round-trips off a `pawns`
+  roster, not one call (the `primary` flag);
   spares via `things {category:"weapons"}` — equipped and spare are disjoint
   populations, and a spare only counts if reachable and unforbidden
 - flag: armed colonists < violence-capable colonists *(floor: one usable
@@ -40,7 +42,8 @@ ledger (`checklists/README.md`).
   already own raise no wealth**; craft or buy only after the spares are worn,
   because every new weapon prices the next raid
   ([[wealth-buys-bigger-raids]])
-- why: the confirmed total gap — across all 133 vanilla alert classes, none
+- why: the confirmed total gap — across all 126 concrete vanilla alert classes
+  (133 `Alert_*` declarations, 7 abstract), none
   covers armament; the game treats pre-combat equipping as Critical on every
   raid and never says a word in advance. Evan: raids are the thing that
   "will knock you out". [[weapons-have-no-alert]]
@@ -69,7 +72,8 @@ ledger (`checklists/README.md`).
 
 ### apparel-margin
 - when: daily, every 3 days (decay is slow; a daily read buys nothing)
-- read: `pawn {sections:["apparel"]}` per colonist → worst `hp_pct` among
+- read: `pawn {id:<n>, sections:["apparel"]}` per colonist (one call each)
+  → worst `hp_pct` among
   worn items that use hit points
 - flag: any worn item below 60% *(proposed — margin above the penalty line)*
 - act: queue replacements (tailoring waits on 3.6 — log `blocked`), reassign

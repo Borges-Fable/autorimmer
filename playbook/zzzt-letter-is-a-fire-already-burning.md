@@ -3,23 +3,55 @@ name: zzzt-letter-is-a-fire-already-burning
 trigger: a Zzzt / short-circuit letter, or any fire letter
 severity: Critical
 confidence: verified-in-source
-source: postmortem.md's worked dry-run (96d9315 acceptance); Alert_FireInHomeArea is home-scoped
+source: postmortem.md's worked dry-run (96d9315 acceptance); Alert_FireInHomeArea is home-scoped; ShortCircuitUtility.DoShortCircuit
 graduated-to: checklists/triggered.md §power-incident · templates/power-room.{ir.json,md}
 ---
 
-**What.** Respond at the LETTER, not at the alert. A Zzzt letter means a fire is
-already burning; the alert trails it by up to ~2,000 ticks of spread.
+**What.** Respond at the LETTER, not at the alert. A Zzzt letter is the
+ignition event itself — already happened, already past — and the alert that
+would tell you about the fire trails it by a lag OUR advance sizing creates.
 
 **Why.** Three lags stack, and the last one is the killer:
 
-1. `DoShortCircuit` drains the battery bank and detonates — the letter is the
-   ignition event itself, not a warning about a possible one.
+1. `ShortCircuitUtility.DoShortCircuit` is where the letter comes from, and it
+   fires AFTER the damage: the letter is the ignition event, not a warning
+   about a possible one.
 2. `Alert_FireInHomeArea` is **home-area-scoped**, so a fire in an outbuilding or
    an unhomed power room raises nothing at all
    ([[alert-need-defenses-self-silences]] covers the same trap-class).
-3. Even in the home area the alert is a poll, not a hook. By the time it reads
-   true the fire has spread — and if the room is wooden, spread is the whole
-   loss.
+3. Even in the home area the alert is a poll, not a hook — and OUR poll is much
+   slower than the game's. See the lag note below.
+
+**Read the letter body — the outcome is not always a fire.** `DoShortCircuit`
+branches on stored charge:
+
+    if (powerNet.batteryComps.Any(x => x.StoredEnergy > 20f))
+        DrainBatteriesAndCauseExplosion(...);   // Flame explosion, sized by charge
+    else
+        flag = TryStartFireNear(culprit);       // and this CAN return false
+
+With any battery on the culprit's net above 20 Wd you get a Flame explosion
+(plus a Bomb sub-blast above radius 3.5). Otherwise the game tries to light a
+cell within 3 of the culprit, in line of sight — and if `TryStartFireNear`
+finds nowhere it will take, **nothing ignites at all**. The letter text is the
+tell: `ShortCircuitStartedFire` when a fire actually started,
+`ShortCircuit` otherwise. The `ShortCircuitWasLarge` / `WasHuge` lines are
+appended above blast radius 5 and 8.
+
+The response does not change — `fires` map-wide, then popper coverage — but
+"the letter always means a fire is burning" would send the agent hunting a
+fire that in the no-battery case may not exist, and treating a plain
+`ShortCircuit` as a false alarm is the opposite error. Read which one arrived.
+
+**The ~2,000-tick lag is OURS, not the game's** *(corrected — an earlier
+version of this lesson attributed it to vanilla)*. `AlertsReadout
+.AlertCycleLength` is 24 and `AlertsReadoutUpdate` advances one index per
+FRAME, so vanilla re-checks a given alert within ~24 frames — at 1× that is
+~24 ticks, nothing. The 800–2,000 TICK figure is this repo's own arithmetic:
+24 readout frames + `Config.AlertScanFrames` (default 30) = 54 frames, at the
+~33 ticks/frame a budgeted advance delivers (`JOURNAL.md` §Alert timing). It
+is a lag we buy by running fast, and it shrinks if `alertScanFrames` is
+lowered — it cannot go below the readout's own 24-frame sweep.
 
 The blast is sized by stored charge: a 4,800 Wd bank gives
 `sqrt(4800) x 0.05 = 3.5` cells of blast radius, right at the Bomb threshold. So

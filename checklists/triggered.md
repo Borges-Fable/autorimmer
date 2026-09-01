@@ -16,33 +16,46 @@ gaps the action-surface audit found independently (`AddBillSimpleMeal`,
 
 Run it top to bottom on any fresh colony; every line logs a verdict.
 
-1. **Stockpile** — `zone add stockpile` near the future kitchen; configure the
-   filter at creation (the same discipline as growing zones).
-2. **Unforbid starting resources** — `unforbid` over the landing scatter.
-   Drop-pod starts land with their own gear forbidden
-   (`ScenPart_PlayerPawnsArriveMethod.DoDropPods` passes `forbid: true`);
-   the tutorial's own second step is `UnforbidStartingResources`.
-   [[unforbid-before-expecting-pickup]]
+1. **Stockpile** — `zone {op:"add", kind:"stockpile", rect:[x,z,w,h]}` near
+   the future kitchen; configure the filter at creation (the same discipline
+   as growing zones). `op` and `kind` are ARGS, not words in the op name:
+   `ZoneVerbs.Zone` reads `a.Str("op","add")` then `a.Str("kind")`, and
+   `rwa zone add stockpile …` dies in `parse_op_args` on the bare word `add`
+   (exit 2) before the mod ever sees it.
+2. **Unforbid starting resources** — `unforbid {rect:[x,z,w,h]}` over the
+   landing scatter. **Name the arg**, and on the CLI force the type:
+   `rwa unforbid --rect:json '[x,z,w,h]'`. A bare `--rect 10,20,5,5`
+   autotypes to the STRING `"10,20,5,5"` (`rwa`'s `autotype` leaves anything
+   non-numeric alone) and comes back `rect must be [x,z,w,h]` from
+   `DesignateEngine.ReadRect`. Drop-pod starts land with their own gear
+   forbidden (`ScenPart_PlayerPawnsArriveMethod.DoDropPods` passes
+   `forbid: true`); the tutorial's own second step is
+   `UnforbidStartingResources`. [[unforbid-before-expecting-pickup]]
 3. **Shelter** — walls, door, beds, light. Until 3.3 lands this is staged per
    4.3's fixture (dev-conjured, journaled); after 3.3:
    `place-layout templates/bedroom.ir.json`. Verdict `blocked` until then, not
    a silent skip.
-4. **Growing zone, plant named in the same call** — `zone add growing
-   {rect, plant}`. The verb refuses a plantless zone (ZoneVerbs guard); the
-   tutorial's `SetToGrowRice` is its own step because the default is a real
-   crop, not a blank. [[growing-zone-default-is-potato]]
+4. **Growing zone, plant named in the same call** —
+   `zone {op:"add", kind:"growing", rect:[x,z,w,h], plant:"Plant_Rice"}`.
+   The verb refuses a plantless zone (ZoneVerbs guard) unless you pass the
+   escape hatch `allow_unset_plant:true`; the tutorial's `SetToGrowRice` is
+   its own step because the default is a real crop, not a blank.
+   [[growing-zone-default-is-potato]]
 5. **Equip weapons** — count armed vs violence-capable roster
-   (`pawn {sections:["equipment"]}` per pawn; spares via
-   `things {category:"weapons"}`), then `equip`/`assign {auto_arm:true}`.
-   No alert will ever prompt this. [[weapons-have-no-alert]]
+   (`pawn {id:<n>, sections:["equipment"]}` — `pawn` is SINGLE-PAWN and `id`
+   is required, so this is one call per colonist, N round-trips; take the
+   roster from `pawns` first. Spares via `things {category:"weapons"}`), then
+   `equip`/`assign {auto_arm:true}`. No alert will ever prompt this.
+   [[weapons-have-no-alert]]
 6. **Meal source and its bill** — a stove is not food: `Alert_NeedMealSource`
    tests only that a `isMealSource` building exists, and is silent before
    day 2. The stove build waits on 3.3; the BILL waits on 3.6 (`48f666c`) —
    log `blocked` with those ids. The read half (`bills`) works today.
-7. **Work priorities roster scan** — `pawn {sections:["work"]}` across the
-   roster: every essential work type (Doctor, Cook, Grow, Construct, Haul)
-   covered by someone capable, and no bill-relevant type checked only on its
-   likely patient. [[who-will-actually-do-it]]
+7. **Work priorities roster scan** — `pawn {id:<n>, sections:["work"]}`,
+   **one call per colonist** (N round-trips; the roster comes from `pawns`):
+   every essential work type (Doctor, Cook, Grow, Construct, Haul) covered by
+   someone capable, and no bill-relevant type checked only on its likely
+   patient. [[who-will-actually-do-it]]
 8. **Research: select a project** — `research-set`. The model would accept any
    project (`SetCurrentProject` checks nothing); the verb reproduces the
    widget gate, so refusal here means prerequisites, not breakage.
@@ -62,7 +75,8 @@ Run it top to bottom on any fresh colony; every line logs a verdict.
 
 ### bill-who-will-do-it
 - when: act: after queuing any bill (`surgery-add` today; 3.6's bills later)
-- read: `pawn {sections:["work"]}` across the roster
+- read: `pawn {id:<n>, sections:["work"]}` — one call per colonist, roster
+  from `pawns` (`pawn` is single-pawn; `id` is `IntReq`)
 - flag: no pawn OTHER than the patient (or the bench's blocker) has the
   relevant work type non-zero
 - act: `work-priorities` / enable the work type on a capable pawn
@@ -74,13 +88,17 @@ Run it top to bottom on any fresh colony; every line logs a verdict.
 
 ### plant-set-at-creation
 - when: act: creating or reconfiguring a growing zone
-- read: none needed at creation — `zone add growing` refuses without `plant`.
-  To inspect an existing zone use `zones` (the guarded backing-field route),
-  never anything that touches the live getter.
-- flag: a zone whose plant reads null from the backing field — genuinely
-  unconfigured, and one read of the raw getter away from being potatoes
-  forever (the getter assigns AND scribes on first touch).
-- act: `zone edit {plant}` now, while the choice is still free.
+- read: none needed at creation — `zone {op:"add", kind:"growing", …}`
+  refuses without `plant` (unless `allow_unset_plant:true`). To inspect an
+  existing zone use `zones` (the guarded backing-field route), never anything
+  that touches the live getter.
+- flag: `plant_configured:false` in the `zones` row — genuinely unconfigured,
+  and one read of the raw getter away from being potatoes forever (the getter
+  assigns AND scribes on first touch). Sanity-check `plant_source` reads
+  `"backing-field"` and not `"unavailable"`, which would mean the guarded
+  route is gone and the answer is not trustworthy.
+- act: `zone {op:"edit", id:<n>, plant:"Plant_Rice"}` now, while the choice is
+  still free. `edit` needs `id` (`a.IntReq("id")`) — it is not optional.
 - why: [[growing-zone-default-is-potato]] — and the wrong earlier version of
   this lesson taught a symptom that never occurs.
 - retire-when: never; the deadline is structural.
@@ -96,13 +114,16 @@ Run it top to bottom on any fresh colony; every line logs a verdict.
   rule the API cannot derive ([[benches-go-indoors]], Evan). For kitchens the
   rule has a number: a meal rolls poison against the ROOM's `FoodPoisonChance`
   stat — a curve over room Cleanliness reaching 0 at ≥ −2, 2.5% at −3.5, 5%
-  at −5, and a flat 2% when cooking roomless (`CompFoodPoisonable.cs:38`;
-  `RoomStats.xml`). Cooking outside poisons one meal in fifty regardless of
-  the cook.
+  at −5, and a flat 2% when cooking roomless
+  (`CompFoodPoisonable.Notify_RecipeProduced` rolls
+  `pawn.GetRoom()?.GetStat(RoomStatDefOf.FoodPoisonChance)` and falls back to
+  the stat's `roomlessScore`; `RoomStats.xml`). Cooking outside poisons one
+  meal in fifty regardless of the cook.
 - retire-when: benches are placed from `templates/`, which guarantee the room.
 
 ### home-area-after-build
-- when: act: after `place-layout`, any build batch, or dev-spawn staging
+- when: act: after `place-layout` (3.3, `1adc737` — the verb does not exist
+  yet; today this fires after dev-spawn staging and any hand-built batch)
 - read: `areas` — the new footprint is inside Home
 - flag: uncovered cells
 - act: expand Home (`area` verbs)
@@ -131,13 +152,19 @@ Run it top to bottom on any fresh colony; every line logs a verdict.
 
 ### raid-letter
 - when: event: `letter` with a threat def / `advance` halts on `threat`
-- read: seek posture (`seek-at-will` state), armament
-  (`pawn {sections:["equipment"]}`), the two shield-belt alerts in
-  `digest.alerts`
+- read: seek posture and armament per pawn —
+  `pawn {id:<n>, sections:["state","equipment"]}`, one call per colonist
+  (`PawnVerbs.PawnDetail` takes `ctx.Args.IntReq("id")`; take the roster from
+  `pawns` first). `state.seek` is the posture. **Do NOT read it with
+  `seek-at-will`:** that verb takes a pawn list, WRITES, and hard-refuses when
+  SeekAndKill is absent (`SeekVerbs.SeekAtWill` throws on `!SeekMod.Present`).
+  Then the three per-pawn weapon alerts in `digest.alerts`
 - flag: unarmed violence-capable colonists; any shield belt paired with a
   ranged weapon (`Alert_ShieldUserHasRangedWeapon`,
-  `Alert_HunterHasShieldAndRangedWeapon` — the only two weapon alerts that
-  exist, and they are per-pawn mismatches, not coverage)
+  `Alert_HunterHasShieldAndRangedWeapon`) — and, from the same family,
+  a Brawler holding a gun (`Alert_BrawlerHasRangedWeapon`). **Three** per-pawn
+  weapon alerts, not two; all three are mismatches, none is coverage
+  ([[weapons-have-no-alert]])
 - act: arm from spares (unforbid first — drops are forbidden), fix pairings
   (melee for the belt wearer or shed the belt); then let SeekAndKill fight,
   draft by exception only
@@ -185,7 +212,7 @@ Run it top to bottom on any fresh colony; every line logs a verdict.
 ### roster-change
 - when: event: `death`, recruit, or any colonist joining/leaving
 - read: armament vs the new roster; work coverage
-  (`pawn {sections:["work"]}`)
+  (`pawn {id:<n>, sections:["work"]}`, one call per colonist)
 - flag: armed count below violence-capable count; an essential work type now
   uncovered (the doctor just died)
 - act: re-arm, re-assign roles (traits → passion → skill), re-check work
