@@ -40,7 +40,7 @@ loaded eagerly. Two mechanics around it:
   |---|---|
   | `ok` | proceed |
   | `menu` | the right save must be loaded. There is no load verb — loading is the LAUNCHER's job (`run-agent.sh` / the autostart pattern), deliberately outside the protocol. Relaunch with the target save where this machine's rules allow launching the bench; otherwise escalate |
-  | `down` | start the bench via `run-agent.sh` — `_RimWorld-Agent` only, the standing carve-out (DESIGN §Non-goals). On a machine whose rules forbid the agent launching anything (BORGES), escalate instead |
+  | `down` | start the bench via `run-agent.sh` — `_RimWorld-Agent` only, the standing carve-out (DESIGN §Non-goals). On a machine whose rules forbid the agent launching anything (BORGES), escalate instead. **A `--quicktest` launch needs `autostart.rws` parked out of `Saves/` first** — otherwise map gen fails every time and lands right back on `menu`, which reads as bad luck with a seed ([[quicktest-and-autostart-collide]]) |
   | `stalled` / `starved` | remediate per `rwa/README.md` (windowrules, `rwa watch on`, relaunch through the launcher); never work around it by hammering commands |
 
 - **On a NEW colony**: `triggered.md`'s colony-start section runs now, top to
@@ -135,7 +135,13 @@ owns time.
 
 ### read
 
-In this order, every return:
+In this order, every return — **unconditional and not parameterised.** A
+targeted query never substitutes for steps 1 and 2, however tight the loop
+feels: M1's six back-to-back 2,500-tick advances read only
+`pawns {filter:"hostile"}`, and a colonist was downed, alerted on twice, and
+left bleeding inside that window ([[read-every-return-or-lose-a-colonist]]).
+If you are waiting for one specific thing, that is an argument for an
+`until:` guard, not for a poll.
 
 1. `rwa journal --since <last_seq>` — the delta. What happened while time
    ran, including the `action` echoes of your own acts. Any `red_error`:

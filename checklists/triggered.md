@@ -16,6 +16,16 @@ gaps the action-surface audit found independently (`AddBillSimpleMeal`,
 
 Run it top to bottom on any fresh colony; every line logs a verdict.
 
+**Before the fresh colony exists at all**: a new bench colony comes from a
+`--quicktest` launch, and that launch fails deterministically — map gen dies,
+`status` reads `menu`, the launcher's stdout carries no stack — for as long as
+a previous session's `autostart.rws` sits in the bench's `Saves/`. Park the
+save first; relaunching without doing so also destroys the only copy of the
+stack (`Player.log` is truncated at process start).
+[[quicktest-and-autostart-collide]] Launching is the orchestrator's act, never
+a worker's (`CLAUDE.md`), so this line is a precondition to hand over, not one
+to execute.
+
 1. **Stockpile** — `zone {op:"add", kind:"stockpile", rect:[x,z,w,h]}` near
    the future kitchen; configure the filter at creation (the same discipline
    as growing zones). `op` and `kind` are ARGS, not words in the op name:
@@ -55,7 +65,11 @@ Run it top to bottom on any fresh colony; every line logs a verdict.
    **one call per colonist** (N round-trips; the roster comes from `pawns`):
    every essential work type (Doctor, Cook, Grow, Construct, Haul) covered by
    someone capable, and no bill-relevant type checked only on its likely
-   patient. [[who-will-actually-do-it]]
+   patient. [[who-will-actually-do-it]] **Doctor is the exception to "someone
+   capable": coverage means TWO.** One doctor reads as covered right up to
+   the moment the doctor is the casualty, which is the likeliest casualty
+   there is — M1 lost both its casualties that way, to blood loss, not to the
+   animal. [[one-doctor-is-zero-doctors]]
 8. **Research: select a project** — `research-set`. The model would accept any
    project (`SetCurrentProject` checks nothing); the verb reproduces the
    widget gate, so refusal here means prerequisites, not breakage.
@@ -70,6 +84,16 @@ Run it top to bottom on any fresh colony; every line logs a verdict.
 11. **Combat roles** — traits first (FSWA already forces Brawlers melee-only),
     then passion, then skill. The weighting formula is a proposal awaiting
     Evan — apply it as a tiebreak, not a rule. [[combat-role-passion-over-skill]]
+12. **Standing combat posture, in this order, before the first advance** —
+    an `Area_Allowed` over base + fields + cleared ground and every pawn
+    assigned to it (`area create`, then `assign`); then `seek-at-will` ON as
+    the standing posture, not something switched on at the letter; then
+    `assign {hostility:"Attack"}` as the backstop for every case seek does
+    not cover (toggle off, drafted, SeekAndKill absent). The area is what
+    stops seek marching the roster at a fogged hive — and it does NOT bind a
+    fleeing pawn, which is the second reason to keep seek on.
+    [[seek-off-is-a-decision-to-flee]] (Evan, 2026-08-31: "manipulate the
+    allow zone" / "and attack, not flee".)
 
 ## On your own acts
 
@@ -167,7 +191,13 @@ Run it top to bottom on any fresh colony; every line logs a verdict.
   ([[weapons-have-no-alert]])
 - act: arm from spares (unforbid first — drops are forbidden), fix pairings
   (melee for the belt wearer or shed the belt); then let SeekAndKill fight,
-  draft by exception only
+  draft by exception only. **Seek must already be on when the letter
+  arrives** — switching it at the letter is too late, because the fight is
+  decided inside the advance that carried it, and seek OFF is not neutral: it
+  is a decision that armed colonists scatter individually away from help.
+  M1's two deaths were both flee-branch deaths, one of them 150 cells from
+  the base with a rifle at Shooting 10 unfired.
+  [[seek-off-is-a-decision-to-flee]]
 - why: vanilla treats pre-combat equipping as Critical on EVERY raid
   (`IncidentWorker_Raid` teaches EquippingWeapons and ShieldBelts at
   Critical) yet ships no standing armament signal. [[weapons-have-no-alert]]
@@ -213,10 +243,12 @@ Run it top to bottom on any fresh colony; every line logs a verdict.
 - when: event: `death`, recruit, or any colonist joining/leaving
 - read: armament vs the new roster; work coverage
   (`pawn {id:<n>, sections:["work"]}`, one call per colonist)
-- flag: armed count below violence-capable count; an essential work type now
-  uncovered (the doctor just died)
-- act: re-arm, re-assign roles (traits → passion → skill), re-check work
-  coverage
+- flag: **Doctor first** — fewer than two pawns with Doctor enabled
+  ([[one-doctor-is-zero-doctors]]); then armed count below violence-capable
+  count; then any other essential work type now uncovered
+- act: enable Doctor on a second pawn BEFORE anything else on this list (in
+  M1 the fix landed after the first death and was too late for the second),
+  then re-arm, re-assign roles (traits → passion → skill), re-check coverage
 - why: both armament and coverage are defined RELATIVE to the roster, so any
   roster change silently moves them. [[weapons-have-no-alert]],
   [[combat-role-passion-over-skill]], [[who-will-actually-do-it]]
