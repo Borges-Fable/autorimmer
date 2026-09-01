@@ -89,6 +89,11 @@ namespace AutoRimmer
     //       it privately six minutes after 3.6's issue body was last edited,
     //       and two identical re-derivations of a vanilla getter is exactly
     //       the fork this file exists to prevent.
+    //    => RecipeIdeoBlock(): the same getter's three NON-research clauses
+    //       asked one at a time, so a caller can say WHICH of meme /
+    //       faction-tag / ideo-precept blocked instead of publishing one
+    //       collapsed "ideo-or-faction". No writes; a naming split, not a
+    //       second re-derivation.
     //
     //  * Bill_Production.ShouldDoNow — RimWorld/Bill_Production.cs. Writes
     //    `paused` on three separate paths (unconditionally to false when the
@@ -120,6 +125,16 @@ namespace AutoRimmer
     //  * ListerThings.ThingsOfDef(MinifiedThing) Log.ErrorOnce's and tells you
     //    to use the group (breach of zero-red-errors). SpatialVerbs.Nearest
     //    already routes around it; `things` does the same.
+    //  * MapPawns.FreeColonists is FreeHumanlikesOfFaction, which CLEARS and
+    //    refills a cached PER-FACTION list on every read
+    //    (RimWorld/MapPawns.cs). PawnsFinder.AllMaps_FreeColonists is worse: it
+    //    clears a STATIC `allMaps_FreeColonists_Result` and — on a single-map
+    //    game, which is every bench colony — returns `maps[0].mapPawns
+    //    .FreeColonists` DIRECTLY, so it is both shared lists at once.
+    //    Vanilla's own `BillDialogUtility.GetPawnRestrictionOptionsForBill`
+    //    walks it inside a UI frame where nothing re-enters.
+    //    => snapshotted into our own List<Pawn> before any loop that reaches
+    //       mod code (BillVerbs.SetWorker, BillVerbs.AddWarnings).
     //  * RegionGrid.AllRooms is an IReadOnlyList over the real `allRooms` list.
     //    ZoneManager.AllZones and AreaManager.AllAreas likewise. BillStack.Bills
     //    likewise. OutfitDatabase.AllOutfits / FoodRestrictionDatabase
@@ -379,6 +394,83 @@ namespace AutoRimmer
             }
             catch { }
             return false;
+        }
+
+        // AvailableNow's THREE NON-RESEARCH CLAUSES, asked one at a time so a
+        // caller can name the blocker instead of shrugging at a bool.
+        // `AvailableNow` collapses four unrelated conditions into one `false`
+        // and vanilla authors no string for any of them — it omits the row —
+        // but `MemeDef.LabelCap`, `FactionDef.LabelCap` and the produced
+        // ThingDef's label all exist, and they are the closest thing to the
+        // game's own words on this path for exactly the reason
+        // `ResearchProjectDef.LabelCap` is on the research clause.
+        //
+        // Returns the gate name ("meme" | "faction-recipe-tag" |
+        // "ideo-precept") or null when none of the three blocks; `reason` is
+        // MOD-AUTHORED prose and every caller says so. Clause ORDER is
+        // AvailableNow's own, so the gate reported is the one vanilla would
+        // have short-circuited on. Reads only; nothing here writes.
+        public static string RecipeIdeoBlock(RecipeDef recipe, out string reason)
+        {
+            reason = null;
+            if (recipe == null) return null;
+            try
+            {
+                if (recipe.memePrerequisitesAny != null && recipe.memePrerequisitesAny.Count > 0)
+                {
+                    bool any = false;
+                    var names = new List<string>();
+                    foreach (var meme in recipe.memePrerequisitesAny)
+                    {
+                        if (meme == null) continue;
+                        try { names.Add(meme.LabelCap); } catch { names.Add(meme.defName); }
+                        if (!any && Faction.OfPlayer.ideos.HasAnyIdeoWithMeme(meme)) any = true;
+                    }
+                    if (!any)
+                    {
+                        reason = "no ideo of the player faction holds any of the memes this recipe requires: "
+                            + string.Join(", ", names.ToArray())
+                            + ". RecipeDef.AvailableNow's memePrerequisitesAny clause "
+                            + "(Faction.OfPlayer.ideos.HasAnyIdeoWithMeme). MOD-AUTHORED — vanilla omits "
+                            + "the row and authors no string; the meme labels are MemeDef.LabelCap.";
+                        return "meme";
+                    }
+                }
+
+                if (recipe.factionPrerequisiteTags != null && recipe.factionPrerequisiteTags.Count > 0)
+                {
+                    var tags = Faction.OfPlayer.def.recipePrerequisiteTags;
+                    var missing = new List<string>();
+                    foreach (var tag in recipe.factionPrerequisiteTags)
+                        if (tags == null || !tags.Contains(tag)) missing.Add(tag);
+                    if (missing.Count > 0 && !UnlockedByRoleApparel(recipe))
+                    {
+                        string faction = "the player faction";
+                        try { faction = "'" + (string)Faction.OfPlayer.def.LabelCap + "'"; } catch { }
+                        reason = faction + " does not carry the recipe prerequisite tag(s) this recipe needs: "
+                            + string.Join(", ", missing.ToArray())
+                            + " (FactionDef.recipePrerequisiteTags). AvailableNow's local Check() would still "
+                            + "unlock it if one of your ideo's roles REQUIRED a piece of apparel this recipe "
+                            + "produces, and none does. MOD-AUTHORED — vanilla omits the row.";
+                        return "faction-recipe-tag";
+                    }
+                }
+
+                if (recipe.fromIdeoBuildingPreceptOnly
+                    && (!ModsConfig.IdeologyActive || !IdeoUtility.PlayerHasPreceptForBuilding(recipe.ProducedThingDef)))
+                {
+                    string product = "its product";
+                    try { product = recipe.ProducedThingDef?.label ?? "its product"; } catch { }
+                    reason = "this recipe is fromIdeoBuildingPreceptOnly and no ideo of the player faction "
+                        + "has a building precept for " + product
+                        + " (IdeoUtility.PlayerHasPreceptForBuilding)"
+                        + (ModsConfig.IdeologyActive ? "" : " — and Ideology is not active at all")
+                        + ". MOD-AUTHORED — vanilla omits the row.";
+                    return "ideo-precept";
+                }
+            }
+            catch { }
+            return null;
         }
 
         // ------------------------- bills, guarded ---------------------------

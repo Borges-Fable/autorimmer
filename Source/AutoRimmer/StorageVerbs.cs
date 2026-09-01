@@ -212,6 +212,16 @@ namespace AutoRimmer
             var map = Map();
             var a = ctx.Args;
             var targets = TargetList(map, a);
+            // EVERY ARGUMENT, BEFORE THE FIRST WRITE. `ParseStoragePriority`,
+            // `Pct01`, `ParseQualityRange` and StorageFilterOps' word checks
+            // all throw, and they used to throw INSIDE the loop below — after
+            // `copy_from` and `priority` had been written to that target, and
+            // (with `targets` plural) after earlier targets were written in
+            // full. `Act(...)` is never reached on that path, so there was NO
+            // JOURNAL ROW for the writes that did land: an unprovenanced state
+            // change reported to the caller as a clean `bad-args`. See
+            // BillVerbs.ValidateBillArgs for the whole argument.
+            ValidateStorageArgs(a);
 
             // The state the bill-validation diff is measured against, taken
             // BEFORE anything is written. ITab_Storage.FillTab does exactly
@@ -323,17 +333,12 @@ namespace AutoRimmer
                 }
                 if (a.Has("quality_range") && settings.filter != null)
                 {
-                    var range = a.Raw("quality_range") as List<object>;
-                    if (range == null || range.Count != 2 || !(range[0] is string) || !(range[1] is string))
-                        throw new VerbArgsException("quality_range must be [min,max] quality names");
-                    var lo = ParseQuality((string)range[0]);
-                    var hi = ParseQuality((string)range[1]);
-                    if (lo > hi) throw new VerbArgsException("quality_range min must not exceed max");
-                    settings.filter.AllowedQualityLevels = new QualityRange(lo, hi);
+                    var qr = ParseQualityRange(a, "quality_range");
+                    settings.filter.AllowedQualityLevels = qr;
                     changed.Add(new Dictionary<string, object>
                     {
                         ["field"] = "quality_range",
-                        ["value"] = lo + ".." + hi,
+                        ["value"] = qr.min + ".." + qr.max,
                     });
                 }
 
@@ -1123,6 +1128,39 @@ namespace AutoRimmer
         // ITab_Storage passes the four Ideology diet filters; Dialog_BillConfig
         // passes those plus `recipe.forceHiddenSpecialFilters`. A row the game
         // does not draw is a control the player does not have.
+        private const string FilterWordMsg =
+            "filter must be \"all\" or \"none\" (the Allow-All / Clear-All buttons). "
+            + "Name individual defs or categories with `allow` / `disallow`. "
+            + "The five word PRESETS are spec 3.2's `zone edit {filter:…}`.";
+
+        private const string SpecialShapeMsg =
+            "special must be an object of {SpecialThingFilterDef: true|false}, "
+            + "e.g. {\"AllowRotten\":false}";
+
+        // The PURE-PARSE half of Apply, callable before the caller has written
+        // anything. `filter` and `special` are the two args here that throw
+        // rather than refuse, and Apply is reached from inside `storage-set`'s
+        // per-target loop and from `bill-add`'s post-AddBill config — i.e. from
+        // two places where a throw lands on top of a completed mutation and is
+        // reported as a clean `bad-args`. Both callers now run this first. It
+        // touches nothing: word comparison and type tests only. A def NAME that
+        // does not resolve stays a `refused` line in Apply, because that is a
+        // fact about the game's defs and not a malformed request.
+        public static void Validate(VerbArgs a)
+        {
+            if (a.Has("filter"))
+            {
+                string word = a.Str("filter");
+                if (!string.Equals(word, "none", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(word, "all", StringComparison.OrdinalIgnoreCase))
+                    throw new VerbArgsException(FilterWordMsg);
+            }
+            if (a.Has("allow")) a.StrList("allow");
+            if (a.Has("disallow")) a.StrList("disallow");
+            if (a.Has("special") && !(a.Raw("special") is Dictionary<string, object>))
+                throw new VerbArgsException(SpecialShapeMsg);
+        }
+
         public static List<object> Apply(ThingFilter filter, ThingFilter parentFilter, string universeName,
             VerbArgs a, out List<string> refused, List<SpecialThingFilterDef> hidden = null)
         {
@@ -1152,10 +1190,7 @@ namespace AutoRimmer
                     ops.Add(new Dictionary<string, object> { ["op"] = "allow-all", ["universe"] = universeName });
                 }
                 else
-                    throw new VerbArgsException(
-                        "filter must be \"all\" or \"none\" (the Allow-All / Clear-All buttons). "
-                        + "Name individual defs or categories with `allow` / `disallow`. "
-                        + "The five word PRESETS are spec 3.2's `zone edit {filter:…}`.");
+                    throw new VerbArgsException(FilterWordMsg);
             }
 
             // ---- per-def and per-category ------------------------------------
@@ -1166,9 +1201,7 @@ namespace AutoRimmer
             if (a.Has("special"))
             {
                 if (!(a.Raw("special") is Dictionary<string, object> map))
-                    throw new VerbArgsException(
-                        "special must be an object of {SpecialThingFilterDef: true|false}, "
-                        + "e.g. {\"AllowRotten\":false}");
+                    throw new VerbArgsException(SpecialShapeMsg);
                 foreach (var kv in map)
                 {
                     var sf = DefDatabase<SpecialThingFilterDef>.GetNamedSilentFail(kv.Key);

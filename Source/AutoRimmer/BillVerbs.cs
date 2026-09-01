@@ -15,9 +15,23 @@ namespace AutoRimmer
     //   bill-remove  {bench, index|uid|recipe|all}          the row's X
     //
     // Reading bills is 2.4's `bills`; this file only writes, and it uses 2.4's
-    // field names so observe and act speak one vocabulary. Medical bills on a
-    // PAWN are 3.4's `surgery-*` and are deliberately NOT reachable from here
-    // (see the Building_WorkTable gate below).
+    // field names so observe and act speak one vocabulary.
+    //
+    // MEDICAL BILLS ON A PAWN ARE PARTLY REACHABLE FROM HERE, and it is worth
+    // stating precisely because the obvious reading is wrong. A Pawn IS in
+    // `ThingRequestGroup.PotentialBillGiver` — Verse/ThingListGroupHelper.cs
+    // makes that group `!def.AllRecipes.NullOrEmpty()`, and a humanlike race
+    // def has surgeries in AllRecipes (3.4's own acceptance check 4.6a proves
+    // it against the live bench) — so `BenchArg` resolves a pawn id, and
+    // `bill-set` / `bill-reorder` / `bill-remove` gate on `IBillGiver`, whose
+    // BillStack for a Pawn is `health.surgeryBills`. That is DELIBERATE and it
+    // matches the widget: RimWorld/Bill.cs DoInterface draws the suspend, the
+    // reorder arrows and the X in EVERY bill listing, the Health tab's
+    // included. What is work-table-only is the ADD path — `bill-options` and
+    // `bill-add`, whose whole gate is ITab_Bills — and the Dialog_BillConfig
+    // levers, which `Configure` refuses by name on a non-Bill_Production. The
+    // surgery levers stay on 3.4's `surgery-*`. See the Building_WorkTable
+    // gate below and `Configure`'s `prod == null` branch, which says the same.
     //
     // Storage settings live in StorageVerbs.cs, on the same partial class, for
     // the reason the spec bundles them: a bill without a place to put its
@@ -184,10 +198,14 @@ namespace AutoRimmer
                 ["source"] = WorldSafe.ResearchRefsOk ? "backing-field" : "unavailable",
                 ["note"] = "`addable:false` rows are the ones ITab_Bills.FillTab does NOT DRAW at all — "
                     + "vanilla omits the row rather than explaining it, so `gate` and `reason` are "
-                    + "MOD-AUTHORED (the game publishes no string here; RecipeDef.AvailableNow and "
-                    + "AvailableOnNow are bools). BillStack.AddBill would accept any of them and the "
-                    + "bill would never be worked. Research state is read through WorldSafe's guarded "
-                    + "route, never ResearchProjectDef.IsFinished (which writes the save).",
+                    + "MOD-AUTHORED unless the reason says GAME-AUTHORED. RecipeDef.AvailableNow is a "
+                    + "bool over four clauses and each is re-asked separately so `gate` names WHICH "
+                    + "(research | meme | faction-recipe-tag | ideo-precept); the bench clause is asked "
+                    + "as RecipeWorker.AvailableReport rather than AvailableOnNow, which is the same "
+                    + "call with a reason string an override may fill in. BillStack.AddBill would accept "
+                    + "any of these rows and the bill would never be worked. Research state is read "
+                    + "through WorldSafe's guarded route, never ResearchProjectDef.IsFinished (which "
+                    + "writes the save).",
             };
         }
 
@@ -236,6 +254,13 @@ namespace AutoRimmer
             // return the text. See the file header.
             var warnings = AddWarnings(table, recipe);
 
+            // EVERY CONFIG ARGUMENT, VALIDATED BEFORE THE FIRST WRITE. Config
+            // is applied after AddBill (it has to be — see below), so a parse
+            // that throws down there would report `bad-args` over a stack that
+            // already has the bill in it, with no journal row. See
+            // ValidateBillArgs.
+            ValidateBillArgs(a);
+
             Bill bill;
             try
             {
@@ -256,7 +281,24 @@ namespace AutoRimmer
             // `billStack.billGiver.Map` and is null until the bill is in a stack.
             var changed = new List<object>();
             var refusedFields = new List<object>();
-            Configure(map, bill, a, changed, refusedFields);
+            // The bill IS in the stack from here on, so nothing below may
+            // escape as an exception: `code:"exception"` would be the same
+            // silent-partial-mutation report `bad-args` was, one class up. An
+            // unexpected throw out of a modded ThingFilter or store-mode def
+            // becomes a refusal line and the verb still journals the add.
+            try { Configure(map, bill, a, changed, refusedFields); }
+            catch (Exception e)
+            {
+                refusedFields.Add(new Dictionary<string, object>
+                {
+                    ["field"] = "(configure)",
+                    ["gate"] = "exception",
+                    ["reason"] = e.GetType().Name + ": " + e.Message
+                        + " — THE BILL IS IN THE STACK. Configuration stopped where it threw; "
+                        + "`configured` lists what was written before that. Fix with `bill-set`, "
+                        + "or `bill-remove` and start again.",
+                });
+            }
 
             int index = stack.IndexOf(bill);
             long seq = Act(V, "add", bench.def.defName + " #" + bench.thingIDNumber + ": " + recipe.defName,
@@ -323,13 +365,31 @@ namespace AutoRimmer
                 };
 
             var targets = SelectBills(stack, a);
+            // BEFORE THE LOOP, for the same reason bill-add validates before
+            // AddBill: Configure writes lever by lever, so a malformed argument
+            // discovered halfway through used to leave the first bill (and,
+            // under `all:true`, every bill before the throw) half-written and
+            // report a clean `bad-args` with no journal row.
+            ValidateBillArgs(a);
+
             var results = new List<object>();
             int touched = 0;
             foreach (var bill in targets)
             {
                 var changed = new List<object>();
                 var refusedFields = new List<object>();
-                Configure(map, bill, a, changed, refusedFields);
+                try { Configure(map, bill, a, changed, refusedFields); }
+                catch (Exception e)
+                {
+                    refusedFields.Add(new Dictionary<string, object>
+                    {
+                        ["field"] = "(configure)",
+                        ["gate"] = "exception",
+                        ["reason"] = e.GetType().Name + ": " + e.Message
+                            + " — this bill was left as `changed` reports; the rest of the selection "
+                            + "was still processed.",
+                    });
+                }
                 if (changed.Count > 0) touched++;
                 results.Add(new Dictionary<string, object>
                 {
@@ -565,34 +625,65 @@ namespace AutoRimmer
             // dictionary (WorldSafe Class A).
             if (!WorldSafe.RecipeAvailableNow(recipe))
             {
+                // AvailableNow is ONE bool over FOUR unrelated conditions, and
+                // a single "ideo-or-faction" gate with a sentence listing all
+                // three possibilities tells the agent nothing it could act on.
+                // Each clause is therefore asked again, separately, in
+                // AvailableNow's own short-circuit order, and named — the same
+                // treatment the research clause already got, and for the same
+                // reason: ResearchProjectDef.LabelCap, MemeDef.LabelCap and
+                // FactionDef.LabelCap all exist.
                 var missing = MissingResearch(recipe);
-                // The blocking project's own LabelCap is the closest thing to
-                // a game-authored reason that exists on this path — there is no
-                // AcceptanceReport for a production recipe (RecipeWorker
-                // .AvailableReport is only reached from the SURGERY path).
-                reason = missing.Count > 0
-                    ? "research not finished: " + string.Join(", ", missing.ToArray())
+                if (missing.Count > 0)
+                {
+                    reason = "research not finished: " + string.Join(", ", missing.ToArray())
                         + ". MOD-AUTHORED: RecipeDef.AvailableNow is a bool and vanilla omits the row "
                         + "rather than explaining it; the project label is ours, read through "
-                        + "WorldSafe's guarded route."
-                    : "RecipeDef.AvailableNow is false and no research prerequisite is outstanding, so an "
-                        + "ideology meme, a faction recipe tag or fromIdeoBuildingPreceptOnly is blocking "
-                        + "it. MOD-AUTHORED — vanilla omits the row and authors no string.";
-                return missing.Count > 0 ? "research" : "ideo-or-faction";
+                        + "WorldSafe's guarded route.";
+                    return "research";
+                }
+                string ideoGate = WorldSafe.RecipeIdeoBlock(recipe, out string ideoWhy);
+                if (ideoGate != null) { reason = ideoWhy; return ideoGate; }
+                // Every clause we know about says yes and AvailableNow still
+                // says no — a modded RecipeDef override, or a clause added by a
+                // game update. Said plainly rather than blamed on ideology.
+                reason = "RecipeDef.AvailableNow is false, but none of its four clauses (research, "
+                    + "memePrerequisitesAny, factionPrerequisiteTags, fromIdeoBuildingPreceptOnly) "
+                    + "reports as the blocker when asked individually — so something overrides or "
+                    + "extends it on this def. MOD-AUTHORED: vanilla omits the row and authors no string.";
+                return "available-now";
             }
 
-            bool onNow;
-            try { onNow = recipe.AvailableOnNow(table); }
+            // THE REPORT, NOT THE BOOL. `RecipeDef.AvailableOnNow` is
+            // `Worker.AvailableOnNow(thing, part)`; `RecipeWorker.AvailableReport`'s
+            // base body is literally `return AvailableOnNow(thing, part);`
+            // (Verse/RecipeWorker.cs), so this is the SAME question with the
+            // same answer — except that an override may return a real string
+            // instead of `false`, and AcceptanceReport's implicit bool operator
+            // makes the base case free. No vanilla PRODUCTION worker overrides
+            // it (only Recipe_ExtractOvum and Recipe_ExtractHemogen do, both
+            // surgery), so this harvests nothing today and harvests a modded
+            // worker's OWN WORDS the moment one exists. 3.4's `surgery-options`
+            // already asks the report; asking the bool here made the two halves
+            // of one codebase ask different members the same question.
+            AcceptanceReport report;
+            try { report = recipe.Worker.AvailableReport(table); }
             catch (Exception e)
             {
-                reason = "RecipeDef.AvailableOnNow threw on this bench: " + e.Message;
+                reason = "RecipeWorker.AvailableReport threw on this bench: " + e.Message;
                 return "available-on-now";
             }
-            if (!onNow)
+            if (!report.Accepted)
             {
-                reason = $"RecipeDef.AvailableOnNow('{table.def.defName}') is false — the recipe worker "
-                    + "refuses this bench in its current state. MOD-AUTHORED: it is a bool with no reason "
-                    + "string, and vanilla omits the row.";
+                string words = string.IsNullOrEmpty(report.Reason) ? null : report.Reason;
+                reason = words != null
+                    ? "the recipe worker refuses this bench: " + words
+                        + " — GAME-AUTHORED, verbatim from "
+                        + recipe.Worker.GetType().Name + ".AvailableReport."
+                    : $"RecipeDef.AvailableOnNow('{table.def.defName}') is false — the recipe worker "
+                        + "refuses this bench in its current state and its AvailableReport supplied no "
+                        + "reason string (the base body is `return AvailableOnNow(thing, part)`, a bool). "
+                        + "MOD-AUTHORED: vanilla omits the row.";
                 return "available-on-now";
             }
             return null;
@@ -708,6 +799,7 @@ namespace AutoRimmer
                     for (int i = 0; i < free.Count; i++)
                         if (MechanitorUtility.IsMechanitor(free[i])) { any = true; break; }
                     if (!any)
+                    {
                         list.Add(new Dictionary<string, object>
                         {
                             ["key"] = "requires-mechanitor",
@@ -716,9 +808,18 @@ namespace AutoRimmer
                             ["note"] = "vanilla ADDS THE BILL ANYWAY and raises a force-pausing "
                                 + "Dialog_MessageBox; returned here instead. The bill is in the stack.",
                         });
-                    // FillTab's chain is if/else-if: the skill branch is not
-                    // reached when the mechanitor branch fires.
-                    return list;
+                        // THE RETURN BELONGS INSIDE THIS BRANCH, and getting it
+                        // wrong is a silent under-report. FillTab's chain is
+                        //   if (Biotech && mechanitorOnlyRecipe && !Any(IsMechanitor)) …
+                        //   else if (!Any(satisfies skill)) …
+                        // — the mechanitor CONDITION includes `!Any`, so the
+                        // else-if is only skipped when the mechanitor branch
+                        // actually FIRED. A mechanitor-only recipe with a
+                        // mechanitor present falls THROUGH to the skill test,
+                        // and vanilla shows the skill dialog. Returning on the
+                        // recipe flag alone reported nothing there.
+                        return list;
+                    }
                 }
 
                 bool anySkilled = false;
@@ -804,19 +905,7 @@ namespace AutoRimmer
             // to 100, because 100 in the widget IS 999.
             if (a.Has("ingredient_radius"))
             {
-                object raw = a.Raw("ingredient_radius");
-                float r;
-                if (raw is string s && string.Equals(s, "unlimited", StringComparison.OrdinalIgnoreCase))
-                    r = 999f;
-                else
-                {
-                    r = (float)a.Num("ingredient_radius", 999);
-                    if (r < 3f)
-                        throw new VerbArgsException(
-                            "ingredient_radius must be >= 3 or \"unlimited\" "
-                            + "(Dialog_BillConfig.DoIngredientConfigPane's slider is 3..100, and >= 100 snaps to 999)");
-                    if (r >= 100f) r = 999f;
-                }
+                float r = ParseRadius(a);
                 bill.ingredientSearchRadius = r;
                 Note("ingredient_radius", r >= 999f ? (object)"unlimited" : (object)WorldSafe.R(r, 0));
             }
@@ -834,12 +923,8 @@ namespace AutoRimmer
             // call reads the same order the player's two clicks would.
             if (a.Has("skill_range"))
             {
-                var range = a.Raw("skill_range") as List<object>;
-                if (range == null || range.Count != 2 || !(range[0] is double) || !(range[1] is double))
-                    throw new VerbArgsException("skill_range must be [min,max], each 0..20");
-                int lo = (int)(double)range[0], hi = (int)(double)range[1];
-                if (lo < 0 || hi > 20 || lo > hi)
-                    throw new VerbArgsException("skill_range must be [min,max] with 0 <= min <= max <= 20");
+                var pair = ParseSkillRange(a);
+                int lo = pair[0], hi = pair[1];
                 if (bill.PawnRestriction != null)
                     No("skill_range", "pawn-restricted",
                         "Dialog_BillConfig draws the skill range only when PawnRestriction is null — a bill "
@@ -865,9 +950,7 @@ namespace AutoRimmer
             // (see the open-question resolution on the issue).
             if (a.Has("name"))
             {
-                string name = a.Str("name");
-                if (name != null && name.Length > 60)
-                    throw new VerbArgsException("name must be 1..60 characters");
+                string name = ParseName(a);
                 prod.RenamableLabel = string.IsNullOrEmpty(name) ? null : name;
                 Note("name", name);
             }
@@ -881,9 +964,9 @@ namespace AutoRimmer
         private static readonly string[] ProductionOnly =
         {
             "repeat", "count", "target", "pause_when_satisfied", "unpause_when_you_have",
-            "include_equipped", "include_tainted", "limit_to_allowed_stuff", "hp_range",
-            "quality_range", "store_mode", "store_target", "filter", "allow", "disallow",
-            "special", "ingredient_radius", "worker", "skill_range", "name",
+            "include_equipped", "include_tainted", "include_from", "limit_to_allowed_stuff",
+            "hp_range", "quality_range", "store_mode", "store_target", "filter", "allow",
+            "disallow", "special", "ingredient_radius", "worker", "skill_range", "name",
         };
 
         private static void ConfigureProduction(Map map, Bill_Production bill, VerbArgs a,
@@ -1015,6 +1098,48 @@ namespace AutoRimmer
                         "drawn only when the product is apparel with apparel.careIfWornByCorpse");
                 else { bill.includeTainted = v; Note("include_tainted", v); }
             }
+            // ---- "Include from" ----------------------------------------------
+            // Dialog_BillConfig.DoWindowContents draws a ButtonText between
+            // IncludeTainted and the hit-point slider, under the SAME two
+            // conditions as the toggles either side of it (TargetCount and
+            // `producedThingDef != null`). Its float menu is
+            //     "IncludeFromAll"                     -> SetIncludeGroup(null)
+            //     FillOutputDropdownOptions(…, slot => SetIncludeGroup(slot))
+            // — the very same helper the store-mode dropdown uses, so the four
+            // gates are identical and ResolveOutputGroup answers both.
+            //
+            // `includeGroup` is scribed (Bill_Production.ExposeData does
+            // SaveSlotReferencable/LoadSlotReferencable on it) and is read by
+            // RecipeWorkerCounter.CountProducts, so it decides what "currently
+            // have" MEANS for a TargetCount bill. Leaving it out was the one
+            // Dialog_BillConfig lever this file neither implemented nor refused
+            // by name — silence, where every other unimplemented control is
+            // named. Implemented rather than refused, because the resolution it
+            // needs was already written for store_target.
+            if (a.Has("include_from"))
+            {
+                object raw = ParseIncludeFrom(a);
+                if (!target || produced == null)
+                    No("include_from", "wrong-repeat-mode", TargetOnly(produced));
+                else if (raw == null)
+                {
+                    // The "IncludeFromAll" option: an explicit null, and the
+                    // dropdown's default reading.
+                    bill.SetIncludeGroup(null);
+                    Note("include_from", "all");
+                }
+                else if (ResolveOutputGroup(map, bill, raw, "include_from", No, out var group))
+                {
+                    bill.SetIncludeGroup(group);
+                    Note("include_from", new Dictionary<string, object>
+                    {
+                        ["group"] = Safe(() => SlotGroup.GetGroupLabel(group)),
+                        ["note"] = "RecipeWorkerCounter.CountProducts now counts only what is in this "
+                            + "storage, so the TargetCount bill's \"currently have\" is scoped to it.",
+                    });
+                }
+            }
+
             if (a.Has("limit_to_allowed_stuff"))
             {
                 bool v = a.Bool("limit_to_allowed_stuff", false);
@@ -1052,13 +1177,8 @@ namespace AutoRimmer
             }
             if (a.Has("quality_range"))
             {
-                var range = a.Raw("quality_range") as List<object>;
-                if (range == null || range.Count != 2 || !(range[0] is string) || !(range[1] is string))
-                    throw new VerbArgsException(
-                        "quality_range must be [min,max] quality names (Awful|Poor|Normal|Good|Excellent|Masterwork|Legendary)");
-                var lo = ParseQuality((string)range[0]);
-                var hi = ParseQuality((string)range[1]);
-                if (lo > hi) throw new VerbArgsException("quality_range min must not exceed max");
+                var qr = ParseQualityRange(a, "quality_range");
+                QualityCategory lo = qr.min, hi = qr.max;
                 bool hasQuality = false;
                 try { hasQuality = produced != null && produced.HasComp(typeof(CompQuality)); } catch { }
                 if (!target || produced == null)
@@ -1097,6 +1217,176 @@ namespace AutoRimmer
             if (def != null) return def;
             throw new VerbArgsException("repeat must be forever|count|target (or a BillRepeatModeDef defName)");
         }
+
+        // ===================== THE ARGUMENT PRE-PASS =========================
+        //
+        // EVERY argument the config path will parse, validated BEFORE the first
+        // write. This is a correctness fix, not tidiness.
+        //
+        // `VerbRegistry.Execute` maps `VerbArgsException` to
+        // `{ok:false, error:{code:"bad-args"}}` with NO indication that
+        // anything changed, and both write paths used to parse arguments AFTER
+        // they had already mutated:
+        //   * `bill-add` ran `stack.AddBill(bill)` and THEN `Configure`, so a
+        //     bad `repeat` word, a negative `count`, a malformed `skill_range`
+        //     — any of a dozen — reported a clean rejection with the bill
+        //     sitting in the stack. The agent reads `bad-args`, retries, and
+        //     now has TWO BILLS.
+        //   * `bill-set` reached the first bill, wrote `suspended`, and threw
+        //     on the next lever — leaving that bill half-configured.
+        // In both cases `Act(...)` is never reached, so there is no journal
+        // row at all: an unprovenanced state change, which is exactly what
+        // Stamp/NoAction exist to prevent and what git-bug 4087644's journal
+        // rule forbids. `storage-set` had the same shape and takes the same
+        // treatment (ValidateStorageArgs).
+        //
+        // THE SPLIT IS THE FILE'S OWN LINE, and it is why this is not simply
+        // "turn the throws into No(...)": a MALFORMED ARGUMENT is the caller's
+        // error, is `bad-args`, and belongs here, before anything moves. A GATE
+        // ("Dialog_BillConfig does not draw this control for this bill") is the
+        // game's answer, is per-bill state, and stays a `No(field, gate,
+        // reason)` refusal inside Configure with the verb still succeeding.
+        // Collapsing the first into the second would return `ok:true` for a
+        // typo, which is the failure this whole file is written against.
+        //
+        // Nothing below touches game state — def lookups and enum parses only —
+        // so it is safe to run against a bill that does not exist yet.
+        private static void ValidateBillArgs(VerbArgs a)
+        {
+            if (a.Has("suspended")) a.Bool("suspended", false);
+            if (a.Has("ingredient_radius")) ParseRadius(a);
+            if (a.Has("worker"))
+            {
+                string want = a.StrReq("worker");
+                if (!IsWorkerKeyword(want)) ParsePawnId(want);
+            }
+            if (a.Has("skill_range")) ParseSkillRange(a);
+            if (a.Has("name")) ParseName(a);
+
+            if (a.Has("repeat")) RepeatMode(a.StrReq("repeat"));
+            if (a.Has("count") && a.IntReq("count") < 0)
+                throw new VerbArgsException("count must be >= 0");
+            if (a.Has("target") && a.IntReq("target") < 0)
+                throw new VerbArgsException("target must be >= 0");
+            if (a.Has("unpause_when_you_have") && a.IntReq("unpause_when_you_have") < 0)
+                throw new VerbArgsException("unpause_when_you_have must be >= 0");
+            if (a.Has("pause_when_satisfied")) a.Bool("pause_when_satisfied", false);
+            if (a.Has("include_equipped")) a.Bool("include_equipped", false);
+            if (a.Has("include_tainted")) a.Bool("include_tainted", false);
+            if (a.Has("limit_to_allowed_stuff")) a.Bool("limit_to_allowed_stuff", false);
+            if (a.Has("hp_range")) Pct01(a, "hp_range");
+            if (a.Has("quality_range")) ParseQualityRange(a, "quality_range");
+            if (a.Has("store_mode")) ParseStoreMode(a.Str("store_mode"));
+            if (a.Has("include_from")) ParseIncludeFrom(a);
+
+            StorageFilterOps.Validate(a);
+        }
+
+        // The same pre-pass for the storage side. `ParseStoragePriority`,
+        // `Pct01`, `ParseQualityRange` and the filter word check all used to
+        // throw INSIDE `storage-set`'s per-target loop, after `copy_from` and
+        // `priority` had already been written to that target — and, with
+        // `targets` plural, after earlier targets had been written in full.
+        // `copy_from`'s own resolution stays a refusal: it is a LOOKUP against
+        // live map state, not a parse, and it already reports as one.
+        private static void ValidateStorageArgs(VerbArgs a)
+        {
+            if (a.Has("priority")) ParseStoragePriority(a.Str("priority"));
+            if (a.Has("hp_range")) Pct01(a, "hp_range");
+            if (a.Has("quality_range")) ParseQualityRange(a, "quality_range");
+            StorageFilterOps.Validate(a);
+        }
+
+        // Dialog_BillConfig.DoIngredientConfigPane: a slider over 3..100 whose
+        // value snaps to 999 ("unlimited") at >= 100. The reachable domain is
+        // [3,100) plus 999, and any number >= 100 means unlimited — reproduced
+        // exactly rather than clamped to 100, because 100 in the widget IS 999.
+        private static float ParseRadius(VerbArgs a)
+        {
+            object raw = a.Raw("ingredient_radius");
+            if (raw is string s && string.Equals(s, "unlimited", StringComparison.OrdinalIgnoreCase))
+                return 999f;
+            float r = (float)a.Num("ingredient_radius", 999);
+            if (r < 3f)
+                throw new VerbArgsException(
+                    "ingredient_radius must be >= 3 or \"unlimited\" "
+                    + "(Dialog_BillConfig.DoIngredientConfigPane's slider is 3..100, and >= 100 snaps to 999)");
+            return r >= 100f ? 999f : r;
+        }
+
+        private static int[] ParseSkillRange(VerbArgs a)
+        {
+            var range = a.Raw("skill_range") as List<object>;
+            if (range == null || range.Count != 2 || !(range[0] is double) || !(range[1] is double))
+                throw new VerbArgsException("skill_range must be [min,max], each 0..20");
+            int lo = (int)(double)range[0], hi = (int)(double)range[1];
+            if (lo < 0 || hi > 20 || lo > hi)
+                throw new VerbArgsException("skill_range must be [min,max] with 0 <= min <= max <= 20");
+            return new[] { lo, hi };
+        }
+
+        private static string ParseName(VerbArgs a)
+        {
+            string name = a.Str("name");
+            if (name != null && name.Length > 60)
+                throw new VerbArgsException("name must be 1..60 characters");
+            return name;
+        }
+
+        private static QualityRange ParseQualityRange(VerbArgs a, string key)
+        {
+            var range = a.Raw(key) as List<object>;
+            if (range == null || range.Count != 2 || !(range[0] is string) || !(range[1] is string))
+                throw new VerbArgsException(key
+                    + " must be [min,max] quality names (Awful|Poor|Normal|Good|Excellent|Masterwork|Legendary)");
+            var lo = ParseQuality((string)range[0]);
+            var hi = ParseQuality((string)range[1]);
+            if (lo > hi) throw new VerbArgsException(key + " min must not exceed max");
+            return new QualityRange(lo, hi);
+        }
+
+        private static BillStoreModeDef ParseStoreMode(string modeName)
+        {
+            if (modeName == null) return BillStoreModeDefOf.SpecificStockpile;
+            if (string.Equals(modeName, "drop", StringComparison.OrdinalIgnoreCase))
+                return BillStoreModeDefOf.DropOnFloor;
+            if (string.Equals(modeName, "best", StringComparison.OrdinalIgnoreCase))
+                return BillStoreModeDefOf.BestStockpile;
+            if (string.Equals(modeName, "specific", StringComparison.OrdinalIgnoreCase))
+                return BillStoreModeDefOf.SpecificStockpile;
+            var def = DefDatabase<BillStoreModeDef>.GetNamedSilentFail(modeName);
+            if (def == null)
+                throw new VerbArgsException(
+                    "store_mode must be drop|best|specific (or a BillStoreModeDef defName)");
+            return def;
+        }
+
+        // `include_from` takes a storage target or the word "all" — the
+        // "IncludeFromAll" option, which is SetIncludeGroup(null). Shape only;
+        // resolving the target needs the map and happens at the write.
+        private static object ParseIncludeFrom(VerbArgs a)
+        {
+            object raw = a.Raw("include_from");
+            if (raw == null) return null;
+            if (raw is double) return raw;
+            if (raw is string s)
+            {
+                if (string.Equals(s, "all", StringComparison.OrdinalIgnoreCase)) return null;
+                return raw;
+            }
+            throw new VerbArgsException(
+                "include_from must be \"all\" (or null) for IncludeFromAll, or a storage target "
+                + "(\"zone:<id>\", \"thing:<id>\", or a thing id)");
+        }
+
+        // The four keywords GeneratePawnRestrictionOptions offers besides a
+        // named pawn. Kept beside ParsePawnId so the pre-pass and SetWorker
+        // cannot disagree about what is a keyword and what is an id.
+        private static bool IsWorkerKeyword(string want)
+            => string.Equals(want, "any", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(want, "slave", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(want, "mech", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(want, "non-mech", StringComparison.OrdinalIgnoreCase);
 
         private static QualityCategory ParseQuality(string s)
         {
@@ -1168,12 +1458,26 @@ namespace AutoRimmer
             // draws from PawnsFinder.AllMaps_FreeColonists — NOT this map only
             // — and gives a NULL action (an unclickable row) to any pawn with
             // `WorkTypeIsDisabled(workGiver.workType)`.
+            //
+            // SNAPSHOTTED, and the getter is doubly shared (WorldSafe Class E):
+            // RimWorld/PawnsFinder.cs AllMaps_FreeColonists opens with
+            // `allMaps_FreeColonists_Result.Clear()` on a STATIC list, and on a
+            // single-map game — every bench colony — it returns
+            // `maps[0].mapPawns.FreeColonists` directly, which is itself a
+            // per-faction cache cleared and refilled on read. Vanilla walks it
+            // inside a UI frame where nothing re-enters; nothing in this loop
+            // re-enters it either, but AddWarnings two hundred lines above
+            // already snapshots the same family and the cost is one list.
             int id = ParsePawnId(want);
             Pawn found = null;
             try
             {
-                foreach (var p in PawnsFinder.AllMaps_FreeColonists)
+                var freeAllMaps = new List<Pawn>(PawnsFinder.AllMaps_FreeColonists);
+                for (int i = 0; i < freeAllMaps.Count; i++)
+                {
+                    var p = freeAllMaps[i];
                     if (p != null && p.thingIDNumber == id) { found = p; break; }
+                }
             }
             catch { }
             if (found == null)
@@ -1249,27 +1553,71 @@ namespace AutoRimmer
         // a red error and `Bill_Production.SetStoreMode` log-errors on a
         // mode/group mismatch and stores the values anyway, so the pairing is
         // validated here, before the call.
+        // `Dialog_BillConfig.FillOutputDropdownOptions` + `FillSlotGroupOptions`,
+        // reproduced once. BOTH of the dialog's output dropdowns run through
+        // this same pair — the store-mode one ("store in…") and the
+        // "Include from" one — so both gates are the same four, and factoring
+        // them here is what keeps the second lever from drifting from the
+        // first. Returns false having already called `No`, so the caller's
+        // whole clause is `if (!ResolveOutputGroup(...)) return;`.
+        private static bool ResolveOutputGroup(Map map, Bill_Production bill, object raw,
+            string field, Action<string, string, string> No, out ISlotGroup group)
+        {
+            group = null;
+            var parent = ResolveStoreParent(map, raw, out string why);
+            if (parent == null) { No(field, "not-found", why); return false; }
+            group = SlotGroupOf(parent);
+            if (group == null)
+            {
+                No(field, "no-slot-group",
+                    "that storage has no ISlotGroup, so Dialog_BillConfig's output dropdowns never "
+                    + "offer it (FillOutputDropdownOptions walks "
+                    + "map.haulDestinationManager.AllGroupsListInPriorityOrder)");
+                return false;
+            }
+            // A gate nobody names, and it is not obvious from the outside.
+            // FillOutputDropdownOptions collects a slot group only when
+            //     !(slotGroup.parent is Building_Storage bs) || bs is IRenameable
+            // and NO vanilla Building_Storage implements IRenameable. So an
+            // UNGROUPED storage building — a shelf, a crate — is never offered
+            // in either dropdown; only stockpile zones and STORAGE GROUPS are.
+            // Linking the shelf into a group is exactly what makes it
+            // offerable, which is why that route is named.
+            if (!(group is StorageGroup) && group is SlotGroup sg
+                && sg.parent is Building_Storage && !(sg.parent is IRenameable))
+            {
+                No(field, "ungrouped-storage-building",
+                    "Dialog_BillConfig.FillOutputDropdownOptions collects a slot group only when its "
+                    + "parent is NOT a Building_Storage, or is one that is IRenameable — and no vanilla "
+                    + "Building_Storage is. An ungrouped shelf or crate is therefore never offered in a "
+                    + "bill's output dropdowns. Link it into a storage group with `storage-link` (the "
+                    + "group IS offered, by its label), or target a stockpile zone.");
+                group = null;
+                return false;
+            }
+            // FillSlotGroupOptions: a group the product cannot be stored in is
+            // drawn with a NULL action and "(incompatible)". Unclickable.
+            bool canStore = true;
+            try { canStore = bill.recipe.WorkerCounter.CanPossiblyStore(bill, group); } catch { }
+            if (!canStore)
+            {
+                No(field, "incompatible",
+                    "that storage's filter does not accept "
+                    + (Safe(() => bill.recipe.ProducedThingDef?.defName) ?? "this bill's product")
+                    + " — RecipeWorkerCounter.CanPossiblyStore is false, so "
+                    + "Dialog_BillConfig.FillSlotGroupOptions draws the row with a null action and the "
+                    + "label \"(incompatible)\". Widen the storage filter with `storage-set` first.");
+                group = null;
+                return false;
+            }
+            return true;
+        }
+
         private static void SetStoreMode(Map map, Bill_Production bill, VerbArgs a,
             Action<string, object> Note, Action<string, string, string> No)
         {
-            string modeName = a.Str("store_mode");
             object targetRaw = a.Raw("store_target");
-
-            BillStoreModeDef mode;
-            if (modeName == null) mode = BillStoreModeDefOf.SpecificStockpile;
-            else if (string.Equals(modeName, "drop", StringComparison.OrdinalIgnoreCase))
-                mode = BillStoreModeDefOf.DropOnFloor;
-            else if (string.Equals(modeName, "best", StringComparison.OrdinalIgnoreCase))
-                mode = BillStoreModeDefOf.BestStockpile;
-            else if (string.Equals(modeName, "specific", StringComparison.OrdinalIgnoreCase))
-                mode = BillStoreModeDefOf.SpecificStockpile;
-            else
-            {
-                mode = DefDatabase<BillStoreModeDef>.GetNamedSilentFail(modeName);
-                if (mode == null)
-                    throw new VerbArgsException(
-                        "store_mode must be drop|best|specific (or a BillStoreModeDef defName)");
-            }
+            BillStoreModeDef mode = ParseStoreMode(a.Str("store_mode"));
 
             // Bill_Production.SetStoreMode's own consistency check:
             //   storeMode == SpecificStockpile != (group != null)  -> Log.ErrorOnce
@@ -1294,51 +1642,7 @@ namespace AutoRimmer
             ISlotGroup group = null;
             if (targetRaw != null)
             {
-                var parent = ResolveStoreParent(map, targetRaw, out string why);
-                if (parent == null) { No("store_target", "not-found", why); return; }
-                group = SlotGroupOf(parent);
-                if (group == null)
-                {
-                    No("store_target", "no-slot-group",
-                        "that storage has no ISlotGroup, so Dialog_BillConfig's output dropdown never "
-                        + "offers it (FillOutputDropdownOptions walks "
-                        + "map.haulDestinationManager.AllGroupsListInPriorityOrder)");
-                    return;
-                }
-                // A gate nobody names, and it is not obvious from the outside.
-                // Dialog_BillConfig.FillOutputDropdownOptions collects a slot
-                // group only when
-                //     !(slotGroup.parent is Building_Storage bs) || bs is IRenameable
-                // and NO vanilla Building_Storage implements IRenameable. So an
-                // UNGROUPED storage building — a shelf, a crate — is never
-                // offered as a bill's specific output; only stockpile zones and
-                // STORAGE GROUPS are. Linking the shelf into a group is exactly
-                // what makes it offerable, which is why that route is named.
-                if (!(group is StorageGroup) && group is SlotGroup sg
-                    && sg.parent is Building_Storage && !(sg.parent is IRenameable))
-                {
-                    No("store_target", "ungrouped-storage-building",
-                        "Dialog_BillConfig.FillOutputDropdownOptions collects a slot group only when its "
-                        + "parent is NOT a Building_Storage, or is one that is IRenameable — and no vanilla "
-                        + "Building_Storage is. An ungrouped shelf or crate is therefore never offered as a "
-                        + "bill's specific output. Link it into a storage group with `storage-link` (the "
-                        + "group IS offered, by its label), or target a stockpile zone.");
-                    return;
-                }
-                // FillSlotGroupOptions: a group the product cannot be stored in
-                // is drawn with a NULL action and "(incompatible)". Unclickable.
-                bool canStore = true;
-                try { canStore = bill.recipe.WorkerCounter.CanPossiblyStore(bill, group); } catch { }
-                if (!canStore)
-                {
-                    No("store_target", "incompatible",
-                        "that storage's filter does not accept "
-                        + (Safe(() => bill.recipe.ProducedThingDef?.defName) ?? "this bill's product")
-                        + " — RecipeWorkerCounter.CanPossiblyStore is false, so "
-                        + "Dialog_BillConfig.FillSlotGroupOptions draws the row with a null action and the "
-                        + "label \"(incompatible)\". Widen the storage filter with `storage-set` first.");
-                    return;
-                }
+                if (!ResolveOutputGroup(map, bill, targetRaw, "store_target", No, out group)) return;
             }
 
             bill.SetStoreMode(mode, group);
@@ -1436,6 +1740,10 @@ namespace AutoRimmer
                     d["store_mode"] = Safe(() => prod.GetStoreMode()?.defName);
                     d["store_group"] = Safe(() => prod.GetSlotGroup() == null
                         ? null : SlotGroup.GetGroupLabel(prod.GetSlotGroup()));
+                    // The "Include from" lever, read back. null is
+                    // "IncludeFromAll", which is the dropdown's own wording.
+                    d["include_group"] = Safe(() => prod.GetIncludeSlotGroup() == null
+                        ? null : SlotGroup.GetGroupLabel(prod.GetIncludeSlotGroup()));
                 }
                 d["pawn_restriction"] = b.PawnRestriction?.thingIDNumber;
                 d["slaves_only"] = b.SlavesOnly;
