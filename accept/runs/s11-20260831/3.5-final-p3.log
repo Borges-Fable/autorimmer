@@ -1,0 +1,134 @@
+AutoRimmer spec 3.5 acceptance — dialog + interaction verbs (git-bug 20e5cda)
+                              + the quest observer         (git-bug 548ef48)
+protocol root: /home/dorian/projects/rimworld/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer
+phases: 0 + 3
+
+==============================================================================
+PHASE 0 — the bench, the dev switch, and THE SHAPE CONTRACT
+==============================================================================
+  0.1     OK      precondition: the bench answers `status`
+  0.1a    PASS    `status` publishes data.gameLoaded
+  0.1b    PASS    `status` publishes data.verbs
+  0.1c    PASS    a game is loaded (data.gameLoaded)
+  0.1d    PASS    no force-pausing modal is up before we begin (data.forcePause)
+  0.2     PASS    all 18 ops of 20e5cda + 548ef48 registered
+  0.3     OK      precondition: devMode is ON (the fixtures need it)
+  0.3a    PASS    and the gate refused for a REASON, not silently (error.code)
+  0.4a    PASS    `journal` publishes data.count
+  0.4b    PASS    `journal` publishes data.last_seq
+  0.4c    PASS    `journal` publishes data.events
+  journal watermark seq0 = 2
+  0.5a    PASS    `interactions` publishes data.force_pause
+  0.5b    PASS    `interactions` publishes data.force_pause.count
+  0.5c    PASS    `interactions` publishes data.blocking
+  0.5d    PASS    `interactions` publishes data.letters
+  0.5e    PASS    `interactions` publishes data.windows
+  0.5f    PASS    and the stack is clear before we start (data.force_pause.count)
+  0.6a    PASS    `advance` publishes data.reason
+  0.6b    PASS    `advance` publishes data.ticks_elapsed
+  0.6c    PASS    advance does NOT publish `data.ticks` (4.8g used to read it) (data.ticks)
+  0.7a    PASS    `quests` publishes data.total
+  0.7b    PASS    `quests` publishes data.counts
+  0.7c    PASS    `quests` publishes data.counts.available
+  0.7d    PASS    `quests` publishes data.counts.ongoing
+  0.7e    PASS    `quests` publishes data.counts.ended
+  0.7f    PASS    `quests` publishes data.counts.dismissed
+  0.7g    PASS    `quests` publishes data.counts.with_outstanding_choice
+  0.7h    PASS    `quests` publishes data.quests
+  0.7i    PASS    `quests` publishes data.action
+  0.7j    PASS    `quests` publishes data.action.journal_seq
+  0.7k    PASS    and an observer stamps it null (present AND null, both proved) (data.action.journal_seq)
+  0.8a    PASS    `trade` with no session refuses at gate no-session (data.gate)
+  0.8b    PASS    `trade` publishes data.gate_cite
+  0.8c    PASS    `comms-choose` with no call refuses at gate no-call (data.gate)
+  0.8d    PASS    `comms-choose` publishes data.gate_cite
+  0.9a    PASS    `dialog-dismiss` publishes data.ok
+  0.9b    PASS    `dialog-dismiss` publishes data.dismissed
+  0.9c    PASS    and it dismissed nothing (data.dismissed)
+  0.10a   PASS    `pawns` publishes data.list
+  0.10b   OK      precondition: at least one visible colonist
+  0.10c   OK      precondition: a colonist capable of Social (the negotiator)
+  negotiator N = 19809 (Valentin)
+  0.11    PASS    a refused `trade` carries NO totals block, so the PRESENCE half of the trade shape contract is deferred to 3.2i / 3.8a1 rather than dropped (data.totals)
+
+==============================================================================
+PHASE 3 — 3.5 BULLET 1: a real trade, transacted against the model with no window
+==============================================================================
+  3.1a    OK      precondition: a trader pawn on the map
+  trader = 26674
+  3.2a    PASS    trade-start opened a session (data.ok)
+  3.2b    PASS    the session is active (data.session.active)
+  3.2c    PASS    the trader is named (data.session.trader)
+  3.2d    PASS    ZERO force-pausing windows after trade-start — the deal is transacted, not driven (data.force_pause.count)
+  3.2e    PASS    and the verb says the negotiator did NOT walk (data.negotiator_walked)
+  3.2f    PASS    the scribed-thing-id cost of opening a session is DISCLOSED (data.session_cost.scribed_thing_id)
+  3.2g    PASS    journaled (data.action.journal_seq)
+  3.2h    PASS    the deal has tradeables (data.tradeables_total)
+  3.2i    PASS    `trade-start` publishes data.totals.colony_silver
+  3.2j    PASS    `trade-start` publishes data.totals.colony_silver_post_deal
+  3.2k    PASS    `trade-start` publishes data.totals.trader_silver
+  colony silver at open = 1600
+  3.3     PASS    no Dialog_Trade was stacked (status.forcePause absent)
+  3.4a    PASS    trade summarised the session (data.ok)
+  3.4b    PASS    and states the sign convention in the game's own words
+  3.4c    OK      precondition: something the trader has 10+ of, to buy
+  3.4d    OK      precondition: something the colony has 5+ of, to sell
+  BUY  10 x ComponentIndustrial (index 1, trader has 15)
+  SELL  5 x MealSurvivalPack (index 4, colony has 86)
+  3.5a    PASS    `trade-set` publishes data.accepted.0.was
+  3.5b    PASS    `trade-set` publishes data.accepted.0.max
+  3.5c    PASS    the FIRST out-of-range line is ACCEPTED — Transferable.CanAdjustTo returns WasAccepted while ClampAmount(dest) != CountToTransfer (data.ok)
+  3.5d    PASS    and it started from a ZERO row, which is WHY gate 4 could not fire (data.accepted.0.was)
+  3.5e    PASS    so AdjustTo SILENTLY CLAMPED it to the game's own maximum (accepted.0.count == accepted.0.max, both far below the 10014 asked for)
+  3.5f    PASS    a clamp IS a write, so this call DID journal (data.action.journal_seq)
+  3.5g    PASS    `trade-set` publishes data.rejected.0.requested
+  3.5h    PASS    `trade-set` publishes data.action.journal_seq
+  3.5i    PASS    the SECOND, IDENTICAL line is REFUSED — ClampAmount(dest) now EQUALS CountToTransfer, so CanAdjustTo reaches OverflowReport() (data.ok)
+  3.5j    PASS    and names the gate (data.rejected.0.gate)
+  3.5k    PASS    with the game's own bounds echoed — and the max it names is exactly the count call one was clamped to (data.rejected.0.max)
+  3.5l    PASS    and the request echoed back verbatim (data.rejected.0.requested)
+  3.5m    PASS    nothing was journaled for a wholly refused call (data.action.journal_seq)
+  3.5n    PASS    THE INVARIANT: no "Failed to adjust transferable counts" red error, across BOTH calls (data.count)
+  3.6a    PASS    trade-set accepted both lines in ONE call (data.ok)
+  3.6b    PASS    two accepted (data.accepted)
+  3.6c    PASS    none rejected (data.rejected)
+  3.6d    PASS    the buy line reads +10 (data.accepted.0.count)
+  3.6e    PASS    and its action is PlayerBuys (data.accepted.0.action)
+  3.6f    PASS    the sell line reads -5 (data.accepted.1.count)
+  3.6g    PASS    and its action is PlayerSells (data.accepted.1.action)
+  3.6h    PASS    THREE lines carry an action — the buy, the sell, AND the silver row (data.totals.lines_with_action)
+  3.6i    PASS    journaled (data.action.journal_seq)
+  3.6j    PASS    still no window on the stack
+  3.7a    PASS    trade-cancel closed the session (data.ok)
+  3.7b    PASS    and TradeSession.Active is now false (data.session_closed)
+  3.7c    PASS    all THREE staged lines are reported as abandoned, silver row included (data.abandoned)
+  3.7d    PASS    and "untouched" is DEFINED in the result, not left to inference
+  3.7e    PASS    journaled (data.action.journal_seq)
+  3.7f    PASS    reading a closed session is refused, not an NRE (data.ok)
+  3.7g    PASS    and names the gate (data.gate)
+  3.7h    PASS    a fresh session opens (data.ok)
+  3.7i    PASS    CANCEL WAS UNTOUCHED — colony silver is exactly what it was (data.totals.colony_silver)
+  3.7j    PASS    CANCEL WAS UNTOUCHED — trader stock unchanged
+  3.7k    PASS    CANCEL WAS UNTOUCHED — colony stock unchanged
+  3.8a    PASS    both lines staged again (data.ok)
+  3.8a1   PASS    `trade-set` publishes data.totals.colony_silver
+  3.8a2   PASS    `trade-set` publishes data.totals.colony_silver_post_deal
+  3.8a3   PASS    `trade-set` publishes data.totals.trader_silver
+  buy value 434.6, sell value 434.2; colony silver 1600 -> post-deal 1240 (the trader holds 1178)
+  3.9a    PASS    trade-confirm executed (data.ok)
+  3.9b    PASS    and something actually moved (data.actually_traded)
+  3.9c    PASS    the session was closed by the verb (TradeSession.Close has no vanilla caller) (data.session_closed)
+  3.9d    PASS    journaled (data.action.journal_seq)
+  3.9e    PASS    the transacted lines are echoed as evidence (data.transacted)
+  3.9f    PASS    and the post-trade counts are read BACK from the rebuilt deal (data.after)
+  silver 1600 -> 1240 (delta -360); the deal's own pre-confirm post-deal number promised -360
+  3.9g    PASS    BULLET 1 — colony silver moved by EXACTLY what the deal promised (totals.colony_silver_post_deal - totals.colony_silver, read pre-confirm)
+  3.9h    FAIL    BULLET 1 — the bought stock is now in the colony
+          expected: > 50
+          actual:   50
+  3.9i    PASS    BULLET 1 — the sold stock left the colony
+  3.9j    PASS    THE INVARIANT: the whole trade ran with no window on the stack
+  3.9k    PASS    zero red errors across the whole trade (data.count)
+
+==============================================================================
+RESULT: 1 FAILED of 102 checks — 3.9h
