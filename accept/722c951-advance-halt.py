@@ -143,15 +143,28 @@ def send(op, args=None, timeout=300):
 # whereas here the refusal IS the subject and hiding it in a wrapper would hide
 # the thing under test.
 
+def _bound(args):
+    """Every `until` advance this suite sends carries a hard tick ceiling.
+
+    Not belt-and-braces: without one, an `until` whose predicate is already true
+    at arm time is UNBOUNDED (git-bug 1113019), and a suite that leaves one
+    running poisons every later command with `busy` and exits with the game
+    still burning in-game days. This suite did exactly that once."""
+    a = dict(args)
+    if "until" in a and "timeout_ticks" not in a:
+        a["timeout_ticks"] = UNTIL_TIMEOUT_TICKS
+    return a
+
+
 def advance(args, timeout=600):
     """An advance with NO escape — the mod's defaults, which is what is being
     measured. It may legitimately come back ok:false."""
-    return send("advance", dict(args), timeout=timeout)
+    return send("advance", _bound(args), timeout=timeout)
 
 
 def advance_escaping(args, unread=True, casualties=True, why=WHY, timeout=600):
     """An advance that declares its escapes, each with the required reason."""
-    a = dict(args)
+    a = _bound(args)
     if unread:
         a["unread_ok"] = why
     if casualties:
@@ -165,6 +178,22 @@ def read_journal(since=0, **extra):
     a = {"since_seq": since}
     a.update(extra)
     return send("journal", a)
+
+
+# The lead a `time.tick` target must have to survive the protocol. `now_tick()`
+# is one round trip and arming the advance is a second; `rwa/README.md` puts the
+# floor on each at 0.25-1 s (500 ms poller, inbox files younger than 250 ms
+# ignored), so at ~30 tps the clock can move ~60-120 ticks between reading it
+# and arming against it. A lead inside that window LOSES A RACE: the predicate
+# is false when computed and true when armed, no false->true edge remains, and
+# under session 19's edge rule the halt can never fire.
+#
+# That is git-bug 1113019, found by this suite on 2026-09-01 — check 0.9 armed
+# `time.tick >= 949` at tick 949 and the advance ran 187,541 ticks, stopped only
+# by 722c951's own casualty halt. Two belts here, because either alone is thin:
+# a lead wider than the window, and a hard `timeout_ticks` on every `until`.
+TICK_LEAD = 600
+UNTIL_TIMEOUT_TICKS = 5000
 
 
 def until_tick(target):
@@ -408,7 +437,7 @@ def phase0():
                  ARGS.dry_run or isinstance(t, int),
                  "every advance in this suite is bounded by a `time.tick` "
                  "predicate; without that field there is no non-guessed bound.")
-    a = advance({"until": until_tick((t or 0) + 60)}, timeout=180)
+    a = advance({"until": until_tick((t or 0) + TICK_LEAD)}, timeout=180)
     eq("0.9", "a bounded advance runs", a, "ok", True)
     shape("0.10", "advance", a, "data.journal_read_watermark", int)
     shape("0.11", "advance", a, "data.journal_unread", int)
@@ -504,7 +533,7 @@ def phase1():
        j, "data.read_watermark", seq[1] if len(seq) == 2 else 1)
 
     t = now_tick()
-    a4 = advance({"until": until_tick((t or 0) + 60)}, timeout=180)
+    a4 = advance({"until": until_tick((t or 0) + TICK_LEAD)}, timeout=180)
     eq("1.16", "AFTER the read, the same advance PROCEEDS", a4, "ok", True)
     eq("1.17", "…on its own predicate, not on anything else",
        a4, "data.reason", "condition")
@@ -525,17 +554,17 @@ def phase2():
 
     # -- a reason is REQUIRED and must be a non-empty string ---------------
     t = now_tick()
-    bad = advance({"until": until_tick((t or 0) + 60), "unread_ok": ""}, timeout=120)
+    bad = advance({"until": until_tick((t or 0) + TICK_LEAD), "unread_ok": ""}, timeout=120)
     refused("2.2", "an EMPTY reason is bad-args", bad, "bad-args", "non-empty")
-    bad = advance({"until": until_tick((t or 0) + 60), "unread_ok": 5}, timeout=120)
+    bad = advance({"until": until_tick((t or 0) + TICK_LEAD), "unread_ok": 5}, timeout=120)
     refused("2.3", "a NON-STRING reason is bad-args", bad, "bad-args", "must be a string")
-    bad = advance({"until": until_tick((t or 0) + 60), "through_casualties": "   "},
+    bad = advance({"until": until_tick((t or 0) + TICK_LEAD), "through_casualties": "   "},
                   timeout=120)
     refused("2.4", "a WHITESPACE reason is bad-args too", bad, "bad-args", "non-empty")
 
     # -- the escape proceeds, and says so ----------------------------------
     t = now_tick()
-    a2 = advance_escaping({"until": until_tick((t or 0) + 60)}, casualties=False,
+    a2 = advance_escaping({"until": until_tick((t or 0) + TICK_LEAD)}, casualties=False,
                           timeout=180)
     eq("2.5", "`unread_ok` proceeds", a2, "ok", True)
     eq("2.6", "…and the envelope ECHOES the reason", a2, "data.unread_ok", WHY)
@@ -570,15 +599,15 @@ def phase2():
     jf = read_journal(wm1 if isinstance(wm1, int) else 0, types=["red_error"], limit=2000)
     eq("2.14", "a types-filtered read is MARKED filtered", jf, "data.filtered", True)
     ge("2.15", "…and leaves the rest unread", jf, "data.unread_after", 1)
-    a4 = advance({"until": until_tick((now_tick() or 0) + 60)}, timeout=120)
+    a4 = advance({"until": until_tick((now_tick() or 0) + TICK_LEAD)}, timeout=120)
     refused("2.16", "…so the advance is still refused", a4, "unread-journal")
 
     # -- THE ESCAPE IS PER-CALL AND NOT A MODE ----------------------------
     t = now_tick()
-    a5 = advance_escaping({"until": until_tick((t or 0) + 60)}, casualties=False,
+    a5 = advance_escaping({"until": until_tick((t or 0) + TICK_LEAD)}, casualties=False,
                           timeout=180)
     eq("2.17", "the escape gets past it once", a5, "ok", True)
-    a6 = advance({"until": until_tick((now_tick() or 0) + 60)}, timeout=120)
+    a6 = advance({"until": until_tick((now_tick() or 0) + TICK_LEAD)}, timeout=120)
     refused("2.18", "…and the NEXT advance is refused again — no mode was set",
             a6, "unread-journal")
     clear_journal()
@@ -644,7 +673,7 @@ def phase3():
 
     # The delta the halt itself created must now block the next advance —
     # the two halves of this issue meeting.
-    a2 = advance({"until": until_tick((now_tick() or 0) + 60)}, timeout=120)
+    a2 = advance({"until": until_tick((now_tick() or 0) + TICK_LEAD)}, timeout=120)
     refused("3.17", "the casualty's own journal row now blocks the next advance",
             a2, "unread-journal")
     contains("3.18", "…and the refusal names it by type",
@@ -858,7 +887,7 @@ def phase6():
 
     # The escape covers this refusal too — one flag for "I am deciding to let
     # this happen", not two.
-    a2 = advance_escaping({"until": until_tick((now_tick() or 0) + 60)},
+    a2 = advance_escaping({"until": until_tick((now_tick() or 0) + TICK_LEAD)},
                           unread=True, timeout=180)
     eq("6.9", "`through_casualties` also overrides the deadline refusal", a2, "ok", True)
     shape("6.10", "advance", a2, "data.escaped.bleedout_deadline", dict)
