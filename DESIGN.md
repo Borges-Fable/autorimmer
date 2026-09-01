@@ -1287,3 +1287,25 @@ queue by default (an agent flailing mid-experiment must not page triage).
   by clearing the cell it names, `def` names no cell, and `place-search` is the
   honest answer when `CanSpawnAt` accepted the target and `GenPlace` still found
   nowhere. `8b4839f`.
+- 2026-09-01 (session 15) — **`rot` is a first-class argument, and the default
+  is the verb's OWN model rather than one project-wide answer.**
+  `dev:spawn-thing` had no `rot` at all; it passed whatever `ThingMaker.MakeThing`
+  left, which is `Thing.rotationInt`'s field initialiser, i.e. always North. Its
+  default stays North — the verb models
+  `Verse/DebugThingPlaceHelper.DebugSpawn`, which reaches the
+  `GenSpawn.Spawn(def, c, map, wipeMode)` overload that hard-codes `Rot4.North`
+  — while the siting reads (`site-survey`, `find-rect {def}`) default to
+  `def.defaultPlacingRot`, because they model `Designator_Build`, which starts
+  there. **76 vanilla defs set `defaultPlacingRot` to something other than
+  North**, so unifying the two would silently re-face every building every
+  shipped suite stages, and would do it without a diff to show for it. Two
+  verbs, two models, each citing its own in a comment. The vocabulary is one
+  vocabulary though: `Rot4.ToStringWord`'s four words or the bare 0..3, the same
+  token `map-dump` publishes and `templates/INDEX.md` pinned — and NOT
+  `Verse/Rot4.FromString`, which `Log.Error`s on an unrecognised string and so
+  would let an agent's typo raise a red error, the same trap
+  `ListerThings.ThingsOfDef` sets for MinifiedThing. The corner-to-centre
+  inverse lands with it (`Footprint.TryCentreFor`) and is CHECKED against
+  `GenAdj.OccupiedRect` on every call rather than trusted, because a one-cell
+  placement slide is cumulative on a module grid (`bac4eba`) and a wrong inverse
+  is invisible until it is. `8b4839f`, `c718e4a`.

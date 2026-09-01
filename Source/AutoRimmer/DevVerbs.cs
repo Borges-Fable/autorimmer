@@ -403,6 +403,19 @@ namespace AutoRimmer
             };
             if (t.Stuff != null) d["stuff"] = t.Stuff.defName;
             if (t.Spawned) d["at"] = Positions.Out(t.Position);
+            // The facing AS SPAWNED, by field and never through a description
+            // — Rot4.ToStringWord, the vocabulary map-dump publishes and
+            // Rotations.Arg accepts, so a rotation round-trips. ToStringHuman
+            // is "North".Translate() and would not (session 14, git-bug
+            // 2a7c064).
+            if (t.Spawned) d["rot"] = t.Rotation.ToStringWord();
+            // Presence is the signal, as with `forbidden` below: a multi-cell
+            // thing publishes the rect it actually occupies, which is how
+            // "the pos we were handed round-trips" is proved by field rather
+            // than by re-deriving GenAdj.AdjustForRotation on the caller's
+            // side. A 1x1 thing's rect is its own cell and says nothing.
+            if (t.Spawned && t.def != null && (t.def.Size.x != 1 || t.def.Size.z != 1))
+                d["rect"] = Footprint.Out(t.OccupiedRect());
             var q = t.TryGetComp<CompQuality>();
             if (q != null) d["quality"] = q.Quality.ToString();
             // Present only when true, the same "presence is the signal"
@@ -501,6 +514,26 @@ namespace AutoRimmer
             if (mode != "near" && mode != "direct")
                 throw new VerbArgsException("mode must be 'near' or 'direct'");
 
+            // WHICH WAY IT FACES. There was no way to say until now: the verb
+            // passed whatever `ThingMaker.MakeThing` left, which is
+            // `Thing.rotationInt`'s field initialiser, i.e. always North. You
+            // cannot place a blueprint without a facing, and an interaction
+            // cell MOVES with rotation — the bench refusal git-bug 8b4839f was
+            // filed for is a cell one row south of a north-facing bench, and
+            // the same bench facing east wants a different cell entirely.
+            //
+            // North is kept as the DEFAULT, deliberately, and it is not the
+            // game's universal default. This verb models
+            // Verse/DebugThingPlaceHelper.DebugSpawn, which reaches
+            // `GenSpawn.Spawn(def, c, map, wipeMode)` — the overload that
+            // hard-codes `Rot4.North`. `Designator_Build` starts at
+            // `def.defaultPlacingRot` instead, which is what the siting reads
+            // (site-survey, find-rect {def}) default to, and 76 vanilla defs
+            // set it to something other than North. Flipping this default would
+            // silently re-face every building every shipped suite stages. Two
+            // verbs, two models, each citing its own.
+            Rot4 rot = Rotations.Arg(a, "rot", Rot4.North);
+
             Faction faction = a.Has("faction") ? Dev.FactionArg(a.Str("faction")) : null;
             bool factionGiven = a.Has("faction");
 
@@ -542,6 +575,11 @@ namespace AutoRimmer
                 Thing thing = ThingMaker.MakeThing(def, stuff);
                 if (quality.HasValue) thing.TryGetComp<CompQuality>()?.SetQuality(quality.Value, ArtGenerationContext.Colony);
                 if (minified && thing.def.Minifiable) thing = thing.MakeMinified();
+                // GenPlace.TryPlaceThing takes no rotation and reads the
+                // thing's own, so the facing has to be on the thing before
+                // either branch runs. The setter's spawned-thing guard
+                // (Verse/Thing.Rotation) is not in play: this one is unspawned.
+                thing.Rotation = rot;
                 if (thing.def.CanHaveFaction)
                 {
                     // DebugSpawn's rule, with an explicit override: insect
@@ -564,17 +602,17 @@ namespace AutoRimmer
                     // checked first so a refusal is an error result rather than
                     // a vanilla Log.Error (which the journal would record as a
                     // red_error, breaking the standing zero-red-errors rule).
-                    if (!GenSpawn.CanSpawnAt(def, target, map, thing.Rotation, canWipeEdifices: true))
+                    if (!GenSpawn.CanSpawnAt(def, target, map, rot, canWipeEdifices: true))
                     {
                         ok = false;
-                        var no = WhyNoSpawn(def, target, map, thing.Rotation);
+                        var no = WhyNoSpawn(def, target, map, rot);
                         string why = no?.Reason
                             ?? "GenSpawn.CanSpawnAt refused this cell for " + def.defName;
                         failures.Add(FailureRow(map, target, why, no));
                     }
                     else
                     {
-                        result = GenSpawn.Spawn(thing, target, map, thing.Rotation, WipeMode.VanishOrMoveAside);
+                        result = GenSpawn.Spawn(thing, target, map, rot, WipeMode.VanishOrMoveAside);
                         ok = result != null;
                     }
                 }
@@ -593,7 +631,7 @@ namespace AutoRimmer
                         // reason when there is one, and its absence is itself
                         // the finding: the anchor would have taken it and the
                         // whole disc was still full.
-                        var branch = WhyNoSpawn(def, target, map, thing.Rotation);
+                        var branch = WhyNoSpawn(def, target, map, rot);
                         string why = "GenPlace.TryPlaceThing found no spot for " + def.defName
                             + " in mode " + mode
                             + (branch != null
@@ -653,6 +691,10 @@ namespace AutoRimmer
                     ["stuff"] = stuff?.defName,
                     ["count"] = count,
                     ["at"] = Positions.Out(target),
+                    // The ROW is the durable record of a mutation, so the
+                    // facing goes in it: a building staged the wrong way round
+                    // is invisible in a `placed:1` and permanent in a save.
+                    ["rot"] = rot.ToStringWord(),
                     ["forbid"] = forbid,
                 },
                 ["placed"] = placed,
@@ -686,6 +728,10 @@ namespace AutoRimmer
                 ["requested"] = count,
                 ["placed"] = placed,
                 ["at"] = Positions.Out(target),
+                // What was ASKED for. What a def with randomizeRotationOnSpawn
+                // actually got is in `spawned[].rot`, which is read off the
+                // spawned thing — GenSpawn.Spawn overrides `rot` for those.
+                ["rot"] = rot.ToStringWord(),
                 ["mode"] = mode,
                 ["spawned"] = spawned,
                 ["dev"] = stamp,
