@@ -62,11 +62,19 @@ exists for all 120 verbs with no declaration anywhere.
 
 ## Two traps I hit myself, banked so the next run does not
 
-1. **`status.json` PERSISTS ON DISK ACROSS BENCH RESTARTS.** A waiter keyed on
-   `gameLoaded: true` matched the *previous* session's file and returned
-   immediately, so a whole sweep came back `no-active-game`. The session id had
-   already changed, so even comparing `sid` is not enough on its own — key the
-   wait on `health.state == "ok"`, which is the verdict that consults `age_s`.
+1. **`status.json` PERSISTS ON DISK ACROSS BENCH RESTARTS, and `health.state`
+   ALONE DOES NOT SAVE YOU.** A waiter keyed on `gameLoaded: true` matched the
+   *previous* session's file and returned immediately, so a whole sweep came
+   back `no-active-game`. **This note first said "key the wait on
+   `health.state == "ok"`, which is the verdict that consults `age_s`" — and
+   that is WRONG, measured twice more after it was written.** `age_s` only goes
+   stale after 10s, so for the first ten seconds after a `pkill` the dead
+   session's file still reads `state: "ok"` with a high tick, and a waiter
+   passes instantly. The correct wait needs the **session id to CHANGE**:
+   capture `status.sid` before the restart, then poll for a DIFFERENT `sid`
+   with `gameLoaded: true` and `health.state == "ok"`. Pinning the expected new
+   sid explicitly is better still. Three false positives in one session came
+   from getting this wrong in three different ways.
 2. **`rwa` only builds a list from a REPEATED flag** (`rwa` line 265: a value
    becomes a list on the second occurrence of the same key). `--steps message`
    sends the string `"message"` and earns a clean `arg 'steps' must be an array
