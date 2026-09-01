@@ -59,7 +59,13 @@ seeded world at 250x250, random starting tile.
   many rerolls it took.
 - **One map-generation failure was seen on 2026-08-31** ("error generating a
   map", the `GameAndMapInitExceptionHandlers.ErrorWhileGeneratingMap` path).
-  Evan's call: relaunch and ignore it unless it recurs. If it recurs, THEN dig.
+  Evan's call: relaunch and ignore it unless it recurs. If it recurs, THEN dig —
+  and here is where to start, so you do not re-derive it. The symptom in the
+  protocol is `status.json` frozen at `tick: 0` with `gameLoaded: false`, after
+  which `rwa status` correctly reports `health: down` on a stale heartbeat; the
+  launcher's own stdout carries NO stack. The stack is in Unity's log at
+  `_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/Player.log`
+  — capture it BEFORE relaunching, because the next launch overwrites it.
 - Then stage with dev verbs, all journaled: minimal shelter, starter kit, sane
   skills. `dev:starter-kit` now lands its gear FORBIDDEN by design (`091e3f0`).
 - **PLACE THE KIT AWAY FROM STORAGE if you want the unforbid rehearsal to mean
