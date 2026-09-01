@@ -132,6 +132,7 @@ rwa pawn --id 3
 rwa zone --op delete --id 12
 rwa send status                       # explicit form, needed only for name clashes
 rwa advance --args-json '{"until":{"alert":"Alert_LowFood"},"timeout_ticks":120000}'
+rwa advance --args-json '{"until":{"condition":{"path":"resources.food_days","op":"<","value":6}}}'
 ```
 
 `--args-json` is the escape hatch and the machine-friendly path: it takes the
@@ -205,6 +206,17 @@ rwa journal --json --since "$seq" | jq -r '.data.events[] | "\(.tick)\t\(.type)"
 # the halt event of an until-advance, in full
 rwa advance --until.threat --json | jq '.data.halted_on'
 
+# advance until dawn — a clock predicate, which cannot drift the way a tick
+# budget does, because every evaluation re-reads the real clock
+rwa advance --until.condition.path time.hour --until.condition.op '>=' \
+            --until.condition.value 6 --json | jq -c '.data | {reason, ticks_elapsed, halted_on}'
+
+# advance until the room is BUILT — every element of that transaction resolved
+rwa place-layout templates/bedroom.ir.json --origin 119,126 --stuff '*=WoodLog' --json \
+  | jq -r .data.layout_id                      # -> ly-1
+rwa advance --until.layout ly-1 --timeout_ticks 60000 --json \
+  | jq -c '.data | {reason, ticks_elapsed, halted_on, until}'
+
 # one shape whoever failed: mod error codes and client error codes read alike
 rwa nosuchverb --json | jq -r 'if .ok then "ok" else .error.code end'
 
@@ -221,6 +233,65 @@ line, which is what jq consumes natively.
 ```bash
 rwa tail --json --type letter --type death | jq -r '"\(.tick)\t\(.payload.label // .payload.pawn)"'
 ```
+
+## `advance --until` — halting
+
+Six matchers, one per call. The first four are journal taps and can only fire on
+something that HAPPENS; the last two poll state on a frame cadence.
+
+| matcher | spelling | halts when |
+|---|---|---|
+| letter | `--until.letter` or `--until.letter ThreatBig` | a letter arrives |
+| threat | `--until.threat` | a `ThreatBig`/`ThreatSmall` letter arrives |
+| alert | `--until.alert` or `--until.alert Alert_LowFood` | an alert goes active |
+| event | `--until.event.type death --until.event.contains Izzy` | a journal row matches |
+| condition | `--until.condition.path … --until.condition.op … --until.condition.value …` | a digest reading satisfies the predicate |
+| layout | `--until.layout ly-1` | every element of that transaction is built or cancelled |
+
+`--until.every_frames N` sets the poll cadence for the last two (default 15
+frames, ~0.5s). An unknown `until.*` key is a refusal, and so is a second
+matcher — an ignored matcher arms nothing and looks exactly like an advance that
+ran to its timeout.
+
+**`condition` paths are the digest's own field names**, with or without a
+leading `digest.`. Sections a predicate may address: `time`, `site`, `alerts`,
+`construction`, `colonists`, `resources`, `power`, `threats`. Lists are
+addressed through the section's own `list` — `colonists.list[*].mood_pct`, not
+`colonists[*].mood_pct`, because no section is list-valued at the top level. A
+starred path takes `--until.condition.quantify any|all` (default `any`); a fixed
+index (`list[0]`) works and is usually a mistake, since the list can shrink.
+Operators are `< <= > >= == !=`; `<` and friends need numbers on both sides,
+and strings, bools and `null` compare with `==`/`!=` only.
+
+**A path that does not resolve is refused when the advance is armed**, naming
+the keys that section actually publishes — not treated as never-true, which
+would present as a ten-in-game-day advance that says nothing.
+
+**`condition` requires an EDGE by default.** `time.hour >= 6` is true all
+afternoon, so "advance until dawn" issued at 14:00 waits for midnight and then
+06:00 rather than returning instantly. `--until.condition.edge false` is the
+"assert now" reading. The result's `until.true_when_armed` says whether the
+question was already answered when it was asked.
+
+Every advance with a state matcher publishes a `data.until` block: the predicate
+as parsed, `every_frames`, `evaluations`, `eval_ms_avg`, `eval_ms_per_frame`,
+and — for `layout` — `built`/`cancelled`/`unresolved`/`done` plus, when it did
+NOT finish, `unresolved_items` with each outstanding element's state. That last
+one is why a layout that can never finish is worth more than a fixed-tick
+advance: `awaiting-materials` on all of them is an unreachable-material colony,
+`blocked` is something in the way, `ready` with nobody working is a
+work-priority problem.
+
+```
+rwa advance --until.layout ly-1 --timeout_ticks 60000 --json \
+  | jq -c '.data | {reason, ticks_elapsed} + (.until | {built, unresolved, eval_ms_per_frame})'
+```
+
+Two floors worth knowing. `ResourceCounter.ResourceCounterTick` updates on
+`TicksGame % 204 == 0`, so no `resources.*` reading changes more often than
+every 204 ticks whatever the cadence says. And a halt can be one cadence window
+late by construction — at Ultrafast a frame is up to 30 ticks, so 15 frames
+bounds the lateness at ~450 ticks.
 
 ## Journal
 

@@ -558,7 +558,17 @@ class Bench:
             self.tick = a["start_tick"] + a["target"]
             return self.finish_advance("ticks")
         if time.time() >= a["ends"]:
-            if a["until"]:
+            u = a["until"] or {}
+            # The matcher's OWN name, not always "letter". A state matcher
+            # (spec 1.6) halts on state and emits no journal line, so faking a
+            # letter for it would teach the CLI's offline tests the wrong shape.
+            # This is still a stub: it halts on the clock, not on a predicate.
+            for key, reason in (("condition", "condition"), ("layout", "layout"),
+                                ("threat", "threat"), ("alert", "alert"),
+                                ("event", "event")):
+                if key in u:
+                    return self.finish_advance(reason)
+            if u:
                 self.emit("letter", {"def": "NeutralEvent", "label": "fakebench letter"})
                 return self.finish_advance("letter")
             return self.finish_advance("ticks")

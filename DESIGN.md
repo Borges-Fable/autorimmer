@@ -85,15 +85,33 @@ AnalyzerBridge's, generalized:
 
 Paused by default. The agent acts, then explicitly advances:
 
-    advance { ticks:N | until:{letter|threat|alert|event},
+    advance { ticks:N | until:{letter|threat|alert|event|condition|layout},
               max_tps:T, timeout_ticks:M }
 
-Every `until` matcher is a **journal tap over discrete events** — it hooks
-`Journal.OnEvent` and halts on a match, so it can only fire on something that
-HAPPENS. `threat` is `letter` narrowed to `ThreatBig`/`ThreatSmall`. There is
-deliberately no state-predicate matcher here; see the 2026-08-30 decisions-log
-entry, which records why the original `condition` was moved out of this line and
-into its own issue rather than dropped.
+The first four are **journal taps over discrete events** — they hook
+`Journal.OnEvent` and halt on a match, so they can only fire on something that
+HAPPENS. `threat` is `letter` narrowed to `ThreatBig`/`ThreatSmall`.
+
+The last two (spec 1.6, 2026-09-01) halt on **state**, polled from
+`TimeDriver.Step` on a frame cadence — the same poll site that already watches
+`WindowsForcePause` and `CurTimeSpeed`. `condition` is a predicate over a digest
+path (`{path:"time.hour", op:">=", value:6}` is "advance until dawn");
+`layout` is "every element of this `place-layout` transaction is resolved".
+They exist because nothing is emitted when a continuous value crosses a
+threshold and **nothing at all is emitted when a building finishes**, so
+"advance until the thing I asked for is done" — the most ordinary request an
+agent makes — had no spelling until then.
+
+Two rulings that are easy to get wrong and are recorded in the decisions log:
+a `condition` requires an **edge** by default (`hour >= 6` is true all
+afternoon), and the layout form is a **named family rather than a path**,
+because `construction.frames == 0` is the wrong predicate and no amount of edge
+detection makes it the right one.
+
+**A clock predicate is the one that makes tick arithmetic unnecessary.**
+`advance {ticks:N}` overshoots by up to `MaxTicksPerFrame(speed)` — 30 at
+Ultrafast — and the overshoots accumulate with nothing to re-anchor them. Every
+evaluation of `time.hour` re-reads the real clock, so it cannot drift.
 
 Vanilla ceiling (decompiled `TickManager.cs`): `TickRateMultiplier * 2` ticks
 per frame inside a ~45ms budget; Ultrafast = 15×, dev UltraSpeedBoost = 150×.
@@ -1888,3 +1906,59 @@ queue by default (an agent flailing mid-experiment must not page triage).
   its own verification comment showed was not a decidable predicate: a validator
   that accepts every placed building means the state is one blueprint mode could
   have produced. `1adc737`, `3a5ff6c`.
+- 2026-09-01 (session 19) — **`advance until:{condition|layout}` ships, and the
+  layout form is a NAMED FAMILY rather than a path — because the obvious path is
+  the wrong predicate.** The natural spelling of "wait until the build is done"
+  is `construction.frames == 0`, and on the run that met M2 that predicate was
+  TRUE AT THREE SEPARATE MOMENTS: before `place-layout` was ever sent (empty
+  map), for the ~900 ticks between placement and the first blueprint becoming a
+  frame (a blueprint awaiting materials is not a frame), and again at the end,
+  which is the only one meant. Same-tick evaluation therefore halts instantly on
+  a room that does not exist, and **requiring an edge does not save it** — the
+  middle case is a real false→true→false→true sequence and an edge detector
+  halts on the wrong crossing. What the predicate needs is a scope that is
+  MONOTONE: "every placement in `ly-1` is resolved", where resolved is built or
+  cancelled and never goes back (`Placements.StateOf` carries the argument;
+  `Frame.FailConstruction` interchanges blueprint and frame but never un-builds).
+  The design consequence is the general one: **some predicates are not
+  expressible as an operator over a digest path at all**, so the surface is two
+  forms and not one. `fc287ba`, `36999fd`.
+- 2026-09-01 (session 19) — **A `condition` requires an EDGE by default, and the
+  clock is the case that makes it obvious.** `time.hour >= 6` is true all
+  afternoon, so "advance until dawn" issued at 14:00 must not return instantly;
+  the predicate has to be observed FALSE once before a true reading halts.
+  `edge:false` is the "assert now" reading and is available and is not the
+  default. The advance reports `true_when_armed`, so a caller that asked a
+  question already answered can see that it did. The clock also settles Evan's
+  "focus on time not ticks" (2026-09-01): `advance {ticks:N}` overshoots by up to
+  `MaxTicksPerFrame(speed)` — 30 at Ultrafast — and nothing re-anchors, so the
+  overshoots accumulate and an agent reasoning "20,000 ticks have passed so it
+  must be morning" is wrong by an amount it never sees. A clock predicate cannot
+  drift, because every evaluation re-reads the real clock. `fc287ba` #2.
+- 2026-09-01 (session 19) — **Predicate evaluation builds ONE digest section,
+  and the cadence is in FRAMES.** Frames because 1.8 deleted the per-frame tick
+  budget (`Config`: "`advanceBudgetMs` … is GONE") and `TimeDriver.Step` is a
+  per-frame poll site that already halts on three state facts —
+  `WindowsForcePause`, `CurTimeSpeed == Paused`, the stall watchdog — so this is
+  an addition to an existing site rather than a new category. One section
+  because **a predicate is not one price**: `time` is nine field reads,
+  `resources` walks the counted amounts calling `GetStatValueAbstract` per def,
+  and anything under `colonists.list[*]` costs a `Room.Role` (a full room
+  analysis) per colonist. Building the whole digest to answer a question about
+  the clock would pay for all of it. Two floors are stated rather than enforced:
+  `ResourceCounter.ResourceCounterTick` updates on `TicksGame % 204 == 0`, so no
+  `resources.*` reading moves faster than every 204 ticks whatever the cadence
+  says; and the halt can be one cadence window late by construction. Every
+  advance publishes `until.eval_ms_per_frame` and `until.every_frames`, so both
+  are measured rather than promised. `fc287ba` #1.
+- 2026-09-01 (session 19) — **A path that does not resolve is a REFUSAL at arm
+  time, and `until` takes exactly one matcher with no unknown keys.** The
+  `until` parse was a `ContainsKey` else-if chain: a second matcher was silently
+  outranked by whichever the method checked first, and a misspelled one was
+  silently ignored — `until:{conditon:{…}}` would have armed nothing and
+  presented as an advance that ran to its timeout for no stated reason. That is
+  `7382bdd`'s class with ten in-game days attached, and it is the same shape as
+  `construction --layout_id` answering whole-map. Both are closed here: the
+  predicate is evaluated ONCE when it is armed, which validates the path and
+  seeds the edge, and a broken path names the keys the section actually
+  publishes. `fc287ba`, `36999fd`, `7382bdd`.

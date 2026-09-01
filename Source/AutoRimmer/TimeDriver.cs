@@ -43,6 +43,14 @@ namespace AutoRimmer
         // Halt reasons the advance result can carry:
         //   ticks | timeout | interrupted        — the caller's own terms
         //   letter | threat | alert | event      — the until: matchers
+        //   condition | layout                   — 1.6. A halt on STATE rather
+        //                                          than on an event: a
+        //                                          predicate over the digest's
+        //                                          own field set, or "every
+        //                                          element of this layout is
+        //                                          resolved". See StateWatch.cs
+        //                                          for why the second is a
+        //                                          named family and not a path.
         //   red_error                            — halt_on_error
         //   dialog                               — a force-pausing modal is up
         //                                          (spec 1.7); vanilla stopped
@@ -56,7 +64,11 @@ namespace AutoRimmer
         //                                          out silently.
         //   exception                            — the driver itself threw
         //                                          (a failure result, not this)
-        private enum Until { None, Ticks, Letter, Threat, Alert, Event }
+        // `State` covers both 1.6 matchers; which one it is, and everything
+        // about how it is evaluated, belongs to the StateWatch — so a third
+        // family (research, a bill, a plant's growth) is a subclass and one
+        // parse branch, and nothing here has to learn what it means.
+        private enum Until { None, Ticks, Letter, Threat, Alert, Event, State }
 
         // Written on the main thread; read by the poller for status.json.
         public static volatile bool Active;
@@ -70,6 +82,11 @@ namespace AutoRimmer
         private static string filterB;             // event contains
         private static bool haltOnError;
         private static int timeoutTicks;
+        // 1.6. Non-null only for until:{condition|layout}; polled from Step on
+        // its own frame cadence, never from Notice (wrong thread).
+        private static StateWatch watch;
+        private static int watchFrames;
+        private static int framesSeen;
         private static int startTick;
         private static long startSeq;
         private static DateTime startWall;
@@ -273,10 +290,19 @@ namespace AutoRimmer
             until = Until.Ticks;
             filterA = null;
             filterB = null;
+            watch = null;
             if (untilObj != null)
             {
                 if (!(untilObj is Dictionary<string, object> u))
                     throw new VerbArgsException("'until' must be an object");
+                // ONE MATCHER, AND NO UNKNOWN KEYS. The parse was a ContainsKey
+                // else-if chain, so a second matcher was silently outranked by
+                // whichever came first in this method and a misspelled one was
+                // silently ignored — `until:{conditon:{…}}` would have armed
+                // nothing and run to its timeout. That is the same class as
+                // `construction --layout_id` answering whole-map (git-bug
+                // 36999fd, 7382bdd), and 1.6 is the round that stops paying it.
+                CheckUntilKeys(u);
                 if (u.ContainsKey("letter"))
                 {
                     until = Until.Letter;
@@ -299,7 +325,16 @@ namespace AutoRimmer
                     filterA = eva.StrReq("type");
                     filterB = eva.Str("contains");
                 }
-                else throw new VerbArgsException("until needs one of: letter, threat, alert, event");
+                else
+                {
+                    watch = StateWatch.Parse(u);
+                    if (watch == null)
+                        throw new VerbArgsException(
+                            "until needs one of: letter, threat, alert, event (journal taps), "
+                            + "condition (a predicate over a digest path), layout (every element "
+                            + "of a place-layout transaction resolved)");
+                    until = Until.State;
+                }
             }
 
             haltOnError = args.Bool("halt_on_error", true);
@@ -398,9 +433,84 @@ namespace AutoRimmer
             speedChanges.Clear();
             slowerSpans.Clear();
             slowerNow = false;
+            watchFrames = 0;
+            framesSeen = 0;
+
+            // ARM THE PREDICATE LAST, AND EVALUATE IT ONCE.
+            //
+            // Once, because a path that does not resolve must be a REFUSAL and
+            // not an advance that runs to its timeout: "until.condition.path
+            // 'resources.food_dayz' — resources has no key 'food_dayz'" is
+            // worth more than ten in-game days of silence. And because the
+            // edge needs seeding: a predicate already true when it is armed has
+            // to be observed FALSE before it may halt, or "advance until dawn"
+            // returns instantly at 14:00.
+            //
+            // A refusal here returns a Result rather than throwing, the way
+            // `cannot-set-speed` does — but the clock has already been set by
+            // then, so it is put back first. Nothing is armed and nothing is
+            // left running.
+            if (watch != null)
+            {
+                string refusal = watch is PathWatch pw ? pw.Arm(Find.CurrentMap, startTick)
+                    : watch is LayoutWatch lw ? lw.Arm(startTick)
+                    : null;
+                if (refusal != null)
+                {
+                    // `cmd` was claimed above; release it before returning the
+                    // failure, or a later exit would enqueue a SECOND result
+                    // for a command that has already been answered. (The
+                    // `cannot-set-speed` refusal above does not need this only
+                    // because it returns before the claim.)
+                    System.Threading.Interlocked.Exchange(ref cmd, null);
+                    watch = null;
+                    RestorePause();
+                    return Result.Fail(command.Id, command.Op, Err.BadArgs, refusal);
+                }
+            }
+
             ActiveId = command.Id;
             Active = true;
             return null;
+        }
+
+        // The `until` object's whole vocabulary, in one place. Exactly one
+        // matcher; other keys must be known. The journal taps are this file's;
+        // the state families and their options come from StateWatch, so adding
+        // one does not need an edit here.
+        private static readonly string[] JournalMatchers = { "letter", "threat", "alert", "event" };
+
+        private static bool In(string[] set, string key)
+        {
+            for (int i = 0; i < set.Length; i++) if (set[i] == key) return true;
+            return false;
+        }
+
+        private static void CheckUntilKeys(Dictionary<string, object> u)
+        {
+            var found = new List<string>();
+            foreach (var kv in u)
+            {
+                if (In(JournalMatchers, kv.Key) || In(StateWatch.MatcherKeys, kv.Key))
+                {
+                    found.Add(kv.Key);
+                    continue;
+                }
+                if (In(StateWatch.OptionKeys, kv.Key)) continue;
+                throw new VerbArgsException(
+                    $"unknown key 'until.{kv.Key}'. Matchers: "
+                    + string.Join(", ", JournalMatchers) + ", "
+                    + string.Join(", ", StateWatch.MatcherKeys) + ". Other keys: "
+                    + string.Join(", ", StateWatch.OptionKeys) + ". Refused rather than ignored: "
+                    + "an ignored matcher arms nothing and presents as an advance that ran to its "
+                    + "timeout for no stated reason.");
+            }
+            if (found.Count > 1)
+                throw new VerbArgsException(
+                    "until takes ONE matcher and was given " + found.Count + " ("
+                    + string.Join(", ", found.ToArray()) + "). Two halt conditions in one advance "
+                    + "would need a precedence rule, and picking one silently is the bug this "
+                    + "check exists to stop. Run two advances, or pick the one that matters.");
         }
 
         // Any thread, called synchronously from Journal.Emit.
@@ -603,6 +713,30 @@ namespace AutoRimmer
             }
 
             if (Target >= 0 && TicksDone >= Target) { Finish("ticks"); return; }
+
+            // ---- 1.6: the state predicate --------------------------------
+            //
+            // HERE, and not in Notice(): that tap is documented "any thread,
+            // called synchronously from Journal.Emit", so it may not touch
+            // Verse. Step() is the only legal evaluation site, and it is
+            // already a state-predicate poll site — the two lines below it
+            // poll WindowsForcePause and CurTimeSpeed exactly this way.
+            //
+            // BEFORE the timeout check, deliberately: on the frame where both
+            // are true the caller asked about the predicate, and "your room is
+            // finished" beats "your advance ran out of time".
+            framesSeen++;
+            if (watch != null && ++watchFrames >= watch.EveryFrames)
+            {
+                watchFrames = 0;
+                if (watch.Poll(now, out var evidence))
+                {
+                    Halt(watch.Reason, evidence, 0);
+                    Finish(watch.Reason);
+                    return;
+                }
+            }
+
             if (timeoutTicks > 0 && TicksDone >= timeoutTicks) { Finish("timeout"); return; }
 
             // Speed supervision. NOT re-pinning: we set the speed once and then
@@ -886,7 +1020,28 @@ namespace AutoRimmer
             if (haltEvent != null)
             {
                 data["halted_on"] = haltEvent;
-                data["halted_seq"] = (double)haltSeq;
+                // ONLY WHEN IT NAMES A JOURNAL LINE. `halted_seq` is a journal
+                // sequence, and a state halt has none — the predicate did not
+                // fire because anything was emitted. Publishing 0 would send a
+                // caller to `journal --since 0`, so the key is absent instead
+                // and `halted_on.kind` says what kind of halt it was.
+                if (haltSeq > 0) data["halted_seq"] = (double)haltSeq;
+            }
+            // 1.6. Published on EVERY exit — a timeout, an interrupt, a dialog
+            // — not only on a successful halt. A layout that could not finish
+            // has to hand back which elements were outstanding and why, which
+            // is the whole reason this beats a fixed-tick advance; and a
+            // predicate's measured cost is only interesting when it is
+            // reported unconditionally.
+            if (watch != null)
+            {
+                var report = watch.Report();
+                report["frames"] = framesSeen;
+                report["eval_ms_per_frame"] = framesSeen > 0
+                    ? Math.Round((double)(report.TryGetValue("eval_ms_total", out var t)
+                        && t is double tv ? tv : 0d) / framesSeen, 5)
+                    : 0d;
+                data["until"] = report;
             }
             if (ThermalGovernor.Available)
             {

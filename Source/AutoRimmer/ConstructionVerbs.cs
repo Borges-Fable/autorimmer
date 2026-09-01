@@ -484,6 +484,21 @@ namespace AutoRimmer
 
         // ------------------------------------------------------------ items --
 
+        // The two members `LayoutWatch` needs to name an outstanding element's
+        // state in a timeout report (spec 1.6). Internal rather than public and
+        // deliberately NOT a second copy: `State` is the one precedence rule
+        // (blocked > in-progress > awaiting-materials > ready), and a halt
+        // report that disagreed with `construction` about the same blueprint
+        // would be the worst kind of instrument.
+        internal static Dictionary<int, Pawn> WorkerIndexFor(Map map) => WorkerIndex(map);
+
+        internal static string LiveStateOf(Map map, Thing t, Dictionary<int, Pawn> index)
+        {
+            MaterialRows(map, t, out int missingKinds, out _);
+            var worker = Worker(index, t);
+            return State(Blocking(t, worker), worker, missingKinds);
+        }
+
         private static void Bump(Dictionary<string, int> counts, string key)
             => counts[key] = counts.TryGetValue(key, out var n) ? n + 1 : 1;
 

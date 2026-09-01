@@ -6,8 +6,9 @@ namespace AutoRimmer
     // Optional config.json under the protocol root, read once at init. Every
     // knob has a shipped default; the file exists for bench tuning, not play.
     //
-    //   {"alertScanFrames":30, "maxTpsCap":1000, "stallFrames":300,
-    //    "thermalHalveC":93, "thermalResumeC":90, "thermalSustainS":30,
+    //   {"alertScanFrames":30, "conditionScanFrames":30, "maxTpsCap":1000,
+    //    "stallFrames":300, "thermalHalveC":93, "thermalResumeC":90,
+    //    "thermalSustainS":30,
     //    "thermalPath":"/sys/class/hwmon/hwmon3/temp1_input"}
     //
     // `advanceBudgetMs` was 1.3's per-frame DoSingleTick budget and is GONE:
@@ -17,6 +18,26 @@ namespace AutoRimmer
     public static class Config
     {
         public static int AlertScanFrames = 30;
+
+        // How often `advance {until:{condition|layout}}` evaluates its
+        // predicate (spec 1.6). FRAMES, counted the way AlertScanner counts
+        // them, because 1.8 deleted the tick budget and TimeDriver.Step is a
+        // per-frame poll site.
+        //
+        // 15 frames is ~0.5s at the bench's unwatched 30 fps cap. The number is
+        // a HALT-PRECISION choice, not a cost one: the window is how late a
+        // halt can be, and at Ultrafast a frame is up to 30 ticks, so 15 frames
+        // bounds the overshoot at ~450 ticks — the same order as the 204-tick
+        // quantum `ResourceCounter.ResourceCounterTick` already imposes on
+        // every `resources.*` reading, and far under the 3,180 ticks the M2
+        // bedroom took to build. Halving it halves the lateness and doubles the
+        // evaluations; the advance result publishes `until.eval_ms_per_frame`
+        // so the trade is measured rather than argued. The one predicate worth
+        // RAISING it for is `colonists.list[*]`, which costs a `Room.Role` — a
+        // full room analysis — per colonist per evaluation.
+        //
+        // Per-call override: `until.every_frames`.
+        public static int ConditionScanFrames = 15;
 
         // The bench's own throughput ceiling, enforced regardless of what a
         // caller asks for (DESIGN: "max_tps is a hard thermal cap"). Since 1.8
@@ -62,6 +83,8 @@ namespace AutoRimmer
                 if (cfg == null) return;
                 if (cfg.TryGetValue("alertScanFrames", out var a) && a is double af)
                     AlertScanFrames = Clamp((int)af, 1, 600);
+                if (cfg.TryGetValue("conditionScanFrames", out var cs) && cs is double cf)
+                    ConditionScanFrames = Clamp((int)cf, 1, 600);
                 if (cfg.TryGetValue("maxTpsCap", out var m) && m is double mc)
                     MaxTpsCap = Clamp((int)mc, 1, 10000);
                 if (cfg.TryGetValue("stallFrames", out var s2) && s2 is double sf)

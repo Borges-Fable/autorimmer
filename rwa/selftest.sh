@@ -165,6 +165,23 @@ run 0 "the command file shows the nesting" -- \
 has '"until": {"event": {"type": "death", "contains": "Xitral"}}'
 has '"types": ["letter", "death"]'
 has '"rect": [10, 20, 5, 5]'
+# Spec 1.6's two state matchers, on the CLI side only: that `--until.condition.*`
+# and `--until.layout` reach the mod as the shapes StateWatch parses. Whether the
+# game HALTS on them is a bench question and belongs to accept/fc287ba.
+run 0 "a state predicate nests the same way an event matcher does" -- \
+    "$RWA" advance --json --until.condition.path time.hour --until.condition.op '>=' \
+        --until.condition.value 6 --until.every_frames 10 --timeout 3
+run 0 "the command file shows the predicate" -- \
+    sh -c 'ls -d "$RWA_TRANSCRIPTS"/*/*-advance | tail -1 | xargs -I{} cat {}/cmd.json'
+has '"path": "time.hour"'
+has '"op": ">="'
+has '"value": 6'
+has '"every_frames": 10'
+run 0 "a layout matcher is a bare id, like cancel-layout takes" -- \
+    "$RWA" advance --json --until.layout ly-1 --timeout 3
+run 0 "…and lands as a string, not a number or an object" -- \
+    sh -c 'ls -d "$RWA_TRANSCRIPTS"/*/*-advance | tail -1 | xargs -I{} cat {}/cmd.json'
+has '"until": {"layout": "ly-1"}'
 run 2 "an id the mod would sanitise is rejected up front, not silently rewritten" -- \
     "$RWA" ping --cmd-id 'has.a.dot'
 has "Poller.Sanitize"

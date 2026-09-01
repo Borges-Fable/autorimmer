@@ -125,6 +125,55 @@ namespace AutoRimmer
             };
         }
 
+        // ------------------------------------------------ the predicate view --
+        //
+        // ONE SECTION, BY NAME, for `advance {until:{condition:{path…}}}` (spec
+        // 1.6). The predicate addresses this verb's own field set, so it must
+        // read this verb's own builders — but building the WHOLE digest once
+        // per cadence window would pay for every section to answer a question
+        // about one, and the sections are not the same price. `colonists` costs
+        // a `Room.Role` per colonist (the most expensive line in this file);
+        // `resources` walks the counted amounts calling GetStatValueAbstract
+        // per def; `time` is nine field reads. A predicate on the clock must
+        // not cost a room analysis.
+        //
+        // `changed` is deliberately NOT addressable: it is a journal delta
+        // since a seq the caller passed, so it is a question about the past
+        // rather than a reading of colony state, and there is no `since` to
+        // pass from inside an advance.
+        //
+        // The colonist cap is deliberately the MAXIMUM the verb allows rather
+        // than its context-sized default: `colonists.list[*]` under an `all`
+        // quantifier is wrong — silently, and in the direction of halting early
+        // — if the list it quantifies over was truncated for context budget.
+        // Nothing here is being sent to a model.
+        internal static readonly string[] PredicateSections =
+            { "time", "site", "alerts", "construction", "colonists", "resources", "power", "threats" };
+
+        internal static bool IsPredicateSection(string name)
+        {
+            for (int i = 0; i < PredicateSections.Length; i++)
+                if (PredicateSections[i] == name) return true;
+            return false;
+        }
+
+        internal static Dictionary<string, object> SectionFor(Map map, string name)
+        {
+            if (map == null) return null;
+            switch (name)
+            {
+                case "time": return TimeSection(map);
+                case "site": return WorldSafe.Site(map);
+                case "alerts": return AlertSection();
+                case "construction": return ConstructionVerbs.Section(map);
+                case "colonists": return ColonistSection(map, 200);
+                case "resources": return ResourceSection(map);
+                case "power": return PowerSection(map);
+                case "threats": return ThreatSection(map);
+                default: return null;
+            }
+        }
+
         private static Dictionary<string, object> TimeSection(Map map)
         {
             var tm = Find.TickManager;
