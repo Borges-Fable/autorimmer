@@ -2499,3 +2499,139 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `casualties[0]`, which this suite's fixture makes the standing bleeder; they
   now select the row by `downed` and 6.4b2 asserts the standing half by name.
   `40ed42f`.
+- 2026-09-01 (session 22) — **RimWorld ALREADY RECORDS ELEVEN TIME SERIES, and
+  the mod had never read one; so half of the rates spec is a reader, not a
+  sampler.** `RimWorld/HistoryAutoRecorder.Tick` appends `Worker.PullRecord()`
+  to a public `List<float> records` every `def.recordTicksFrequency` ticks, from
+  `RimWorld/History.HistoryTick`, which `Verse/TickManager.DoSingleTick` calls
+  unconditionally. Eleven recorders, all Core, no DLC adds any (verified against
+  `Data/Core/Defs/Misc/HistoryAutoRecording/HistoryAutoRecorders.xml`): four
+  wealth, colonists, prisoners, mood at 30,000 ticks; adaptation, threat points,
+  pop-adaptation, pop-intent in a `devModeOnly` group. **`devModeOnly` gates the
+  UI TAB and nothing else** — `RimWorld/MainTabWindow_History` guards the group
+  with `!groupLocal.def.devModeOnly || Prefs.DevMode` while `HistoryTick` loops
+  every group — so threat points are recorded on a bench with dev mode off and
+  always have been. `grep -rn "HistoryAutoRecorder" Source/AutoRimmer/` returned
+  NOTHING before this round, and the project had already paid for that: session
+  13 answered "did wealth cause the M1 raids?" by decoding `HistoryAutoRecorder`
+  **out of `Autosave-5.rws` by hand**. That decode is now
+  `accept/fixtures/history-autoRecorderGroups-m1-Autosave-1.xml` and the
+  acceptance suite grades against it offline. The loop this exposes is the one
+  the project most needs to see: `Wealth_Total` and `ThreatPoints` are both
+  recorded and raid points scale with wealth
+  (`StorytellerUtility.DefaultThreatPointsNow` over `PointsPerWealthCurve`), so
+  "we died to raiders, build more guns" raises the threat it is answering, and
+  the game has been graphing both sides all along. `2d9a1da`.
+- 2026-09-01 (session 22) — **INDEX IS TICK, and the map is the GAME's, not
+  ours; `aligned` says when it does not hold.** `HistoryAutoRecorderGroup
+  .DrawGraph` plots sample j at day `(float)j * (float)recordTicksFrequency /
+  60000f`, so index j is tick `j*freq`, and `history` publishes
+  `last_point_tick = (count-1)*freq` beside the live clock. The map holds for a
+  recorder that existed at tick 0, which is all eleven; it does NOT hold for one
+  a mod adds to a live save, because `AddOrRemoveHistoryRecorders` creates it
+  empty at PostLoadInit and `Tick`'s `|| !records.Any()` clause appends
+  immediately at whatever tick that was. Rather than assume the common case, the
+  verb publishes `aligned` — the clock against where the index says the last
+  sample should be — so a series whose index cannot be read as a tick says so
+  instead of being discovered. **And the stored number is not always the value:**
+  `HistoryAutoRecorderWorker_ThreatPoints` stores `DefaultThreatPointsNow / 10f`
+  and `_PopIntent` stores `PopulationIntent * 10f`, warned about only in a
+  human-readable def LABEL ("fun points /10"). `stored_scale` publishes the
+  multiplier and NAMES the member it recovers, keyed on defName for exactly
+  those two so a modded recorder gets nothing rather than a guess. `2d9a1da`.
+- 2026-09-01 (session 22) — **Four History members audited, three routed around,
+  and the one that matters is the one that is not a write.** `Find.History
+  .Groups()`, `HistoryAutoRecorderGroup.recorders`, `HistoryAutoRecorder.records`
+  and the def's `recordTicksFrequency`/`label`/`valueFormat` are plain fields and
+  safe. Routed around: `HistoryAutoRecorderDef.Worker`, a lazy-init
+  `Activator.CreateInstance` into `workerInt`; `Verse/Def.LabelCap`, which caches
+  into `cachedLabelCap` on a getter that reads like a plain accessor (`label` is
+  published instead); `HistoryAutoRecorderGroup.DrawGraph`, which rebuilds
+  `curves` and stamps `cachedGraphTickCount`. **`Worker` is refused for a second
+  reason that outranks the write:** calling `PullRecord()` would RE-DERIVE a
+  number the game has already stored, and for ThreatPoints it would run
+  `DefaultThreatPointsNow` on the spot. Serialize, do not reinvent — and the
+  acceptance suite greps the SOURCE WITH COMMENTS AND STRING LITERALS STRIPPED to
+  assert it, because the file argues about these members at length and the naive
+  grep failed the check for doing the documenting the check exists to reward (it
+  hit the verb's own `source` provenance string, measured on the suite's first
+  run). `2d9a1da`.
+- 2026-09-01 (session 22) — **The sampler CONSUMES `DigestVerb.SectionFor` and
+  re-derives nothing, which is what makes it safe, cheap and forward-compatible
+  at once.** This issue's hazard note says a write-on-read bug in a sampler is
+  MULTIPLIED rather than incidental because it runs on a schedule; consuming a
+  builder whose every accessor is already audited takes that risk to zero
+  instead of re-auditing it. It is also the cheapest design available — the
+  research on this issue found 17-18 of the ~24 candidate scalars already
+  computed by `DigestVerb` — and it means the sampler INHERITS changes to the
+  arithmetic rather than forking them: `spec/temp-control` is adding a rot term
+  to `food_days` in parallel, and nothing in `ColonySampler.cs` needs to know.
+  What is deliberately NOT sampled, each for its own reason: wealth / threat /
+  mood / population, because THE GAME ALREADY RECORDS THEM; hostiles, danger and
+  alerts, because those are EVENTS and `Journal.CountsRange` already answers a
+  count over a window; and **weapons, which is the sharpest gap the research
+  found — across all 133 vanilla alert classes NONE covers armament and
+  `ResourceCounter` cannot help because weapons are Uncounted — but which is a
+  NEW DERIVATION (equipped by pawn scan plus spare by `ThingsInGroup(Weapon)`,
+  disjoint populations) that no digest section publishes yet.** It is filed as
+  its own issue rather than smuggled in here; the field table is its landing
+  site, one row once a section publishes the number. `2d9a1da`.
+- 2026-09-01 (session 22) — **A SLOPE IS A STATEMENT ABOUT A WINDOW, and the
+  window is published beside every number; the span floor is the guard, not the
+  point count.** Least squares rather than an endpoint difference, because
+  colony stocks move in LUMPS — a hunt returns 200 nutrition at once — and an
+  endpoint estimate over a window IS one lump at either end while the regression
+  moves by 1/n (measured in the suite: a series whose true slope is −12/day with
+  one +6 lump at the end reads −5.74 endpoint against −10.56 regression). Two
+  floors: at least 3 points, and at least 15,000 ticks of SPAN. The second is
+  the one that matters. At the 2,500-tick cadence three samples span 5,000 ticks
+  — two in-game hours — and reporting a per-day rate off that is a 12x
+  extrapolation presented as a measurement. Below the floor the answer is
+  `null`, `ready` is false, and `not_ready_why` names the floor that was missed;
+  so the first slope of a run arrives at sample 7, a quarter of an in-game day
+  in. `span_ticks` rides every slope regardless, so the extrapolation factor is
+  never hidden. The default window is 24 points = one in-game day, because a
+  colony's food is periodic on exactly that period and a six-point window
+  reports the slope of lunch. `2d9a1da`.
+- 2026-09-01 (session 22) — **`days_to_zero` is the colony's
+  `ticks_until_bleedout`, it is NULL when the stock is not falling, and that null
+  makes it a BAD PREDICATE TARGET — said in the digest's own header because a
+  hazard documented nowhere a caller looks is not documented.** `61794cd` ruled
+  that `int.MaxValue` is published as null rather than as 2147483647 because a
+  sentinel reads like a real deadline; the same argument gives null for "this is
+  not falling, so there is no honest countdown". But `StateWatch.One()` refuses
+  an ordering operator against null, and the two failure modes are not
+  symmetric: at ARM time it is a clean refusal naming the reading, while
+  MID-ADVANCE `Poll` returns false and never halts — so an advance waiting on
+  `trends.food_days_to_zero <= 2` stops halting the moment food stops falling,
+  which is exactly when the good news arrived, and runs to its timeout. **So
+  predicates want `*_per_day`, which is always a number once `ready` is true, and
+  `*_to_zero` is for the agent to read.** The acceptance suite arms the null case
+  and asserts the refusal, so the sentence cannot quietly stop being true. It is
+  also the number that corrects the game's own 1.6x overstatement: `food_days` is
+  nutrition per head, the UI calls that "days worth", and a colonist eats ~1.6
+  nutrition/day — a MEASURED slope needs no such assumption. `2d9a1da`.
+- 2026-09-01 (session 22) — **The sampler ticks on `GameComponentTick`, its ring
+  is VOLATILE and cleared at every game boundary, and the durable tier is a
+  SEPARATE FILE rather than the journal.** Three decisions, one argument each.
+  (1) `GameComponentUpdate` runs every FRAME including while paused, so sampling
+  there would append identical rows at a wall-clock rate while the agent sat
+  thinking and flatten every slope with data containing no game time;
+  `GameComponentTick` runs inside `DoSingleTick`, which also calls
+  `Find.History.HistoryTick()` immediately before it, so a sample sees a history
+  the game has already updated. (2) The ring is cleared at
+  `Runtime.ResetForGameBoundary` — both detectors, beside `Placements.Clear()` —
+  because **a load can move `TicksGame` BACKWARD** and a regression across that
+  seam fits two timelines at once; scribing it into the save would also put this
+  mod's own writes inside the save-diff that exists to prove the mod does not
+  write. The loss is bounded and VISIBLE: `ready` false, `points` small,
+  `first_tick` now. (3) The durable file is
+  `samples/<sid>.ndjson`, copying `Journal.Flush`'s peek-write-dequeue and
+  bounded-reopen discipline and none of its seq/ring/dedupe machinery —
+  **because `Journal.Emit` would have broken `722c951`.** That refusal rests on
+  "an advance that journaled NOTHING creates no obligation, so a quiet colony
+  never pays for this at all", and a periodic row from inside the tick loop
+  makes every advance longer than one cadence journal something, so every
+  subsequent advance refuses: "your colony has news" becomes "time passed". A
+  separate file costs ~90 lines and changes nothing anybody else relies on.
+  `2d9a1da`, `722c951`.

@@ -147,3 +147,25 @@ Hooks are read-only postfixes on rare paths (letters, messages, log calls,
 deaths, mental breaks, saves). The only recurring work is the alert diff at the
 scan cadence and one queue drain per poller cycle; file I/O happens on the
 poller thread, never the main thread.
+
+## What is NOT here: periodic samples (git-bug 2d9a1da)
+
+The journal is **events-only, by design** — discrete things that happened, each
+with a tick and a seq. It can say "LowFood fired". It cannot say "food has
+fallen 1.5/day for six days". So the colony sampler writes somewhere else:
+
+    <save data>/AutoRimmer/samples/<sid>.ndjson
+
+Same `sid`, same shape of file, a `header` row declaring the column set and then
+one `sample` row per 2,500 game ticks plus a `boundary` row at every game
+boundary. `ColonySampler.cs`'s header is the schema; the `trends` verb publishes
+the file's path as `durable_file`.
+
+**It is a separate file and that is not tidiness.** Emitting a periodic row
+through `Journal.Emit` would have been fewer lines and would have broken
+`722c951`: the unread-journal refusal rests on "an advance that journaled
+NOTHING creates no obligation, so a quiet colony never pays for this at all"
+(`TimeDriver`'s own header). A row emitted from inside the tick loop means every
+advance longer than one cadence journals something, so every subsequent advance
+refuses — which turns "your colony has news you have not read" into "time
+passed", and that is the guard's failure mode rather than its purpose.

@@ -104,6 +104,13 @@ namespace AutoRimmer
                     ScanInbox(batch);
                     while (Runtime.Outgoing.TryDequeue(out var result)) batch.Add(result);
                     Journal.Flush();
+                    // The sample log rides the same cycle (git-bug 2d9a1da). It
+                    // is deliberately NOT inside the journal-consistency
+                    // ordering above: samples are periodic readings rather than
+                    // events, nothing joins them to a result envelope by seq,
+                    // and there is no invariant of the "journal flushed before
+                    // the result" kind to establish for them.
+                    ColonySampler.FlushSamples();
                     for (int i = 0; i < batch.Count; i++) WriteResult(batch[i]);
                     batch.Clear();
                     if ((DateTime.UtcNow - lastStatusWrite).TotalSeconds >= 1)

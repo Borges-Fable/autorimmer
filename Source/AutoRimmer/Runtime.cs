@@ -49,6 +49,17 @@ namespace AutoRimmer
             // so it is safe on either thread. See Placements' header.
             Placements.Clear();
             Layouts.Clear();
+            // git-bug 2d9a1da, and it is here for exactly the reason the two
+            // lines above it are: state indexed by a game that no longer
+            // exists. A sample ring is worse than a stale placement id, though,
+            // because a load can move TicksGame BACKWARD — a regression across
+            // that seam would fit two timelines at once and report a slope that
+            // never happened. Cleared on BOTH detectors (this method is called
+            // from the GameComponent's load/new-game virtuals and from the
+            // poller's heartbeat edge), touches no Verse, and writes a
+            // `boundary` row to the durable sample file so the seam is visible
+            // there too. See ColonySampler's SAVE / LOAD header.
+            ColonySampler.Clear();
             if (TimeDriver.Abandon(Err.NoActiveGame, detail)) answered++;
             while (Pending.TryDequeue(out var cmd))
             {
