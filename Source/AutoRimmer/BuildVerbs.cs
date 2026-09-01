@@ -320,7 +320,7 @@ namespace AutoRimmer
         // is spelled out rather than routed through
         // `GenCollection.NotNullAndContainsAnyElement` so a null on either side
         // is visibly a no-match rather than a silent extension-method behaviour.
-        private static List<Thing> ReplaceableFrames(Map map, BuildableDef def, IntVec3 pos)
+        internal static List<Thing> ReplaceableFrames(Map map, BuildableDef def, IntVec3 pos)
         {
             var found = new List<Thing>();
             var mine = def.blueprintDef?.replaceTags;
@@ -341,7 +341,7 @@ namespace AutoRimmer
         // three-way terrain set is the game's own order, and
         // `RemoveTopLayer(c, !godMode)` becomes `RemoveTopLayer(c, true)` — the
         // player's case, which drops the removed floor's leavings.
-        private static Thing PlaceZeroWork(Map map, BuildableDef def, ThingDef stuff,
+        internal static Thing PlaceZeroWork(Map map, BuildableDef def, ThingDef stuff,
             IntVec3 pos, Rot4 rot)
         {
             if (def is TerrainDef terrain)
