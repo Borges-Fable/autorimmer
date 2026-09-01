@@ -38,19 +38,29 @@ Exit 0 iff every check passes.
 """
 
 import argparse
+import json
 import os
 import sys
 
 # Run from anywhere: this file lives in accept/, `baseviz` is its sibling.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from baseviz.render import occupied_rect
+from baseviz.png import FONT_H, text_width
+from baseviz.render import occupied_rect, render
 
 # A render grid big enough that nothing clamps. The label glyph is deliberately
 # tiny so the box's own size never decides which cell its centre lands in.
 SCALE, OX, OZ, W, H, GX0, GY0 = 20, 0, 0, 40, 40, 0, 0
 TW = TH = 6
 AT = (20, 20)
+
+# Phase 6's input: a real `map-dump` result banked in transcripts/. Chosen
+# because it is the widest one on hand — 213 labels over 51x51, with 1x2, 2x1,
+# 2x2 and 3x2 buildings and East/South/West rotations, so it exercises every
+# branch the constructed cases do and was recorded before any of this was
+# contemplated.
+DUMP = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "transcripts", "20260831T230213", "006-map-dump", "result.json")
 
 GREEN, RED, YELLOW, OFF = "\033[32m", "\033[31m", "\033[33m", "\033[0m"
 PASS = FAIL = 0
@@ -106,7 +116,14 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="also print what the pre-fix formula answered")
+    ap.add_argument("--dump", help="grade phase 6 against this map-dump result.json")
     args = ap.parse_args(argv)
+    global DUMP, TW, TH
+    if args.dump:
+        DUMP = args.dump
+    # Phases 2-5 use a deliberately tiny glyph so the box never decides the
+    # cell; phase 6 measures the real one the renderer would draw.
+    TW, TH = text_width("AB", 2), FONT_H * 2
 
     # ---- 1. the port itself, against the game's own worked example ---------
     # c718e4a states these three rects for a 5x2 HiTechResearchBench about one
@@ -213,6 +230,92 @@ def main(argv=None):
                for sw in (3, 5) for sh in (3, 5)
                for rot in ("North", "East", "South", "West"))
     check("5.2", "and agrees with it for ODD sizes, where no shift is owed", same)
+
+    # ---- 6. the real thing: a banked dump, rendered ------------------------
+    banner("PHASE 6 — graded against a REAL map-dump, not a constructed case")
+    # 2.5's fixture question 4 is "check stove cells against the published
+    # centre", and it is the bullet this issue could not close from a desk.
+    # It does not need a bench: `transcripts/` banks real `map-dump` results,
+    # labels and all. Rendering one offline exercises the same code path the
+    # fixture would and grades the same property, on a map nobody constructed
+    # to make the fix look good.
+    if not os.path.exists(DUMP):
+        check("6.0", "banked dump present at %s" % DUMP, False,
+              "skipping phase 6 — re-point DUMP or pass --dump")
+    else:
+        d = json.load(open(DUMP))["data"]
+        ox, oz, gw, gh = d["origin"][0], d["origin"][1], d["w"], d["h"]
+        labels = d.get("labels") or []
+
+        # (a) the pipeline runs end to end. A render that throws is a louder
+        #     failure than any arithmetic check and costs one call to find.
+        err = None
+        try:
+            im = render(d, None, scale=SCALE)
+        except Exception as e:                      # noqa: BLE001 - reporting it IS the check
+            im, err = None, "%s: %s" % (type(e).__name__, e)
+        check("6.1", "render() completes on a real %dx%d dump with %d labels"
+              % (gw, gh, len(labels)), err is None, err or "")
+
+        def rpx(cx, cz):
+            return (cx - ox) * SCALE, (oz + gh - 1 - cz) * SCALE
+
+        def anchor_of(lab, formula):
+            sw, sh = (lab.get("size") or [1, 1])[:2]
+            if formula == "old":
+                if lab.get("rot") in ("East", "West"):
+                    sw, sh = sh, sw
+                x, y = rpx(lab["at"][0], lab["at"][1])
+                return (x + (sw * SCALE) // 2 - TW // 2,
+                        y + SCALE // 2 - ((sh - 1) * SCALE) // 2 - TH // 2)
+            mnx, mnz, sw, sh = occupied_rect(lab["at"][0], lab["at"][1],
+                                             sw, sh, lab.get("rot"))
+            x, y = rpx(mnx, mnz + sh - 1)
+            return x + (sw * SCALE) // 2 - TW // 2, y + (sh * SCALE) // 2 - TH // 2
+
+        def cell_at(a):
+            return (ox + (a[0] + TW // 2) // SCALE,
+                    oz + gh - 1 - (a[1] + TH // 2) // SCALE)
+
+        # (b) THE grading question: every code sits inside its building's own
+        #     occupied rect, and on the centre CELL where one exists.
+        outside, off_centre, moved = [], [], []
+        for lab in labels:
+            sw, sh = (lab.get("size") or [1, 1])[:2]
+            mnx, mnz, rw, rh = occupied_rect(lab["at"][0], lab["at"][1],
+                                             sw, sh, lab.get("rot"))
+            c = cell_at(anchor_of(lab, "new"))
+            if not (mnx <= c[0] < mnx + rw and mnz <= c[1] < mnz + rh):
+                outside.append((lab, c, (mnx, mnz, rw, rh)))
+            if rw % 2 and rh % 2 and c != tuple(lab["at"]):
+                off_centre.append((lab, c))
+            if c != cell_at(anchor_of(lab, "old")):
+                moved.append(lab)
+
+        check("6.2", "every one of %d codes lands inside its own occupied rect"
+              % len(labels), not outside, "outside: %r" % (outside[:3],))
+        check("6.3", "and on the centre CELL wherever both axes are odd",
+              not off_centre, "off centre: %r" % (off_centre[:3],))
+
+        # (c) teeth again, on real data: the fix must actually have moved
+        #     something here, or this dump is not exercising it and the two
+        #     checks above are decoration.
+        kinds = sorted({("%dx%d" % tuple((m.get("size") or [1, 1])[:2]), m.get("rot"))
+                        for m in moved})
+        check("6.4", "the fix moved %d of %d codes on this dump — %s"
+              % (len(moved), len(labels), kinds or "nothing"),
+              len(moved) > 0,
+              "no label moved, so this dump has no multi-cell or rotated "
+              "building and proves nothing about the fix")
+
+        # (d) and it must NOT have moved the common case. 1x1 is most of any
+        #     real map; a "fix" that shifts those is a regression wearing a
+        #     bug fix's clothes.
+        moved_1x1 = [m for m in moved if tuple((m.get("size") or [1, 1])[:2]) == (1, 1)]
+        check("6.5", "no 1x1 building moved (%d of the %d labels are 1x1)"
+              % (sum(1 for l in labels
+                     if tuple((l.get("size") or [1, 1])[:2]) == (1, 1)), len(labels)),
+              not moved_1x1, "moved: %r" % (moved_1x1[:3],))
 
     print("\n%s%d PASS%s / %s%d FAIL%s"
           % (GREEN, PASS, OFF, RED if FAIL else GREEN, FAIL, OFF))
