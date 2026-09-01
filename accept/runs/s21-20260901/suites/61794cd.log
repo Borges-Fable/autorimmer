@@ -1,0 +1,414 @@
+AutoRimmer acceptance - the bleed-out clock (61794cd)
+                        work_coverage / work-cover / triage (40ed42f)
+protocol root: /home/dorian/projects/rimworld/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer
+phases: 0 + 1, 2, 3, 4, 5, 6, 7, 8
+THIS SUITE WRECKS THE COLONY IT RUNS ON: it damages, dismembers and downs colonists on purpose, because that is the fixture. Reload before running it twice.
+
+==============================================================================
+PHASE 0 - the bench, the verbs, and THE SHAPE CONTRACT
+==============================================================================
+  0.1     OK      precondition: the bench answers `status`
+  0.1b    OK      precondition: a game is loaded
+  0.1c    PASS    the very first act is to stop the clock: this suite's fixture is a colonist bleeding out, and a running bench would kill him mid-suite (data.paused)
+  0.2     PASS    `journal` publishes data.last_seq
+  journal watermark: seq0=12
+  0.3     PASS    `status` publishes the registry
+  0.3a    PASS    the registry lists digest
+  0.3b    PASS    the registry lists pawn
+  0.3c    PASS    the registry lists pawns
+  0.3d    PASS    the registry lists triage
+  0.3e    PASS    the registry lists work-cover
+  0.3f    PASS    the registry lists work-priorities
+  0.3g    PASS    the registry lists rescue
+  0.3h    PASS    the registry lists advance
+  0.3i    PASS    the registry lists journal
+  0.3j    PASS    the registry lists status
+  0.3k    PASS    the registry lists things
+  0.3l    PASS    the registry lists dev:damage
+  0.3m    PASS    the registry lists dev:add-hediff
+  0.3n    PASS    the registry lists dev:heal
+  0.3o    PASS    the registry lists dev:spawn-pawn
+  0.3p    PASS    the registry lists dev:spawn-thing
+  0.4a    OK      precondition: `pawns` answers with a colonist roster
+  roster is 3, spawning 3 more colonists
+  0.4b    OK      precondition: dev:spawn-pawn topped the roster up
+  0.4c    OK      precondition: at least 6 colonists
+  0.4.0   PASS    …and none of them is cut off by the roster cap (data.more)
+  roster: [(570, 'Byrne'), (574, 'Kristen'), (578, 'Unay'), (37547, 'Smelly'), (37551, 'Brooke'), (37555, 'Red')]
+  roles: bleeder=570 handless=574 patient=578 sick=37547 rescuer=37551 spare=[37555]
+  beds on the map at start: 0
+  0.5     OK      precondition: `pawn {id, sections:[health]}` answers
+  0.5a    PASS    `pawn` publishes data.health
+  0.5b    PASS    `pawn` publishes data.health.bleed_rate
+  0.5c    PASS    `pawn` publishes data.health.ticks_until_bleedout
+  0.5d    PASS    `pawn` publishes data.health.bleedout
+  0.5e1   PASS    `pawn` publishes data.health.bleedout.ticks
+  0.5e2   PASS    `pawn` publishes data.health.bleedout.blood_loss_severity
+  0.5e3   PASS    `pawn` publishes data.health.bleedout.outcome
+  0.5e4   PASS    `pawn` publishes data.health.bleedout.deathless_gene
+  0.5e5   PASS    `pawn` publishes data.health.bleedout.prevents_death
+  0.5e6   PASS    `pawn` publishes data.health.bleedout.game_shows_clock
+  0.5e7   PASS    `pawn` publishes data.health.bleedout.cite
+  0.5f    PASS    health.bleedout publishes exactly PawnSerializer.Bleedout's field set (data.health.bleedout)
+  0.5g    PASS    `pawn` publishes data.health.hediffs
+  0.5h    PASS    `pawn` publishes data.health.hediffs_total
+  0.5i    PASS    `pawn` publishes data.health.hediffs_more
+  0.5j    PASS    …and the block cites the game member it reads (data.health.bleedout.cite)
+  0.5k    PASS    …and the widget whose gate game_shows_clock reproduces (data.health.bleedout.cite)
+  0.6     OK      precondition: `digest` answers
+  0.6a    PASS    `digest` publishes data.work_coverage
+  0.6b    PASS    `digest` publishes data.work_coverage.ok
+  0.6c    PASS    `digest` publishes data.work_coverage.under
+  0.6d    PASS    `digest` publishes data.work_coverage.rows
+  0.6e    PASS    `digest` publishes data.work_coverage.total
+  0.6f    PASS    `digest` publishes data.work_coverage.more
+  0.6g    PASS    `digest` publishes data.work_coverage.order
+  0.6h    PASS    `digest` publishes data.work_coverage.note
+  0.6j    PASS    no `error` key — the section computed rather than caught (data.work_coverage.error)
+  0.7     OK      precondition: `triage` answers
+  0.7a    PASS    `triage` publishes data.verb
+  0.7b    PASS    `triage` publishes data.casualties
+  0.7c    PASS    `triage` publishes data.total
+  0.7d    PASS    `triage` publishes data.more
+  0.7e    PASS    `triage` publishes data.counts
+  0.7f    PASS    `triage` publishes data.path_candidates
+  0.7g    PASS    `triage` publishes data.action
+  0.7h    PASS    `triage` publishes data.note
+  0.7i    PASS    triage names itself (data.verb)
+  0.7j    PASS    …and reports the pathfinding cap it used (data.path_candidates)
+  0.7k    PASS    `triage` publishes data.action.journal_seq
+  0.7l    PASS    …and it is null: triage mutates nothing (data.action.journal_seq)
+  0.7m    PASS    …and says so in words (data.action.provenance)
+
+==============================================================================
+PHASE 0b - THE REFUSALS: an ignored argument is a bug, not a default
+==============================================================================
+  0.8a    PASS    triage refuses a pathfinding cap below 1
+  0.8b    PASS    …and above 12, naming the cost that makes it a cap
+  0.9a    PASS    work-cover refuses an unknown work type
+  0.9b    PASS    …and LISTS the set it does cover (error.detail)
+  0.9c    PASS    the set work-cover names is the set the digest counts
+  0.9d    PASS    …and Doctor is in it
+  0.9e    PASS    work-cover refuses priority 0 — it ENABLES a work type
+  0.9f    PASS    …and a priority outside 1..4
+  0.10a   PASS    a near-miss path inside work_coverage is refused at ARM time
+  0.10b   PASS    …and names the keys the section really publishes (error.detail)
+  0.10c   PASS    `<` on a bool is refused rather than coerced
+  0.11a   PASS    every refusal left the game PAUSED (data.time.paused)
+  0.11b   PASS    …at speed Paused, not merely force-paused (data.time.speed)
+
+==============================================================================
+PHASE 1 - 61794cd: the clock, NULL BOTH WAYS on one pawn, and the widget's three-way
+==============================================================================
+  1.0     OK      precondition: the subject is not bleeding to start with
+  1.1a    PASS    `pawn` publishes data.health.ticks_until_bleedout
+  1.1b    PASS    …and it is NULL for a pawn who is not bleeding, never int.MaxValue (data.health.ticks_until_bleedout)
+  1.1c    PASS    `pawn` publishes data.health.bleedout.ticks
+  1.1d    PASS    …and the block's own copy agrees (data.health.bleedout.ticks)
+  1.1e    PASS    no blood loss (data.health.bleedout.blood_loss_severity)
+  1.1f    PASS    …no Deathless gene (data.health.bleedout.deathless_gene)
+  1.1g    PASS    …nothing preventing death (data.health.bleedout.prevents_death)
+  1.1h    PASS    …and `outcome` is still answered for a pawn with no clock: it is a property of the death path, not of the deadline (data.health.bleedout.outcome)
+  1.1i    PASS    …and for a plain colonist that is `death` (data.health.bleedout.outcome)
+  1.1j    PASS    the game shows no clock, because it draws no line below 0.01 bleed (data.health.bleedout.game_shows_clock)
+  1.1k    PASS    game_shows_clock reproduces HealthCardUtility's gate (rate=0 ticks=None deathless=False)
+  1.2     OK      precondition: a light wound landed and left the subject standing
+  light wound: bleed_rate=0.17 ticks=354166
+  1.3a    PASS    `pawn` publishes data.health.ticks_until_bleedout
+  1.3b    PASS    a light bleed has a FINITE clock (data.health.ticks_until_bleedout)
+  1.3c    PASS    …which the game does NOT show, because a clock of a day or more prints WontBleedOutSoon instead of a number (data.health.bleedout.game_shows_clock)
+  1.3d    PASS    game_shows_clock reproduces HealthCardUtility's gate (rate=0.17 ticks=354166 deathless=False)
+  heavy bleed: rate=2.5 ticks=23961 blood_loss=0 downed=False
+  1.5     OK      precondition: the subject now bleeds hard enough for the game to print a figure
+  1.6a    PASS    `pawn` publishes data.health.ticks_until_bleedout
+  1.6b    PASS    a bleeding pawn has a finite clock (data.health.ticks_until_bleedout)
+  1.6c    PASS    …under one in-game day (data.health.ticks_until_bleedout)
+  1.6d    PASS    …and the game DOES show it: this is the number on the health tab (data.health.bleedout.game_shows_clock)
+  1.6e    PASS    game_shows_clock reproduces HealthCardUtility's gate (rate=2.5 ticks=23961 deathless=False)
+  1.6f    PASS    health.ticks_until_bleedout IS health.bleedout.ticks — one builder, so the two cannot drift
+  1.7     PASS    the published clock reproduces the game's own formula from the OTHER two published readings: (1 - 0) / 2.5 * 60000 = 24000 vs 23961 (0.16%)
+  1.8     NOTE    the `coma` outcome and the (Deathless) branch of the widget are NOT staged: they need a Biotech pawn carrying the Deathless gene, and no dev: verb adds a gene. `deathless_gene` is asserted false throughout, so the branch is unexercised rather than silently assumed. The pawn on which `outcome` and `game_shows_clock` deliberately DISAGREE — Deathless with a destroyed brain — is unreachable for the same reason.
+
+==============================================================================
+PHASE 2 - 61794cd: the CAPTAIN SHAPE, and the alternative the Scope proposed, refuted by measurement
+==============================================================================
+  2.0     NOTE    THIS IS A SHAPE RECONSTRUCTION, NOT A REPLAY. 61794cd's fifth acceptance bullet asks for Captain's four reads from RUNS/m1-20260831/ replayed against the new surface. That is NOT DECIDABLE and the issue's own comment #2 says so: the transcript records the OUTPUT of a pawn state, not the state, and the run left no save to reload. What is reconstructed here is his SHAPE — 20+ bleeding injuries plus BloodLoss at the severity the post-mortem back-solved (0.478) — and what is asserted is that BloodLoss survives the truncation his five reads lost it to.
+  2.1     OK      precondition: the subject carries more than 20 visible hediffs, so the cap MUST cut
+  2.2a    PASS    the clock is finite with the hediff list already truncated (data.health.ticks_until_bleedout)
+  2.2b    PASS    …and the truncation is real (data.health.hediffs_more)
+  2.2c    NOTE    BloodLoss is absent from the rows at severity 0 and the clock still reads 23961 — Hediff.Visible returns CurStage.becomeVisible, and BloodLoss stage 0 sets it false, so below 0.15 the row is legitimately not there. That is the decision 'the clock is independent of the hediff list' demonstrated rather than argued.
+  2.3     OK      precondition: BloodLoss at 0.478 landed on the subject
+  captain shape: total=46 rows=20 more=26 clock=12507
+  2.4a    PASS    the pawn carries more than the cap (data.health.hediffs_total)
+  2.4b    PASS    …the list is capped at exactly PawnSerializer.HediffCap
+  2.4c    PASS    …and `hediffs_more` reports honestly what was dropped (data.health.hediffs_more)
+  2.4d    PASS    …and the arithmetic closes: total = rows + more
+  2.5a    PASS    BloodLoss is IN the read despite a real truncation — the row that named the cause of death, which was cut from all five of Captain's reads
+  2.5b    PASS    …and it is ROW 0: Hediff.IsLethal is a band ABOVE bleeding, so a hediff on its own lethal clock outranks every wound
+  2.5c    PASS    …while the rows it beat are the bleeding wounds that produced it (Hediff.BleedRate is 0f for BloodLoss, so it can never be rank 4)
+  2.6a    PASS    at severity 0.478 the BloodLoss row's `life_threatening` is FALSE — RimWorld puts that flag on the fifth stage (minSeverity 0.60), so 'life-threatening first' would have dropped this row exactly as the old sort did
+  2.6b    PASS    …and it is in the read anyway, because the band is IsLethal (lethalSeverity > 0, true for BloodLoss from 0.01) and not lifeThreatening
+  2.7a    PASS    …and the clock is finite the whole time (data.health.ticks_until_bleedout)
+  2.7b    PASS    game_shows_clock reproduces HealthCardUtility's gate (rate=2.5 ticks=12507 deathless=False)
+
+==============================================================================
+PHASE 3 - 40ed42f: digest.work_coverage, a FINE row against an UNDER row
+==============================================================================
+  3.0a    OK      precondition: Doctor can be turned off across the roster
+  3.0b    OK      precondition: exactly one colonist has Doctor enabled
+  sole doctor: 570
+  under=['Doctor'] total=12 more=0
+  3.1a    PASS    with one doctor the block says so (data.work_coverage.ok)
+  3.1b    PASS    …and `under` names Doctor — names only, so a caller can branch without walking rows
+  3.1c    PASS    …and `under` really is names, not rows
+  3.2     OK      precondition: the Doctor row is present in `rows`
+  3.3a    PASS    an UNDER row carries the whole diagnosis
+  3.3b    PASS    Doctor's floor is 2 (data.work_coverage.rows.1.floor)
+  3.3c    PASS    …and it is a floor on AVAILABILITY, not capability, because Alert_NeedDoctor.Patients has `!item.Downed` in it (data.work_coverage.rows.1.floor_on)
+  3.3d    PASS    …and the block says the floor is OURS and names the lesson (data.work_coverage.rows.1.floor_by)
+  3.3e    PASS    …one available doctor (data.work_coverage.rows.1.available)
+  3.3f    PASS    …one short (data.work_coverage.rows.1.short_by)
+  3.3g    PASS    …and `have` is the AVAILABLE count, not the capable one (data.work_coverage.rows.1.have)
+  3.3h    PASS    `digest` publishes data.work_coverage.rows.1.capable
+  3.3i    PASS    `digest` publishes data.work_coverage.rows.1.enabled
+  3.3j    PASS    `digest` publishes data.work_coverage.rows.1.available_pawns
+  3.3k    PASS    `digest` publishes data.work_coverage.rows.1.candidates
+  3.3l    PASS    `digest` publishes data.work_coverage.rows.1.candidates.0.pawn
+  3.3m    PASS    `digest` publishes data.work_coverage.rows.1.candidates.0.id
+  3.3n    PASS    `digest` publishes data.work_coverage.rows.1.candidates.0.skill
+  3.3o    PASS    …and the candidates are RANKED by the game's own order (Pawn_WorkSettings.EnableAndInitialize sorts by AverageOfRelevantSkillsFor descending)
+  3.4     OK      precondition: at least one covered work type to compare against
+  3.4a    PASS    a FINE row costs exactly three fields — the cap only ever eats these (data.work_coverage.rows.0)
+  3.4b    PASS    …and every non-Doctor floor is 1, from the game's own requireCapableColonist list
+  3.5a    PASS    EVERY under-covered row is present in `rows` — an under-covered row is never truncated
+  3.5b    PASS    …and the counts close: rows + more == total
+  3.6     NOTE    WorkCoverage.RowCap is 14 and this bench publishes 12 essential work types, so THE CAP CANNOT FIRE HERE and 3.5a is proved by construction rather than by a live truncation. Phase 9 re-derives both numbers from the source, so the day a mod set pushes the count past the cap this note fails instead of quietly becoming false.
+  3.6a    PASS    nothing was dropped, as the arithmetic requires (data.work_coverage.more)
+  3.7     FINDING digest.work_coverage.order says 'under-first, then natural-priority-desc', but the first UNDER row is at index 1: WorkCoverage.Section emits rows in ONE pass over the natural-priority-sorted list and appends under-rows inline, so the real order is natural-priority-desc with under rows wherever they fall. A caller trusting the string would read rows[0] as the worst problem; here rows[0] is 'Firefighter' and is fine. Filed on 40ed42f.
+
+==============================================================================
+PHASE 4 - 40ed42f: ENABLED BUT INCAPABLE, with a real pawn
+==============================================================================
+  4.1     OK      precondition: the subject is now incapable of manipulation
+  4.2     OK      precondition: the pawn's Manipulation really is gone
+  4.3     OK      precondition: Doctor is enabled on the handless pawn
+  doctor row: {"work":"Doctor","floor":2,"floor_on":"available","floor_by":"autorimmer:one-doctor-is-zero-doctors","have":1,"short_by":1,"capable":6,"enabled":2,"available":1,"available_pawns":["Byrne"],"candidates":[{"pawn":"Smelly","id":37547,"skill":10,"top_skill":"Medicine","level":10,"passion":"Major"},{"pawn":"Unay","id":578,"skill":10,"top_skill":"Medicine","level":10,"passion":"Minor"},{"pawn":"Red","id
+  4.4a    PASS    the colony still has one AVAILABLE doctor (data.work_coverage.rows.1.available)
+  4.4b    PASS    …but two with the work type ENABLED (data.work_coverage.rows.1.enabled)
+  4.4c    PASS    …so `enabled` and `available` have separated, which is the trap one level below 'is Doctor covered'
+  4.4d    PASS    …and the handless pawn is still CAPABLE — losing hands is not WorkTypeIsDisabled (data.work_coverage.rows.1.capable)
+  4.5a    PASS    `digest` publishes data.work_coverage.rows.1.enabled_but_incapable
+  4.5b    PASS    …and it names a pawn
+  4.5c    PASS    `digest` publishes data.work_coverage.rows.1.enabled_but_incapable.0.pawn
+  4.5d    PASS    …and the CAPACITY the game's own work-givers require (WorkGiver.MissingRequiredCapacity over the union of the type's work-givers) (data.work_coverage.rows.1.enabled_but_incapable.0.missing_capacity)
+  4.5e    PASS    …and that pawn is NOT counted as available
+  4.6     NOTE    work-cover planned a full repair in the dry run, so no `still_under` row carried the impaired list on this call — the digest row at 4.5 is the witness the acceptance bullet asks for.
+  4.7     FINDING `enabled_but_incapable` is unreachable on a COVERED row: WorkCoverage.Section builds the diagnosis inside the `if (r.Under)` branch, so a colony with two available doctors and a handless third is told nothing about the third. The block is a diagnosis and there is arguably no problem to diagnose — but 'you have a doctor who cannot tend' is the kind of thing the M1 post-mortem exists about. Filed on 40ed42f, not asserted either way.
+
+==============================================================================
+PHASE 5 - 40ed42f: work-cover, the dry run that writes nothing and the promotion that reaches the ledger
+==============================================================================
+  5.1a    PASS    the envelope stays ok:true — a refusal is information, not breakage (ok)
+  5.1b    PASS    …and the verb reports it planned in dry-run (data.dry_run)
+  5.1c    PASS    `work-cover` publishes data.ok
+  5.1d    PASS    `work-cover` publishes data.repaired
+  5.1e    PASS    `work-cover` publishes data.still_under
+  5.1f    PASS    `work-cover` publishes data.already_covered
+  5.1g    PASS    `work-cover` publishes data.coverage_after
+  5.1g2   NOTE    coverage_after's VALUE is not asserted in dry-run: it is pre-repair coverage, which is git-bug 58794e4. The real run at 5.3f asserts it where it is correct.
+  5.1h    PASS    `work-cover` publishes data.priority_set
+  5.1i    PASS    `work-cover` publishes data.use_priorities
+  5.1j    PASS    …and it NAMES the pawn it would promote
+  5.1k-work PASS    `work-cover` publishes data.repaired.0.work
+  5.1k-pawn PASS    `work-cover` publishes data.repaired.0.pawn
+  5.1k-name PASS    `work-cover` publishes data.repaired.0.name
+  5.1k-before PASS    `work-cover` publishes data.repaired.0.before
+  5.1k-after PASS    `work-cover` publishes data.repaired.0.after
+  5.1k-skill PASS    `work-cover` publishes data.repaired.0.skill
+  5.1k-chosen_by PASS    `work-cover` publishes data.repaired.0.chosen_by
+  5.1l    PASS    …and cites the game's own ordering (data.repaired.0.chosen_by)
+  5.1m    PASS    …promoting TO the priority it was asked for (data.repaired.0.after)
+  5.2a    PASS    the colony still has one available doctor after the dry run
+  5.2b    PASS    …and wrote NO `action` row: a plan is not an act
+  5.2c    FINDING a clean dry run's `action.journal_seq` is 0 and carries Stamp(0)'s provenance sentence, 'NOT WRITTEN — the journal writer is closed, so this mutation has no journal line'. The writer is not closed and there was no mutation: the emit guard is `(repaired>0 && !dryRun) || stillUnder>0`, so a dry run that plans a clean repair legitimately emits nothing and then reports it in the words of a failure. NoStamp() is the shape this case wants. Filed on 40ed42f.
+  5.3a    PASS    the envelope is ok:true (ok)
+  5.3b    PASS    …the verb's own verdict is that the floor is now met (data.ok)
+  5.3c    PASS    …and it is not a dry run (data.dry_run)
+  5.3d    PASS    …exactly one promotion, because the floor was one short
+  5.3e    PASS    …and it reached the journal as an ACT (data.action.journal_seq)
+  5.3f    PASS    …and `coverage_after` agrees the floor is met, re-read rather than assumed (data.coverage_after.ok)
+  5.3g    PASS    …with Doctor no longer in `under`
+  5.3h    PASS    …and an INDEPENDENT digest read agrees
+  5.4a    PASS    the journal carries the work-cover act — 40ed42f's 'journalled as an act', proved from the LEDGER and not from the verb's own stamp
+  5.4b    PASS    …and it records the decision, not a silent exemption
+  5.4c    PASS    …and the row carries what was repaired
+  5.4d    PASS    …and the verb's journal_seq joins to it
+  5.5a    PASS    a work type that is already covered is ANSWERED — 'Doctor is already covered' is the answer to the question asked, and an empty repair list would read as a failure
+  5.5b    PASS    …and the verdict is true (data.ok)
+
+==============================================================================
+PHASE 6 - 40ed42f: triage, the casualty UNION, and `act` EXECUTED
+==============================================================================
+  6.0a    OK      precondition: the patient is anaesthetised — downed with nothing to tend and no bleed clock, so `downed` is the ONLY clause of the union it satisfies
+  6.0b    OK      precondition: the sick pawn has influenza — tendable, standing, not bleeding
+  union: patient(anaesthetised)=578 sick(flu)=37547 bleeder=570 rescuer=37551 handless=574
+  6.0c    PASS    the clock is stopped — the fixture is perishable and `act` is a snapshot (data.paused)
+  6.0d    OK      precondition: triage sees at least one casualty
+  4 casualt(ies), counts={"no-rescuer":4}
+  6.1a    PASS    `triage` publishes data.casualties.0.pawn
+  6.1b    PASS    `triage` publishes data.casualties.0.name
+  6.1c    PASS    `triage` publishes data.casualties.0.at
+  6.1d    PASS    `triage` publishes data.casualties.0.downed
+  6.1e    PASS    `triage` publishes data.casualties.0.needs_tend
+  6.1f    PASS    `triage` publishes data.casualties.0.clock
+  6.1g    PASS    `triage` publishes data.casualties.0.rescuers
+  6.1h    PASS    `triage` publishes data.casualties.0.rescuers_gated_out
+  6.1i    PASS    `triage` publishes data.casualties.0.candidates_total
+  6.1j    PASS    `triage` publishes data.casualties.0.candidates_pathed
+  6.1k    PASS    `triage` publishes data.casualties.0.candidates_not_pathed
+  6.1l    PASS    `triage` publishes data.casualties.0.verdict
+  6.1m    PASS    `triage` publishes data.casualties.0.margin_ticks
+  6.1n    PASS    …and the verdict is one of the five named (data.casualties.0.verdict)
+  6.2a    PASS    a DOWNED colonist is a casualty — and this one is downed and NOTHING else: no wound, no bleed, nothing to tend
+  6.2b    PASS    a STANDING colonist who is bleeding out is a casualty — the case Alert_ColonistNeedsTend goes OFF for
+  6.2c    PASS    a colonist who merely NEEDS TENDING is a casualty — standing, not bleeding, and still reported
+  6.2d    PASS    …and the three are three distinct rows, one per clause of the union
+  6.3a    PASS    triage's clock IS pawn.health.bleedout — one builder, two callers, and they cannot drift
+  6.3b    PASS    …including the outcome
+  6.3c    PASS    …and the widget gate
+  6.3d    PASS    …and it is the whole block, not a subset (c)
+  6.4a    PASS    with NO bed on the map every casualty reads `no-rescuer`
+  6.4b    PASS    …with nothing pathed, because nothing survived the gate
+  6.4c    FAIL    …and a refusal names `no-bed`, the last clause of TakeToBedGate
+          expected: a gated-out row with gate no-bed
+          actual:   [{"pawn":574,"name":"Kristen","gate":"manipulation","reason":"Incapable"},{"pawn":578,"name":"Unay","gate":"manipulation","reason":"Incapable"}]
+  6.4d    FAIL    …in the GAME's own words, not ours
+          expected: a reason naming a bed
+          actual:   ["Incapable","Incapable"]
+  6.4e    PASS    …and NO `act` is published, because there is nobody to name in it
+  6.4f    PASS    …and `margin_ticks` is null, because there is nothing to measure the clock against
+  6.5a    OK      precondition: a bed for RestUtility.FindBedFor to find
+  6.5b    PASS    the clock is stopped — the fixture is perishable and `act` is a snapshot (data.paused)
+  6.5c    OK      precondition: at least one casualty now has a pathed rescuer
+  6.6a    PASS    `triage` publishes data.casualties.2.rescuers.0.pawn
+  6.6b    PASS    `triage` publishes data.casualties.2.rescuers.0.name
+  6.6c    PASS    `triage` publishes data.casualties.2.rescuers.0.at
+  6.6d    PASS    `triage` publishes data.casualties.2.rescuers.0.cells
+  6.6e    PASS    `triage` publishes data.casualties.2.rescuers.0.travel_ticks
+  6.6f    PASS    `triage` publishes data.casualties.2.rescuers.0.carry_ticks
+  6.6g    PASS    `triage` publishes data.casualties.2.rescuers.0.total_ticks
+  6.6h    PASS    `triage` publishes data.casualties.2.rescuers.0.bed
+  6.6i    PASS    `triage` publishes data.casualties.2.rescuers.0.doing
+  6.6j    PASS    `triage` publishes data.casualties.2.rescuers.0.drafted
+  6.6k    PASS    total_ticks is the WHOLE journey: walk to the patient plus carry to the bed TakeToBedGate actually chose — not just the half that is easy to measure
+  6.6l    PASS    …and only the nearest few were pathed, because a FindPathNow per candidate is the expensive part
+  6.6m    PASS    …and the arithmetic on what was NOT pathed closes
+  6.7a    PASS    a casualty with a rescuer and NO clock is `no-deadline` — named rather than folded into in-time, because the two want different follow-ups
+  6.7b    PASS    …and there is no margin to report
+  6.7c    PASS    the anaesthetised patient reads `no-deadline`, which does NOT mean no hurry — a downed pawn still starves and still needs tending
+  6.7d    PASS    …and its clock really is absent, not zero
+  6.7e    PASS    …and so is its margin
+  6.8a    PASS    candidates that cannot rescue are REPORTED with the gate that refused them — 'why is nobody coming' is the question, and a silent absence does not answer it
+  6.8b-pawn PASS    …and the row names pawn
+  6.8b-name PASS    …and the row names name
+  6.8b-gate PASS    …and the row names gate
+  6.8b-reason PASS    …and the row names reason
+  6.8c    PASS    …and every gate is one TakeToBedGate/ProviderGate really publishes
+  6.8d    PASS    …and the handless doctor is among them: ProviderGate's requiresManipulation clause is the same capacity every Doctor work-giver wants
+  6.8e    PASS    …on the `manipulation` gate specifically
+  6.9     OK      precondition: some casualty carries an executable `act`
+  6.9a    PASS    `act` names the verb that FORCES the job (data.casualties.2.act.op)
+  6.9b    PASS    `triage` publishes data.casualties.2.act.args.pawn
+  6.9c    PASS    `triage` publishes data.casualties.2.act.args.target
+  6.9d    PASS    …with the patient's id filled in, not a placeholder
+  6.9e    PASS    …and the rescuer it names is one it actually pathed
+  6.9f    PASS    …and says WHY it is not a work-priority flip (data.casualties.2.act.why)
+  6.10a   PASS    the clock is STILL stopped between the triage read and the act — `act` is a snapshot, and on the s21 bench a send against a running world came back `cannot-rescue` because the rescuer got there first (data.time.paused)
+  sending triage's own act verbatim: {"op":"rescue","args":{"pawn":37551,"target":578},"why":"rescue FORCES the job through Pawn_JobTracker.TryTakeOrderedJob and interrupts LayDown. A work-priority change does not: it adjusts what the pa
+  6.10b   PASS    the act triage published is ACCEPTED as sent (ok)
+  6.10c   PASS    …and the rescuer took the job rather than being refused
+  6.10d   PASS    …and it is a Rescue job, forced, not a hope
+  6.10e   PASS    …on the pawn `act` named
+  6.10f   PASS    `rescue` publishes data.accepted.0.bed
+  6.10g   PASS    …and the patient `act` named is the target the verb echoes back
+  6.10h   PASS    …and the rescue reached the journal (data.action.journal_seq)
+  6.10i   PASS    …and a second triage read sees the rescuer doing it — `doing` is the field that exists because the M1 rescuer stayed asleep for ~6,100 ticks (d)
+
+==============================================================================
+PHASE 7 - THE M1 END-STATE: work-cover's two refusals, the predicate that halts on them, and the seam with 722c951
+==============================================================================
+  7.1a    PASS    `advance` publishes data.until
+  7.1b    PASS    the predicate is ARMED against the section (data.until.path)
+  7.1c    PASS    …and resolved to the section, not guessed (data.until.section)
+  7.1d    PASS    …it was not already true when armed (data.until.true_when_armed)
+  7.1e    PASS    …it was actually evaluated (data.until.evaluations)
+  7.1f    PASS    …and with coverage holding it did not halt (data.reason)
+  7.1g    PASS    `advance` publishes data.until.eval_ms_avg
+  predicate cost: 6.2821 ms/eval over 4 evaluations
+  downed: [570, 578, 37547, 37555] — standing: 37551 (promotable) and 574 (handless)
+  7.2a    PASS    the envelope is STILL ok:true — the call was processed (ok)
+  7.2b    PASS    …while the verb's own verdict is false (data.ok)
+  7.2c    PASS    …and it says so explicitly rather than succeeding with nobody assigned
+  7.2d    PASS    …naming the gate: one candidate against a floor of two (data.still_under.0.gate)
+  7.2e-work PASS    `work-cover` publishes data.still_under.0.work
+  7.2e-floor PASS    `work-cover` publishes data.still_under.0.floor
+  7.2e-floor_on PASS    `work-cover` publishes data.still_under.0.floor_on
+  7.2e-have PASS    `work-cover` publishes data.still_under.0.have
+  7.2e-short_by PASS    `work-cover` publishes data.still_under.0.short_by
+  7.2e-enabled_this_call PASS    `work-cover` publishes data.still_under.0.enabled_this_call
+  7.2e-candidates_offered PASS    `work-cover` publishes data.still_under.0.candidates_offered
+  7.2e-capable PASS    `work-cover` publishes data.still_under.0.capable
+  7.2e-enabled PASS    `work-cover` publishes data.still_under.0.enabled
+  7.2e-available PASS    `work-cover` publishes data.still_under.0.available
+  7.2e-reason PASS    `work-cover` publishes data.still_under.0.reason
+  7.2f    PASS    …with every count that decides the follow-up: `enabled` short means promote, `capable` short means recruit (data.still_under.0.floor)
+  7.2g    PASS    …and the promotion it COULD make was still made (data.still_under.0.enabled_this_call)
+  7.2h    FAIL    `work-cover` publishes data.still_under.0.enabled_but_incapable
+          expected: the key to be present
+          actual:   null
+  7.3a    PASS    with nobody left to promote the gate is `no-candidate` (data.still_under.0.gate)
+  7.3b    PASS    …and it offered nobody (data.still_under.0.candidates_offered)
+  7.3c    PASS    …and says it is a fact about the ROSTER, not a refused write (data.still_under.0.reason)
+  7.3d    PASS    …and the envelope is still ok:true (ok)
+  7.3e    PASS    …and the verdict still false (data.ok)
+  7.3f    PASS    …and nothing was promoted this call (data.still_under.0.enabled_this_call)
+  7.3g    PASS    both refusals reached the journal — a wasted decision is exactly the one the ledger must carry
+  7.4a    PASS    with the colony's doctor coverage gone the predicate HALTS (data.reason)
+  7.4b    PASS    …naming the path that tripped it (data.halted_on.path)
+  7.4c    PASS    …identifying itself as a state halt (data.halted_on.kind)
+  7.4d    PASS    …reporting the value it read (data.halted_on.observed)
+  7.4e    PASS    …and publishing NO halted_seq, because a state halt names no journal line
+  7.4f    PASS    …and it halted at once rather than running the budget (data.ticks_elapsed)
+
+==============================================================================
+PHASE 7b - THE SEAM: what an UNESCAPED caller gets
+==============================================================================
+  7.5     OK      precondition: there is a downed own-faction colonist to advance past
+  unescaped advance: ok=True reason=ticks ticks=300 error=null
+  7.6a    FAIL    an advance across an own-faction DOWNED colonist does not come back as an ordinary completed advance — it is refused, or it halts (722c951)
+          expected: ok:false, or a reason that is not a plain `ticks` completion
+          actual:   {"ok":true,"reason":"ticks","ticks_elapsed":300,"error":null}
+  7.6b    PASS    …and it SAYS why, naming the casualty or the escape
+  7.6c    PASS    …and whatever happened, the game is left PAUSED (data.time.paused)
+  7.7a    PASS    …and with `through_casualties` given a reason it proceeds (ok)
+  7.7b    PASS    …to a normal completion (data.reason)
+  7.7c    PASS    …having actually run (data.ticks_elapsed)
+  7.7d    PASS    …and it still leaves the game paused (data.time.paused)
+  7.8     NOTE    7.6 asserts an INVARIANT, not a spelling: 722c951 owns the refusal code and the halt reason and is being written in parallel. If 7.6a passes because the advance was REFUSED and 7.7a because the escape let it through, the seam is proved whichever words 722c951 chose. If 722c951 has not merged yet, 7.6a is the check that fails, and that failure is honest: the guard does not exist yet.
+
+==============================================================================
+PHASE 8 - the standing invariant
+==============================================================================
+  8.1     PASS    no red errors across the whole run (data.count)
+  8.2     PASS    the game is left paused (data.time.paused)
+  8.3     PASS    `digest` publishes data.work_coverage
+  8.4     PASS    `digest` publishes data.work_coverage.ok
+
+==============================================================================
+FINDINGS (shipped-mod defects, reported not asserted — see the issue comments):
+  3.7     digest.work_coverage.order says 'under-first, then natural-priority-desc', but the first UNDER row is at index 1: WorkCoverage.Section emits rows in ONE pass over the natural-priority-sorted list and appends under-rows inline, so the real order is natural-priority-desc with under rows wherever they fall. A caller trusting the string would read rows[0] as the worst problem; here rows[0] is 'Firefighter' and is fine. Filed on 40ed42f.
+  4.7     `enabled_but_incapable` is unreachable on a COVERED row: WorkCoverage.Section builds the diagnosis inside the `if (r.Under)` branch, so a colony with two available doctors and a handless third is told nothing about the third. The block is a diagnosis and there is arguably no problem to diagnose — but 'you have a doctor who cannot tend' is the kind of thing the M1 post-mortem exists about. Filed on 40ed42f, not asserted either way.
+  5.2c    a clean dry run's `action.journal_seq` is 0 and carries Stamp(0)'s provenance sentence, 'NOT WRITTEN — the journal writer is closed, so this mutation has no journal line'. The writer is not closed and there was no mutation: the emit guard is `(repaired>0 && !dryRun) || stillUnder>0`, so a dry run that plans a clean repair legitimately emits nothing and then reports it in the words of a failure. NoStamp() is the shape this case wants. Filed on 40ed42f.
+
+RESULT: 4 FAILED of 294 checks - 6.4c, 6.4d, 7.2h, 7.6a
+EXIT=1
