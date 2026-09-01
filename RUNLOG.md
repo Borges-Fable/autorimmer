@@ -2753,6 +2753,42 @@ before both: **read by field, never through a description.**
 2.5's fixture question 4 against it. That is bench work, it belongs to the
 orchestrator, and it is noted on `f7b6207` so it is not re-derived.
 
+### The four leftovers, also cleared
+
+Dorian's call: the two items I had labelled "yours" were mine too.
+
+- **Pushed** — 9 commits and the git-bug refs, including five new bug refs.
+- **`2a7c064`'s last bullet did not need a bench, and CLOSED.** "2.5's fixture
+  question 4 grades correctly against the published centre" reads like in-game
+  work; `transcripts/` banks real `map-dump` results, labels and all, so phase 6
+  renders one OFFLINE. `20260831T230213/006-map-dump`, 51x51, 213 labels,
+  recorded the day before any of this was contemplated: every code inside its
+  own occupied rect, on the centre cell wherever both axes are odd, **7 of 213
+  moved by the fix and none of the 201 1x1s.** The four classes that moved are
+  exactly the three defects — `3x2 North` is the x-axis error, `1x2 South`,
+  `2x1 South` and `1x2 West` are the dropped even-axis rotation shift. Nothing
+  else moved because nothing else was broken.
+- **The orphan I created, discharged.** Closing `e6faa51` I wrote that the
+  missing shape check was "handed to the geometry cluster of the current
+  round" — a round that had not started. A promise in a CLOSED issue with no
+  owner is the exact shape session 13 wrote up when it found all four M1
+  lessons cited by no checklist. `accept/e6faa51-channel-alphabet.py`, 12
+  checks, banked envelopes, no bench. It came out bigger than the one line
+  promised and better: the issue's third bullet — "a change to the symbol table
+  changes the identity" — had been a CONVENTION in a code comment, and is now
+  ENFORCED, because each envelope's identity is checked against the constant its
+  own source declares and `MapDumpVerbs` must cite `Spatial.cs`'s `AlphabetId`
+  verbatim. Bump one and not the other and it fails here instead of shipping
+  two truths.
+- **The three session briefs** are `ROUND-BUILDABLE-PROMPT.md`. Session C's is
+  much smaller than the round plan assumed, and says so: three of its four items
+  landed this session, leaving `bac4eba` alone.
+
+Worth noting for its own sake: **two acceptance bullets that read as bench work
+were dischargeable offline**, because the repo banks real envelopes and both
+questions were about FIELDS and GEOMETRY rather than about game behaviour. The
+first instinct both times was "that needs a launch". Check what is banked first.
+
 ### State at handover
 
 `main` clean, one worktree, no build debt. The assembly was rebuilt for the
