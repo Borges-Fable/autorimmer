@@ -1658,3 +1658,55 @@ queue by default (an agent flailing mid-experiment must not page triage).
   workspace CLAUDE.md and as `templates/INDEX.md`'s unpinned orientation: a
   document that is authoritative by convention and updated by nobody in
   particular. `d7c8088`, `1adc737`.
+- 2026-09-01 (session 16) — **`world-fixture` steps chain through a typed handle,
+  and the audit is "every step in the switch" because the issue's own list was
+  wrong by omission.** `0d9cbd7` named `bill` and asked for an audit of
+  `stockpiles`, `growing`, `research` and `letter` — four steps that CREATE
+  things and therefore have nothing to chain to — and omitted `open-letter`,
+  which RESOLVES one and has all three tells of the same bug: first-match over a
+  shared live list, an error string that ASSERTS the chaining ("run the `letter`
+  step first"), and an id the earlier step already published and nobody
+  consulted. Following the list literally would have closed the issue with the
+  class still open in a second step, which is what its verification comment
+  predicted. **Both resolvers are fixed; the audit is recorded in
+  `FixtureChain`'s header, step by step, including why the ones that look like
+  the same shape are not:** `forbid` genuinely is first-match over a live list
+  (`HaulableEver` sorted by id) but no step creates a haulable, so there is
+  nothing to chain to and it is the step to revisit if one is ever added; and
+  `stockpiles`/`growing`/`fire` pick GROUND rather than an object, with
+  `FindClearRect`/`ZoneOk` already excluding cells an earlier step used.
+  Three resolutions came with it. (1) **`bench_source` / `letter_source` are
+  published** — `arg` | `chained` | `first-on-map` — which is `Dev.PosArg`'s
+  `pos_source` discipline (`7382bdd`) applied here, and is what would have made
+  the original defect visible in the envelope rather than only in a hand
+  comparison of two ids. An explicit arg still wins, so
+  `accept/32b9e01-orders-makingfor.ps1`'s two-call workaround keeps working
+  unchanged. (2) **`expect_bills` is KEPT and made true**, resolving the issue's
+  unsatisfiable either/or: an independent hand-count is the whole point of the
+  field, and deleting it would leave `bills` with nothing to be checked against.
+  It is refreshed after the step loop, and so is **`expect_slots_free`, which is
+  the same defect and which the acceptance does not name** — fixing only the
+  named one would have left a bench holding two bills reporting fifteen free
+  slots. (3) **A repeated step is legal and now says so**: `{steps:["bench",
+  "bench"]}` really does spawn two tables, each block reports only the last, and
+  a later step chains to the last; `repeated_steps` publishes the counts so the
+  truncation is not silent. `0d9cbd7`.
+- 2026-09-01 (session 16) — **The `bill` step's cap is REFUSED, not cleared, and
+  its bill is built by `BillUtility.MakeNewBill`.** Two more findings from
+  `0d9cbd7` comment #1, neither in the issue body. `RimWorld/BillStack.AddBill`
+  is `bill.billStack = this; bills.Add(bill);` and validates nothing, while the
+  game's UI stops the player at `BillStack.MaxCount` (15) — and this step adds
+  TWO bills and never cleared, so eight calls pushed a stack past a cap no player
+  can exceed. **Refusing beats clearing**: a fixture that clears destroys state
+  the caller or an earlier step staged, and it would do it under a name ("bill")
+  that says nothing about removal; `clear_bills:true` is the opt-in and the
+  cleared count is published. And `new Bill_Production(recipe)` is replaced by
+  `RimWorld/BillUtility.MakeNewBill`, which dispatches to
+  `Bill_ProductionWithUft` (`UsesUnfinishedThing`), `Bill_ResurrectMech`
+  (`mechResurrection`), `Bill_ProductionMech` (`gestationCycles > 0`) or
+  `Bill_Autonomous` (`formingTicks > 0`) — so a caller-supplied `recipe` of any of
+  those four was being staged as the WRONG RUNTIME TYPE, which is this issue's
+  own "silently stages the wrong object" one level down. All four derive from
+  `Bill_Production` (via `Bill_Mech : Bill_Autonomous` for the two mech ones), so
+  the repeat-mode fields still apply; the cast is guarded anyway and
+  `bill_class` is published. `0d9cbd7`.
