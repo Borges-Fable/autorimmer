@@ -2635,3 +2635,129 @@ queue by default (an agent flailing mid-experiment must not page triage).
   subsequent advance refuses: "your colony has news" becomes "time passed". A
   separate file costs ~90 lines and changes nothing anybody else relies on.
   `2d9a1da`, `722c951`.
+- 2026-09-01 (session 22) — **The temperature gate is the game's own
+  -273.15..1000 clamp and NOTHING ELSE; the def's advertised range is dead code
+  and is published as an advisory rather than enforced as a refusal.** 261f2e9's
+  acceptance asks that "setting a target below the def's `minTemperature` is a
+  REFUSAL naming the clamp and the value", on the stated premise that
+  "`TemperatureControlProps` carry `minTemperature` / `maxTemperature`, which is
+  the range the UI slider is clamped to". Checked rather than assumed, three
+  things in that sentence are false. **There is no slider** —
+  `RimWorld/CompTempControl.CompGetGizmosExtra` yields five `Command_Action`
+  buttons (-10, -1, "reset to 21", +1, +10). **The fields are named
+  differently** — `CompProperties_TempControl.minTargetTemperature` (-50) and
+  `.maxTargetTemperature` (50). And **nothing in the 1.6 tree reads either
+  one**: grepped unpiped over the whole decompiled source, the only two hits are
+  the declarations. The only clamp that exists is
+  `InterfaceChangeTargetTemperature`'s `Mathf.Clamp(TargetTemperature,
+  -273.15f, 1000f)`, so a player walks a cooler to -273 with the -10 button and
+  the game does not stop them. Implementing the issue's refusal would make a
+  player verb REFUSE SOMETHING A PLAYER CAN DO, which is DESIGN's Action model
+  broken in the other direction and the same class of error as bypassing a gate
+  — the gate lives in the widget, and it is the widget's gate that must be
+  reproduced, not a gate the def merely advertises. What ships: `def_min_c` /
+  `def_max_c` on every row with `def_clamp_enforced: false`,
+  `outside_def_range: true` plus a named `advisory` when a target lies outside,
+  and a `bad-args` refusal citing the member for the clamp that is real. The
+  same reasoning settles the issue's OTHER refusal ask — an unpowered cooler
+  REPORTS `powered:false` and carries an advisory citing
+  `Building_Cooler.TickRare`'s `if (!compPowerTrader.PowerOn) return;`, because
+  `CompGetGizmosExtra` has no power clause either. `261f2e9`.
+- 2026-09-01 (session 22) — **A `Vent` is a `flick` case, and the answer comes
+  from the def rather than from judgement.** 261f2e9 flags "whether the vent
+  belongs in the same verb or is a `flick` case" as worth checking. Core's
+  `Defs/ThingDefs_Buildings/Buildings_Temperature.xml` gives `Vent` exactly one
+  comp, `CompProperties_Flickable`, and NO `CompProperties_TempControl` — so
+  `Building_Vent.compTempControl` is null even though `Building_Vent` derives
+  from `Building_TempControl`, the temperature gizmos never exist for it, and
+  `Building_Vent.TickRare` reads no target at all
+  (`GenTemperature.EqualizeTemperaturesThroughBuilding(this, 14f,
+  twoWay: true)`). A vent has no temperature to set. `temp-set` refuses it by
+  name with that reason and points at `flick`, which is the verb that opens and
+  closes it. Worth recording because the vent is in the Temperature build
+  category, is called a temperature building, and derives from the temperature
+  base class — three signals that all point the wrong way. `261f2e9`.
+- 2026-09-01 (session 22) — **The room a cooler SERVES is the game's own
+  south-rotated cell, not the cell the cooler stands in, and both of its sides
+  must be passable or it does nothing.** `RimWorld/Building_Cooler.TickRare`
+  computes `intVec = Position + IntVec3.South.RotatedBy(Rotation)` and
+  `intVec2 = Position + IntVec3.North.RotatedBy(Rotation)`, pushes the
+  temperature change into `intVec.GetRoom(Map)` and the waste heat into
+  `intVec2` — and wraps the whole block in `if (!intVec2.Impassable(Map) &&
+  !intVec.Impassable(Map))`. A cooler sits IN a wall, so its own cell's room is
+  neither side, and a cooler walled in on its exhaust side draws idle power
+  forever while moving no heat. `temp-control` therefore publishes `serves`
+  (south), `exhaust` (north), `cold_side_blocked` and `hot_side_blocked` with a
+  `serves_basis` naming the member each came from, and `Building_Heater.TickRare`
+  gets its own citation because it uses its OWN room. Three more silent no-op
+  states are published the same way — `GenTemperature.
+  ControlTemperatureTempChange` returns 0f for a room that is null or
+  `UsesOutdoorTemperature` (so a controller in an unroofed or map-edge room
+  stores its target and does nothing), `IsBrokenDown()`, and a flick switch that
+  is off. Every one of them is a state in which the target is accepted and never
+  honoured, which is exactly the shape of the session-18 finding, so each gets a
+  `candidates + reasons` advisory rather than a bare boolean. `261f2e9`.
+- 2026-09-01 (session 22) — **`digest.temperature` is a registered predicate
+  section and its `ok` is deliberately NARROW; the food alarm lives in
+  `resources.food_rot` instead.** 261f2e9 reads as an actuator gap; the
+  investigation found the observation gap underneath it, and the blind spot is
+  the dangerous half — session 18 read 14.6 C only by calling `room <id>` for a
+  room whose id it already had to know, and nothing in the glance said the
+  freezer was at room temperature. A room is WATCHED when a controller serves it
+  or when it holds human-edible food. `ok` is false only when a room a
+  **switched-on** controller serves is more than `tolerance_c` (2 C, OURS,
+  published on every read) on the wrong side of that controller's target.
+  Switched-off controllers are excluded because `CompFlickable.SwitchIsOn` is the
+  player's own recorded intent — a heater off in summer is not a fault —
+  while UNPOWERED ones are NOT excluded, because a freezer whose net died is the
+  emergency the section exists for. Food sitting warm in an uncontrolled room is
+  counted (`food_rooms_uncontrolled`, `food_rooms_unfrozen`) and NOT alarmed
+  here: on a colony with no freezer that alarm would be permanently on, and an
+  alarm that is always on is not an alarm. Cheap on session 19's axis and
+  therefore registered: one walk of the real `allBuildingsColonist` list with a
+  per-def memoised `HasComp`, one walk of the stored
+  `FoodSourceNotPlantOrTree` list with a per-def memoised `Nutrition`,
+  region-grid room lookups and plain field reads. **No `Room.Role` and no
+  `Room.GetStat`** — both run `UpdateRoomStatsAndRole()`, the most expensive
+  line in `DigestVerb`, so a room row here is identified by id/at/cells and a
+  reader who wants the role calls `room <id>` and pays for it there. `261f2e9`.
+- 2026-09-01 (session 22) — **`food_days` is NOT redefined; the rot term ships
+  beside it, and the disclaimer moves out of the source comment and into the
+  data.** `resources.food_days` had no rot term at all (`grep -rn CompRottable
+  Source/AutoRimmer/` returned nothing), and it is worse than incomplete: it is
+  `map.resourceCounter.TotalHumanEdibleNutrition`, whose
+  `UpdateResourceCounts` walks SlotGroup haul destinations (food on unzoned
+  ground reads as ZERO — the DEFAULT state of a quicktest map) and whose
+  `ShouldCount` opens `if (t.IsNotFresh()) return false;`, so a stack leaves the
+  division the instant it finishes rotting with nothing said during the ramp.
+  The number holds its value and then falls off a cliff. **That is the M1 death
+  shape one system over** — M1 died because `BloodLoss` was truncated out of the
+  health read, i.e. a surface showing a number that is not the thing killing
+  you. It is still not redefined: it is a shipped predicate target with suites
+  asserting on it, and "what the vanilla alert will do" is a real question.
+  What ships is `food_days_basis`, a sentence IN THE DATA saying what it does
+  not count — `Materials.cs` exists because a true warning in a source comment
+  did not stop the code three lines below it drawing a conclusion the agent
+  could not check (`54b0c9a`), and this is the same fix applied to the field the
+  agent actually reads — plus `resources.food_rot`, which is map-wide and
+  carries the clock. **`Materials.Of` is deliberately NOT used**, and its own
+  header says why in its last line: "no predicate and no digest section reaches
+  this file". It runs `Pawn.CanReach` per stack per builder — a pathfind, the
+  disqualifier session 19 names explicitly — and it is per-def where food is
+  dozens of defs. The cheap half of the same correction ships instead: a
+  `listerThings` walk gives map-wide nutrition with no reachability, and the
+  honest consequence is PUBLISHED rather than hidden — `nutrition` is an UPPER
+  bound, `nutrition_in_stockpiles` is the LOWER bound, and
+  `nutrition_forbidden` narrows the gap for free because
+  `Thing.IsForbidden(Faction)` short-circuits on `compForbiddable` and never
+  walks a lord. The bands and the clock are the game's own
+  (`GenTemperature.RotRateAtTemperature`, and
+  `CompRottable.CompInspectStringExtra`'s own 0.001/0.999 cutpoints), so the
+  digest says what the player's inspect pane says. **The membership test
+  reproduces all THREE of `ResourceCounter`'s clauses, and the third is the one
+  that is easy to miss:** `CountAsResource` is what keeps CORPSES out, since
+  `ThingDefGenerator_Corpses` sets `ingestible.foodType = FoodTypeFlags.Corpse`
+  and `HumanEdible` is `(OmnivoreHuman & foodType) != 0` with `OmnivoreHuman` =
+  0x1F3F, which HAS the 0x8 Corpse bit — without it a battlefield lands in the
+  larder figure and pins `spoiled_stacks` non-zero forever. They are counted and
+  published as `corpse_stacks_excluded` rather than silently dropped. `261f2e9`.
