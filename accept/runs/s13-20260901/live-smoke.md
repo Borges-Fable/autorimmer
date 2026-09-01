@@ -100,8 +100,30 @@ An add with no reason is refused:
     the silent exemption this verb exists to prevent.
 
 `digest.threats` publishes `hostiles_pardoned` and `hostiles_unpardoned` beside
-an unchanged `hostiles`. The pardon-with-live-hostiles path needs a map with
-hostiles on it and is left to the suite.
+an unchanged `hostiles`.
+
+**Then run again with real hostiles on the map** (3 megascarabs spawned):
+
+    hostiles 3 · hostiles_pardoned 0 · hostiles_unpardoned 3 · kinds ["megascarab x3"]
+
+The candidate listing publishes **id, kind and dormancy only** — no position, no
+def — which is the fog discipline the implementer chose deliberately. Verified
+absent, not assumed.
+
+Pardoning all three with a reason journalled correctly (seq 28, `type:action`,
+carrying both the ids and the reason) and the listing then flagged each
+`pardoned:false, dormant:false, lapsed:true` with the reason preserved. The
+digest did NOT prune the set — the verb flags, the observer never mutates.
+
+**But the add call reported `ok:true, refused_count:0, pardons_held:3` while
+`hostiles_unpardoned` stayed at 3.** The lapse rule is correct — these were
+spawned awake, so every pardon died on arrival — but nothing in the response
+that produced it said so. Same shape as A and J: a call that succeeds while
+achieving nothing, with the explanation one call away. Filed as `fee81b2`.
+
+**Still unproven live:** the pardon of a genuinely DORMANT hostile, which is the
+case the verb exists for. This bench had no sleeping cluster and one could not be
+constructed on it. It needs a `world-fixture` or a map that generates one.
 
 ## Two findings this pass produced
 
