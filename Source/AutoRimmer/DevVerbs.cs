@@ -312,6 +312,85 @@ namespace AutoRimmer
             }
         }
 
+        // ------------------------------------------------------- forbidding --
+        // THE ARRIVAL FLAG. A real colony start does not hand the player usable
+        // gear: `RimWorld/ScenPart_PlayerPawnsArriveMethod.DoDropPods` ends in
+        // `DropPodUtility.DropThingGroupsNear(..., forbid: true, ...)`, whose
+        // forbid branch is exactly
+        //
+        //     thingsGroup[num].SetForbidden(value: true, warnOnFail: false);
+        //
+        // and Core's own tutorial puts `UnforbidStartingResources` immediately
+        // after the stockpile steps (`MakeStockpile` -> `EndStockpileDesignating`
+        // -> `UnforbidStartingResources`, which `BuildRoomWalls` then waits on).
+        // So `unforbid` is a step every player takes
+        // and a fixture that skips it hands the agent an affordance no player
+        // has (DESIGN decisions log, 2026-08-30, the fog entry's argument).
+        //
+        // NOT EVERY THING CAN HOLD THE FLAG, AND THE GAME LEANS ON THAT.
+        // `RimWorld/ForbidUtility.SetForbidden` needs a `ThingWithComps` whose
+        // comps include `CompForbiddable`, and the comp is declared per def:
+        // `ResourceBase` has it (so resources, food, medicine, weapons, apparel
+        // and `MinifiedThing` do) while `BuildingBase` does NOT — `Bed`, which
+        // the `medical` preset spawns, carries no `CompForbiddable` anywhere in
+        // its BedWithQualityBase -> BedBase -> FurnitureBase -> BuildingBase
+        // chain, and neither does any pawn. On such a thing the call is
+        // `Log.Error("Tried to SetForbidden on non-Forbiddable Thing ...")` when
+        // `warnOnFail` is true — a red_error the journal records and the bench's
+        // zero-red-errors rule will not have — and a SILENT NO-OP when it is
+        // false, after which `ForbidUtility.IsForbidden(Thing, Faction)` (which
+        // reads `ThingWithComps.compForbiddable` and returns false for a null
+        // comp) answers "not forbidden" forever. `DoDropPods` puts the arriving
+        // PAWN in the same group and forbids it too; `warnOnFail: false` is what
+        // makes that harmless.
+        //
+        // NAMED DEVIATION FROM `DropThingGroupsNear`: it forbids BLIND, we ask
+        // first. The predicate is the game's own —
+        // `RimWorld/Designator_Forbid.CanDesignateThing`: `def.category ==
+        // ThingCategory.Item` AND a `CompForbiddable` — because the SAME
+        // category test gates the REMEDY, `Designator_Unforbid
+        // .CanDesignateThing`, which the shipped `unforbid` verb drives
+        // (DesignationVerbs.ForbidCore). Forbidding a Building-with-comp (a
+        // door, a shelf) would leave the agent an obstacle no player verb in
+        // this mod can clear — a lock with no key. The fixture and the remedy
+        // have to be the same set.
+        //
+        // ORDERING, also a deviation: `DropThingGroupsNear` forbids BEFORE it
+        // places, we forbid the placed result. `CompForbiddable` overrides
+        // neither `AllowStackWith` nor `PreAbsorbStack`, so a forbidden stack
+        // absorbed into an unforbidden one loses the flag entirely
+        // (`ThingWithComps.TryAbsorbStack` keeps the ABSORBER's comps). The game
+        // can ignore that because a pod lands on open ground; a starter kit
+        // aims at a stockpile, where merging is the normal case.
+        public const string ForbidGate =
+            "RimWorld/Designator_Forbid.CanDesignateThing (category==Item and a CompForbiddable) — "
+            + "the same predicate the shipped `unforbid` verb's Designator_Unforbid twin uses, so "
+            + "everything forbidden here is clearable by `unforbid`";
+
+        // Returns null when the flag took, else the reason it could not — never
+        // throws, never Log.Errors. The caller REPORTS the reason; a silent
+        // no-op is the failure mode this whole comment exists to prevent.
+        public static string Forbid(Thing t)
+        {
+            if (t == null) return "gone before it could be forbidden";
+            if (t.def == null) return "no def";
+            if (t.def.category != ThingCategory.Item)
+                return "category is " + t.def.category + ", not Item — Designator_Forbid refuses it "
+                    + "and Designator_Unforbid could not clear it again";
+            if (t.TryGetComp<CompForbiddable>() == null)
+                return "'" + t.def.defName + "' has no CompForbiddable; SetForbidden would be a "
+                    + "silent no-op (with warnOnFail:true it would be a red error)";
+            try { t.SetForbidden(value: true, warnOnFail: false); }
+            catch (Exception e) { return "SetForbidden threw: " + e.Message; }
+            // Read back rather than trust the write. This is the same field read
+            // every observer uses for `forbidden` (ThingVerbs), so the answer
+            // here is the answer a `things` read will give.
+            bool now;
+            try { now = t.IsForbidden(Faction.OfPlayer); }
+            catch (Exception e) { return "set, but IsForbidden threw on read-back: " + e.Message; }
+            return now ? null : "SetForbidden did not take";
+        }
+
         public static Dictionary<string, object> Describe(Thing t)
         {
             if (t == null) return null;
@@ -326,6 +405,11 @@ namespace AutoRimmer
             if (t.Spawned) d["at"] = Positions.Out(t.Position);
             var q = t.TryGetComp<CompQuality>();
             if (q != null) d["quality"] = q.Quality.ToString();
+            // Present only when true, the same "presence is the signal"
+            // convention NoteFog uses — a reader never compares an empty value
+            // against a missing key. Pure field read (ForbidUtility.IsForbidden
+            // reads ThingWithComps.compForbiddable), so no observer rule is bent.
+            try { if (t.IsForbidden(Faction.OfPlayer)) d["forbidden"] = true; } catch { }
             return d;
         }
 
@@ -355,7 +439,7 @@ namespace AutoRimmer
     {
         // --------------------------------------------------------------------
         // dev:spawn-thing {def, stuff?, count?, pos?|stockpile?, quality?,
-        //                  faction?, mode?, minified?, force?}
+        //                  faction?, mode?, minified?, force?, forbid?}
         //
         // Provenance: Verse/DebugThingPlaceHelper.DebugSpawn (stack default,
         // stuff, quality, faction, GenPlace.TryPlaceThing, Notify_DebugSpawned)
@@ -369,6 +453,20 @@ namespace AutoRimmer
         //    Minifiable, so "spawn a bed" hands you a *minified* bed the
         //    serializers report as an item. `minified:true` restores it.
         // `stuff:"random"` / `quality:"random"` opt back into the game's roll.
+        //
+        // `forbid` DEFAULTS TO FALSE, AND THAT IS A DECISION, NOT AN OVERSIGHT
+        // (git-bug 091e3f0). `dev:starter-kit` forbids by default because it
+        // models an ARRIVAL and the game's arrival path
+        // (`ScenPart_PlayerPawnsArriveMethod.DoDropPods`) passes `forbid: true`.
+        // This verb models the DEBUG SPAWNER, and the debug spawner it is
+        // written against — `Verse/DebugThingPlaceHelper.DebugSpawn` — contains
+        // no forbidding at all: a thing appears, usable, exactly as clicking
+        // "Spawn thing" in the dev palette produces it. Two fictions, two
+        // defaults. The arg exists so a caller staging an arrival one item at a
+        // time gets the kit's behaviour without the kit, and so the kit reuses
+        // this handler rather than reimplementing placement (StarterKit's
+        // REUSE-NOT-REIMPLEMENTATION rule). See Dev.Forbid for what the flag
+        // costs on a def with no CompForbiddable.
         // --------------------------------------------------------------------
         [Verb("dev:spawn-thing")]
         public static object SpawnThing(VerbContext ctx)
@@ -382,6 +480,7 @@ namespace AutoRimmer
             int count = a.Int("count", 1);
             if (count < 1 || count > 5000) throw new VerbArgsException("count must be 1..5000");
             bool force = a.Bool("force", false);
+            bool forbid = a.Bool("forbid", false);
 
             // The game's own spawnability guard. allowPlayerBuildable:true is
             // the "Spawn thing with wipe mode" menu's setting, i.e. the most
@@ -429,6 +528,8 @@ namespace AutoRimmer
 
             var spawned = new List<object>();
             var cells = new List<IntVec3>();
+            var forbiddenIds = new List<object>();
+            var notForbiddable = new List<object>();
             int placed = 0, remaining = count;
             int stackLimit = Math.Max(1, def.stackLimit);
             var failures = new List<object>();
@@ -497,6 +598,23 @@ namespace AutoRimmer
                 placed += thisStack;
                 if (result != null)
                 {
+                    // Forbid BEFORE Describe, so the echoed `forbidden` is the
+                    // state the caller will read back, not the state before the
+                    // flag. `result` is the PLACED thing — GenPlace may have
+                    // merged our stack into an existing one and handed that back
+                    // — which is the whole reason we forbid here rather than
+                    // pre-placement the way DropThingGroupsNear does.
+                    if (forbid)
+                    {
+                        string why = Dev.Forbid(result);
+                        if (why == null) forbiddenIds.Add(result.thingIDNumber);
+                        else notForbiddable.Add(new Dictionary<string, object>
+                        {
+                            ["id"] = result.thingIDNumber,
+                            ["def"] = result.def?.defName,
+                            ["reason"] = why,
+                        });
+                    }
                     spawned.Add(Dev.Describe(result));
                     if (result.Spawned) cells.Add(result.Position);
                 }
@@ -504,8 +622,9 @@ namespace AutoRimmer
 
             string label = def.defName + " x" + placed
                 + (stuff != null ? " (" + stuff.defName + ")" : "")
-                + " @ " + target.x + "," + target.z;
-            long seq = Dev.Emit(V, "spawn-thing", label, new Dictionary<string, object>
+                + " @ " + target.x + "," + target.z
+                + (forbid ? " [forbidden x" + forbiddenIds.Count + "]" : "");
+            var extra = new Dictionary<string, object>
             {
                 ["args"] = new Dictionary<string, object>
                 {
@@ -513,10 +632,19 @@ namespace AutoRimmer
                     ["stuff"] = stuff?.defName,
                     ["count"] = count,
                     ["at"] = Positions.Out(target),
+                    ["forbid"] = forbid,
                 },
                 ["placed"] = placed,
                 ["ids"] = IdsOf(spawned),
-            });
+            };
+            // Only when asked — an absent key means the caller never asked for
+            // the flag, which is not the same as asking and getting nothing.
+            if (forbid)
+            {
+                extra["forbidden"] = forbiddenIds.Count;
+                if (notForbiddable.Count > 0) extra["not_forbiddable"] = notForbiddable.Count;
+            }
+            long seq = Dev.Emit(V, "spawn-thing", label, extra);
 
             var stamp = Dev.Stamp(seq);
             Dev.NoteFog(stamp, map, cells);
@@ -542,6 +670,20 @@ namespace AutoRimmer
                 data["placed_is_floor"] = true;
             }
             if (stockpileNote != null) data["stockpile"] = stockpileNote;
+            if (forbid)
+            {
+                data["forbid"] = new Dictionary<string, object>
+                {
+                    ["requested"] = true,
+                    ["gate"] = Dev.ForbidGate,
+                    ["forbidden_stacks"] = forbiddenIds.Count,
+                    ["ids"] = forbiddenIds,
+                    ["not_forbiddable"] = notForbiddable,
+                    ["remedy"] = forbiddenIds.Count > 0
+                        ? "unforbid {\"things\":[…the ids above…]} — or a rect over them"
+                        : null,
+                };
+            }
             return data;
         }
 

@@ -42,6 +42,32 @@ namespace AutoRimmer
     // provenance trail is per-item rather than per-kit. This verb adds a
     // per-SECTION line on top, carrying the seqs of the lines it caused, so a
     // post-mortem can go either way: kit -> items, or item -> kit.
+    //
+    // THE KIT LANDS ITS GEAR FORBIDDEN (git-bug 091e3f0, resolved by Evan
+    // 2026-08-31). This is the one place the kit's fiction diverges from the
+    // primitive it calls. A colony start is an ARRIVAL:
+    // `RimWorld/ScenPart_PlayerPawnsArriveMethod.DoDropPods` ends in
+    // `DropPodUtility.DropThingGroupsNear(..., forbid: true, ...)`, and
+    // `Data/Core/Defs/Tutor/Instructions.xml` puts `UnforbidStartingResources`
+    // immediately after the stockpile steps (`MakeStockpile` ->
+    // `EndStockpileDesignating` -> `UnforbidStartingResources`) and will not
+    // advance to `BuildRoomWalls` until the player does it. Every real player
+    // un-forbids their starting pile. A kit that skips it hands the agent an
+    // affordance no player has — the same argument DESIGN's decisions log makes
+    // about fog — and it makes the M1 path unable to rehearse `unforbid` against
+    // a real obstacle, which is exactly how a live run once left a forbidden
+    // rifle, revolver, knife and flak set sitting unused while FSWA's
+    // `!thing.IsForbidden(Faction.OfPlayer)` checks stepped over all four.
+    //
+    // `dev:spawn-thing` DELIBERATELY DOES NOT FOLLOW. Its provenance is
+    // `Verse/DebugThingPlaceHelper.DebugSpawn`, which contains no forbidding at
+    // all — a bare spawn models a thing APPEARING, not a thing arriving. It
+    // gains an opt-in `forbid` arg (which is how this kit gets the behaviour
+    // without reimplementing placement) and keeps `false` as its default. The
+    // rest of staging has nothing to forbid: pawns, research and fog carry no
+    // `CompForbiddable` between them, and `DoDropPods` forbidding the arriving
+    // pawn along with its cargo is a silent no-op in the game too. See
+    // Dev.Forbid for what the flag does and does not reach.
     // =========================================================================
     public static class StarterKit
     {
@@ -129,7 +155,8 @@ namespace AutoRimmer
 
         // --------------------------------------------------------------------
         // dev:starter-kit {preset?, at?, stockpile?, items?, extra_items?,
-        //                  pawns?, research?, unfog?, save_as?, dry_run?}
+        //                  pawns?, research?, unfog?, forbid?, save_as?,
+        //                  dry_run?}
         // --------------------------------------------------------------------
         [Verb("dev:starter-kit")]
         public static object Kit(VerbContext ctx)
@@ -149,6 +176,12 @@ namespace AutoRimmer
             bool dryRun = a.Bool("dry_run", false);
             object at = a.Raw("at");
             object stockpile = a.Has("stockpile") ? a.Raw("stockpile") : true;
+            // Defaults TRUE — the arrival fiction, see the header. `forbid:false`
+            // is the escape hatch for a fixture that deliberately wants usable
+            // gear (a bill or hauling test that is not about forbidding), and it
+            // is named in the plan either way so a dry run says which fiction is
+            // in force.
+            bool forbidItems = a.Bool("forbid", true);
 
             // --- resolve the plan BEFORE mutating anything -------------------
             // A kit that spawns four of six items and then fails on a typo has
@@ -184,6 +217,11 @@ namespace AutoRimmer
                 ["save_as"] = a.Str("save_as"),
                 ["at"] = at,
                 ["stockpile"] = stockpile,
+                ["forbid"] = forbidItems,
+                ["forbid_note"] = forbidItems
+                    ? "items land FORBIDDEN, mimicking ScenPart_PlayerPawnsArriveMethod.DoDropPods' "
+                        + "forbid:true — clear them with the `unforbid` verb, as a player would"
+                    : "items land usable; this kit is NOT modelling an arrival",
             };
             if (skipped.Count > 0) plan["preset_entries_skipped"] = skipped;
 
@@ -230,6 +268,7 @@ namespace AutoRimmer
             }
 
             // 3. ITEMS.
+            var tally = new ForbidTally();
             if (items.Count > 0)
             {
                 var placed = new List<object>();
@@ -244,7 +283,16 @@ namespace AutoRimmer
                     if (item.Quality != null) args["quality"] = item.Quality;
                     if (at != null) args["pos"] = at;
                     if (!(stockpile is bool sb && !sb)) args["stockpile"] = stockpile;
-                    placed.Add(Collect(DevVerbs.SpawnThing(Sub(ctx, args)), seqs));
+                    // The arrival flag, applied by the handler that holds the
+                    // Thing reference. dev:* bypasses the player gate by
+                    // design (DESIGN §Action model) — but this particular write
+                    // does NOT bypass it: Dev.Forbid asks
+                    // Designator_Forbid.CanDesignateThing's own predicate first,
+                    // so the shipped `unforbid` verb can always undo it.
+                    if (forbidItems) args["forbid"] = true;
+                    var res = Collect(DevVerbs.SpawnThing(Sub(ctx, args)), seqs);
+                    tally.Accrue(res);
+                    placed.Add(res);
                 }
                 sections["items"] = placed;
             }
@@ -267,9 +315,13 @@ namespace AutoRimmer
             string saveAs = a.Str("save_as");
             if (saveAs != null) sections["save"] = Save(map, saveAs);
 
+            var forbidOut = tally.Out(forbidItems);
+
             long seq = Dev.Emit(V, "starter-kit",
                 (presetName ?? "custom") + ": " + items.Count + " item(s), "
-                + pawnSpecs.Count + " pawn(s)" + (saveAs != null ? ", saved '" + saveAs + "'" : ""),
+                + pawnSpecs.Count + " pawn(s)"
+                + (forbidItems ? ", " + tally.Ids.Count + " forbidden" : "")
+                + (saveAs != null ? ", saved '" + saveAs + "'" : ""),
                 new Dictionary<string, object>
                 {
                     ["plan"] = plan,
@@ -277,9 +329,18 @@ namespace AutoRimmer
                     // caused. A post-mortem reading a dev:spawn-thing line can
                     // find the kit that issued it, and vice versa.
                     ["caused_seqs"] = seqs,
+                    // Counts, not the lists: the per-item dev:spawn-thing lines
+                    // already carry the ids. This is here so M1's
+                    // no-dev-verbs-after-staging invariant can be read off the
+                    // journal ALONE — the line that staged the colony says the
+                    // gear was left forbidden, without needing the result
+                    // envelope anyone happened to keep.
+                    ["forbid"] = forbidItems,
+                    ["forbidden_stacks"] = tally.Ids.Count,
+                    ["not_forbiddable"] = tally.NotForbiddable.Count,
                 });
 
-            return new Dictionary<string, object>
+            var data = new Dictionary<string, object>
             {
                 ["preset"] = presetName,
                 ["plan"] = plan,
@@ -287,6 +348,92 @@ namespace AutoRimmer
                 ["caused_journal_seqs"] = seqs,
                 ["dev"] = Dev.Stamp(seq),
             };
+            if (forbidOut != null) data["forbid"] = forbidOut;
+            return data;
+        }
+
+        // The kit's cross-cutting summary of what it left forbidden, assembled
+        // from the nested dev:spawn-thing results rather than by re-reading the
+        // map — no second pass over game state, and the numbers are the ones
+        // those calls actually returned.
+        //
+        // It exists to make the ACCEPTANCE runnable in one hop: `rect` is the
+        // bounding box of every stack that took the flag, which is the shape
+        // `unforbid {rect:[x,z,w,h]}` wants (DesignateEngine.Resolve), and `ids`
+        // is the exact form `unforbid {things:[…]}` wants when the rect would
+        // sweep up things the kit did not place.
+        private sealed class ForbidTally
+        {
+            public readonly List<object> Ids = new List<object>();
+            public readonly List<object> NotForbiddable = new List<object>();
+            private int minX = int.MaxValue, minZ = int.MaxValue;
+            private int maxX = int.MinValue, maxZ = int.MinValue;
+
+            public void Accrue(object spawnResult)
+            {
+                if (!(spawnResult is Dictionary<string, object> d)) return;
+                if (d.TryGetValue("forbid", out var fv) && fv is Dictionary<string, object> f)
+                {
+                    if (f.TryGetValue("ids", out var iv) && iv is List<object> il)
+                        foreach (var i in il) Ids.Add(i);
+                    if (f.TryGetValue("not_forbiddable", out var nv) && nv is List<object> nl)
+                        foreach (var n in nl) NotForbiddable.Add(n);
+                }
+                // Cells come from the describes that ACTUALLY carry the flag —
+                // Dev.Describe publishes `forbidden` only when true — so the
+                // rect never claims to cover a stack the flag missed.
+                if (!(d.TryGetValue("spawned", out var sv) && sv is List<object> sl)) return;
+                foreach (var s in sl)
+                {
+                    if (!(s is Dictionary<string, object> sd)) continue;
+                    if (!(sd.TryGetValue("forbidden", out var fb) && fb is bool fbb && fbb)) continue;
+                    if (!(sd.TryGetValue("at", out var av) && av is List<object> pos
+                          && pos.Count == 2 && pos[0] is double px && pos[1] is double pz)) continue;
+                    int x = (int)px, z = (int)pz;
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (z < minZ) minZ = z;
+                    if (z > maxZ) maxZ = z;
+                }
+            }
+
+            private List<object> Rect()
+                => minX > maxX ? null : new List<object>
+                {
+                    (double)minX, (double)minZ,
+                    (double)(maxX - minX + 1), (double)(maxZ - minZ + 1),
+                };
+
+            // Null when the caller never asked — an absent key means the
+            // question was not put, which is not the same as asking and getting
+            // nothing back.
+            public Dictionary<string, object> Out(bool requested)
+            {
+                if (!requested) return null;
+                var rect = Rect();
+                var d = new Dictionary<string, object>
+                {
+                    ["mimics"] = "RimWorld/ScenPart_PlayerPawnsArriveMethod.DoDropPods -> "
+                        + "DropPodUtility.DropThingGroupsNear(forbid: true)",
+                    ["gate"] = Dev.ForbidGate,
+                    ["forbidden_stacks"] = Ids.Count,
+                    ["ids"] = Ids,
+                    ["rect"] = rect,
+                    ["not_forbiddable"] = NotForbiddable,
+                };
+                d["remedy"] = rect != null
+                    ? "unforbid {\"rect\":[" + rect[0] + "," + rect[1] + "," + rect[2] + ","
+                        + rect[3] + "]} — or unforbid {\"things\":[…ids…]} to touch only these stacks"
+                    : "nothing took the flag; there is nothing to unforbid";
+                if (NotForbiddable.Count > 0)
+                    d["not_forbiddable_note"] =
+                        "these were left USABLE on purpose rather than red-erroring: a def with no "
+                        + "CompForbiddable (Bed and every other plain BuildingBase descendant, and "
+                        + "pawns) cannot hold the flag, and a non-Item could not be cleared again by "
+                        + "the `unforbid` verb. Spawn a building with minified:true if you want it "
+                        + "forbiddable — MinifiedThing is an Item and does carry the comp";
+                return d;
+            }
         }
 
         // A sub-context for a nested verb call. Same command id and args
