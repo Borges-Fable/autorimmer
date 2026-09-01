@@ -288,6 +288,33 @@ def phase0():
     S["seq0"] = dig(e, "data.last_seq") or 0
     print("  %sjournal watermark: seq0=%s%s" % (DIM, S["seq0"], OFF))
 
+    # THE ROW SHAPE, added after the first live run: 6.5 read a journal row
+    # FLAT and got nothing back on a journal that had every row it wanted.
+    # Journal.Emit writes {seq, tick, wall, type, payload} and the emitter's own
+    # fields live UNDER `payload` — PawnActs.Act builds {verb, step, target, …}
+    # — so `row["verb"]` is always absent and `payload.verb` is the path.
+    #
+    # `types:["action","dev"]` because `verb` is a field of THOSE payloads; a
+    # red_error payload is {msg}. This read is deliberately a SECOND call: the
+    # watermark read above pushes since_seq past the end on purpose and so
+    # returns zero events, which can prove `data.events` is a list and nothing
+    # about what is in one.
+    if S["seq0"] >= 1 or ARGS.dry_run:
+        e = send("journal", {"since_seq": max(int(S["seq0"]) - 40, 0),
+                             "types": ["action", "dev"], "limit": 1})
+        if dig(e, "data.count") or ARGS.dry_run:
+            shape("0.2d", "journal", e, "data.events.0.type")
+            shape("0.2e", "journal", e, "data.events.0.payload", dict)
+            shape("0.2f", "journal", e, "data.events.0.payload.verb")
+        else:
+            note("0.2d", "no action/dev row in the last 40 journal seqs, so the "
+                         "payload.verb nesting 6.5 reads was not proved here - "
+                         "6.5 asserts it positively, so a moved key fails there "
+                         "loudly rather than passing empty")
+    else:
+        note("0.2d", "the journal is empty (seq0=0), so the event row shape was "
+                     "not proved here")
+
     # `colonist` singular - `colonists` is rejected bad-args ("unknown filter") -
     # and the roster is `data.list`, not `data.pawns`. Either mistake alone
     # yields zero ids, which phase 0 then reports as a FIXTURE gap ("load a
@@ -817,14 +844,35 @@ def phase6():
     ge("6.4b", "and it journals", e, "data.action.journal_seq", 1)
 
     # THE AGGREGATE, which is the whole point of writing the rows.
+    #
+    # THIS CHECK WAS BLIND, and the first live run is what exposed it: it read
+    # `data.rows` or `data.entries`, NEITHER OF WHICH EXISTS. JournalVerbs.Read
+    # publishes ["events"] — 0.2b asserts that key and 1.4b already read it
+    # correctly. Both attempted paths missed, as_list(None) collapsed to [], and
+    # the check reported `actual: []` against a journal holding all four rows.
+    # 6.1b / 6.2b / 6.3b / 6.4b each read journal_seq >= 1 in the same run, and
+    # that number only exists because PawnActs.ActOn -> Act -> Journal.Emit
+    # ("action", …) wrote a line. The mod was right; the driver was looking in
+    # two places the mod never writes.
+    #
+    # And the verb is NESTED, which is the second half of the same defect: the
+    # old code then read `r["verb"]` flat, but Journal.Emit's row is
+    # {seq, tick, wall, type, payload} with PawnActs.Act's {verb, step, target}
+    # under `payload`. Proved by 0.2e/0.2f rather than assumed.
+    #
+    # "man-turret" ONLY, the alternative dropped. PawnEmergencyVerbs.ManTurret
+    # declares `const string V = "man-turret"` and ManRow passes "man" as the
+    # STEP — `ActOn(outcome, verb, "man", …)`. Accepting "man" in the verb slot
+    # would have let a step satisfy a verb assertion.
     e = send("journal", {"since_seq": S["seq0"], "types": ["action"], "limit": 300})
-    rows = as_list(dig(e, "data.rows")) or as_list(dig(e, "data.entries"))
-    verbs = set(r.get("verb") for r in rows if isinstance(r, dict))
+    verbs = set(dig(ev, "payload.verb")
+                for ev in as_list(dig(e, "data.events")) if isinstance(ev, dict))
+    verbs.discard(None)
+    want = {"extinguish", "beat-fire", "man-turret", "tend"}
     check("6.5", "the journal alone shows the refused emergency orders "
-                 "(extinguish, beat-fire, man, tend)",
-          {"extinguish", "beat-fire", "man-turret", "tend"} <= verbs
-          or {"extinguish", "beat-fire", "man", "tend"} <= verbs,
-          "action rows for all four verbs", sorted(verbs))
+                 "(extinguish, beat-fire, man-turret, tend)",
+          want <= verbs, "action rows carrying payload.verb for all four: %s"
+          % sorted(want), sorted(verbs))
 
     # ---- 6B: the same hardcoded-0 shape swept out of the order verbs.
     # A PAWN is a Thing and PawnActs.ThingArg resolves one, so B is a
@@ -847,9 +895,22 @@ def phase6():
     ge("6.8b", "and it journals", e, "data.action.journal_seq", 1)
 
     # A prioritize the scan will not match. Any work giver `orders` does not
-    # list for this target will do; Warden_DeliverFood on a free colonist is a
-    # safe bet on any bench (the scanner wants a prisoner).
-    e = send("prioritize", {"pawn": S["A"], "work": "Warden_DeliverFood",
+    # list for this target will do; delivering food on a FREE colonist is a safe
+    # bet on any bench (the scanner wants a prisoner).
+    #
+    # THE DEFNAME, NOT THE GIVERCLASS, and the first live run failed on exactly
+    # that. This said `Warden_DeliverFood`, which is the C# type behind
+    # Core/Defs/WorkGiverDefs/WorkGivers.xml's `<giverClass>`; the `<defName>` on
+    # that same def is `DeliverFoodToPrisoner`. PawnOrderVerbs.Prioritize opens
+    # with `Dev.Named<WorkGiverDef>(workName, "work")`, BEFORE it builds its
+    # Outcome, and DevVerbs.Dev.Named throws VerbArgsException on a miss — so
+    # the reply was a bad-args error envelope with NO `data` block at all. Both
+    # digs then read null, which `eq(..., "not-offered")` reported as a wrong
+    # gate and `ge(...)` as a missing seq, when the truth was that the verb
+    # never ran. The mod-side contract was already implemented: Prioritize's
+    # `if (!matched)` exit stamps `Stamp(PrioritizeRow(...))` on the refusal
+    # path. It had simply never been reached.
+    e = send("prioritize", {"pawn": S["A"], "work": "DeliverFoodToPrisoner",
                             "thing": S["B"]})
     eq("6.9a", "a prioritize the game does not offer is refused with a gate", e,
        "data.rejected.0.gate", "not-offered")
@@ -942,7 +1003,51 @@ def phase6():
         eq("6.14", "move-to's own `already-there` gate is still distinct", e,
            "data.rejected.0.gate", "already-there")
 
-    e = send("attack", {"pawns": [S["A"]], "target": S["B"], "queue": True})
+    # 6.15 NEEDS A TARGET THE GAME WOULD ACTUALLY OFFER AN ATTACK ON, and B is
+    # by construction not one — 6.8a above asserts B is `cannot-target`.
+    # PawnOrderVerbs.Attack takes its `CanDraftAttack` -> `outcome.NoThing(
+    # target, "cannot-target", …)` exit and RETURNS THERE, before it ever reads
+    # `ctx.Args.Bool("queue")`, so aimed at a colonist this check was UNPASSABLE
+    # ON ANY SAVE: it measured the wrong gate by construction, not because of
+    # anything about this bench. That is why the first live run reported
+    # `cannot-target` and a reason about drafted-attack options.
+    #
+    # CanDraftAttack's third accepting clause is
+    # `t is Pawn p && p.NonHumanlikeOrWildMan()`, so ANY animal qualifies
+    # regardless of hostility, and the queue block is the very next statement
+    # after it. `filter:"animal"` selects BOTH ClassAnimal and ClassWildlife
+    # (PawnSafe.FilterClasses), so one probe covers tame and wild; the roster
+    # already excludes fogged and off-map pawns (PawnSafe.Hidden), so anything
+    # it returns is a thing PawnActs.ThingArg can resolve.
+    #
+    # Nothing is mutated by this: the queue-unsupported branch refuses every
+    # pawn and returns without building a job, so a colony animal is never
+    # actually attacked.
+    e = send("pawns", {"filter": "animal"})
+    beasts = [p.get("id") for p in as_list(dig(e, "data.list"))
+              if isinstance(p, dict) and p.get("id") is not None]
+    if ARGS.dry_run:
+        beasts = ["<animal>"]
+    if not beasts:
+        # THE ONE LEGITIMATE FIXTURE BRANCH in this phase. With no animal on the
+        # map there is no target that reaches attack's queue block at all, so
+        # the check cannot be staged - and an unstageable check is a fixture
+        # gap, never a FAIL of 4087644.
+        note("6.15", "no animal or wild animal on the map, so attack's queue "
+                     "refusal could not be driven")
+        send("undraft", {"pawns": [S["A"]]})
+        precondition(
+            "6.15", "an animal to point a drafted attack at", False,
+            "`pawns {filter:\"animal\"}` came back empty. PawnOrderVerbs."
+            "CanDraftAttack accepts a pawn target only via `t is Pawn p && "
+            "p.NonHumanlikeOrWildMan()`, and every other clause wants a "
+            "hostile or an attackable building, so with no animal anywhere on "
+            "the map NOTHING reaches the queue-unsupported branch. Everything "
+            "before this point ran; re-run on a map with wildlife.")
+    beast = beasts[0]
+    print("  %sattack target: animal %s%s" % (DIM, beast, OFF))
+
+    e = send("attack", {"pawns": [S["A"]], "target": beast, "queue": True})
     eq("6.15a", "attack REFUSES queue:true rather than dropping it", e,
        "data.rejected.0.gate", "queue-unsupported")
     check("6.15b", "and the reason names the vanilla delegate that cannot pass "
