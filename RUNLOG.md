@@ -1923,3 +1923,209 @@ the tail.
 
 Superseded by session 10's ledger (`git-bug ce15092`), which keeps `fbb2c59`
 open only until its two acceptance debts (4087644, f7b6207) discharge.
+
+## Session 10 — 2026-08-31 (dorian's Linux box). Audit and merge; ledger `ce15092`
+
+Fable orchestrator, opus agents. The round's rule, Evan's: **one agent per
+branch, and the audits are REPORT-ONLY.** Auditors do not fix — they report, the
+orchestrator decides what gets fixed and by whom. That is a change from session
+8, where auditors committed their own fixes. Fourteen agents ran; nine merges
+landed; **no acceptance ran at all**, which is the whole of what is outstanding.
+
+### Step 0 — the two mains were one tree again before anything was dispatched
+
+Local `main` (`aac6209`) and `origin/main` (`d153521`) had diverged: two machines
+did session-9 work that never shared a tree. Merged at `0c151c1`, rebuilt at
+`0dd1029`. Source was disjoint — this box had touched only `MapDumpVerbs.cs`
+plus `baseviz/`, `rwa/`, `accept/`; BORGES had touched the pawn, thing and safe
+files. Two conflicts, both hand-resolved: the 4087644 acceptance `.md` (whose
+"54 checks" header was ALREADY STALE at 51 — which is exactly why the BORGES side
+had refused to record a count, so that side won), and `Assemblies/AutoRimmer.dll`,
+where NEITHER side was correct. First demonstration that both machines' session-9
+work compiles together.
+
+### The audits all passed, and the code was the strong part
+
+All four returned MERGEABLE WITH NAMED FIXES; nothing came back unmergeable.
+**Both branches that had never been compiled by anyone compiled 0 errors, 0
+warnings** — 3.5 with all 18 new op strings in the assembly, 3.6 with all nine.
+That was the round's largest unknown and it is discharged.
+
+**3.6's most alarming property was its safest.** It edits `MedicalBillVerbs.cs`,
+3.4's shipped file, and the change is five comment fixes plus a TRUE MOVE of
+`RecipeAvailableNow` into `WorldSafe` — character-identical body, one added null
+guard that changes nothing, one caller retargeted, exactly one definition
+repo-wide. `accept/3.4-pawn-orders.py` holds unchanged; no assertion flips.
+
+### Three of the round's own premises were wrong
+
+Recorded because the pattern matters more than the items: the brief was written
+against a tree that had already moved.
+
+- **The DESIGN.md conflict the round was briefed on does not exist.** `d180f57`
+  is already an ancestor of `main`; 3.5 appends at the log's tail and git
+  3-way-merges it. (It did conflict on merge here — but only because THIS session
+  had appended entries of its own in the meantime. Resolved by concatenation,
+  twice, with no duplicates either time.)
+- **Five of the six owed DESIGN.md corrections were already paid**, also by
+  `d180f57`. All five were re-verified at source anyway and all five were
+  accurate. Only the PawnSafe Class I entry was genuinely outstanding.
+- **RUNLOG sessions 7 and 8 were not unwritten** — only session 9 was. The brief
+  generalised `HANDOFF.md`'s accurate singular into a wrong plural.
+
+### `bc2250b` does not exist
+
+Six merged commits cite it as a git-bug id — `734211f`, `b59b830`, `a91e624`,
+`d02dcad`, `0fa98ec`, `93721ac`. It is in neither bug store (48 refs local, 42 on
+origin, absent from both), so it was presumably filed on BORGES and never pushed.
+Its work IS on `main` regardless: the refusals journal, `move-to` honouring
+`queue:true`, and PawnSafe Class I. The round's instruction to "close `bc2250b`
+only if green" therefore has no referent.
+
+### What the audits actually found — all of it in the suites and the prose
+
+This is the round's lesson landing exactly where session 9 predicted it would.
+
+- **3.5's suite had NINE structurally broken checks.** Eight passed a computed
+  value where the `$Env` parameter belongs, shifting every later argument — four
+  of those asserted literally nothing while reporting PASS, four were spurious
+  red. The ninth, `4.8g`, read `data.ticks`, a key `TimeDriver` never emits: the
+  single most load-bearing check in the file, and it could only ever fail.
+- **4.2's auditor was run here for the first time** (BORGES has no python) and
+  passes its own selftest — but its `advance-invariants` check was PARTIALLY
+  VACUOUS, and that was DEMONSTRATED rather than argued. It read only the
+  declared `cmd.json` args, never the result's `ticks_elapsed`, while
+  `TimeDriver.Start` defaults `timeout_ticks` to 600000 when `until` is set and
+  the arg is omitted — 10x the stated policy cap. A synthetic 5x violation
+  reported PASS.
+- **A third verb trap, the same shape as the two already known.** PLAY-LOOP.md's
+  act list read as though `orders` were an umbrella taking `move-to`/`attack`/
+  `rescue`/`capture`/`tend` as subcommands. Each of those is its own verb, and
+  `orders` is a sixth, unrelated one that is NOT read-only: it can delete an
+  incompletable bill, burns a scribed `nextJobID` per candidate, and can rewrite
+  the scribed `paused` flag on every bill on the map.
+- **3.6 shipped a real bug: a PARTIAL MUTATION REPORTED AS `bad-args`.**
+  `bill-add` ran `AddBill` and THEN `Configure`, so a bad config argument left the
+  bill in the stack and a retrying agent ended up with two. `storage-set` threw
+  inside its per-target loop after writing, so `Act()` never ran and the state
+  change carried NO JOURNAL ROW AT ALL. Both now validate before the first write.
+- **The 4.1 playbook came back NOT SAFE TO TEACH FROM.** Its worst item was
+  structural, not textual — see below.
+
+### The power-room template's batteries were on a dead net
+
+`templates/power-room.ir.json` placed two `Battery`s two cells clear of the
+generator. Batteries carry `transmitsPower true`, so they are TRANSMITTERS, and
+`PowerNetMaker.ContiguousPowerBuildings` grows a net by walking
+`GenAdj.CellsAdjacentCardinal` — **transmitters must physically TOUCH.** The bank
+therefore formed its own net and charged from nothing, and the template's own
+check could not detect it: `nets_with_generator >= 1` and `batteries: 2` both
+pass on a split net. The safety story inverted too, since with no batteries on
+the conduit's net `DoShortCircuit` takes the start-a-fire branch rather than the
+explosion branch.
+
+**Evan supplied the better fix and it is now the template's.** The audit proposed
+moving the batteries; the bridge used instead is `HiddenConduit`, a SEPARATE
+ThingDef whose parent is `PowerConduit` — so it still transmits, but
+`ShortCircuitUtility.GetShortCircuitablePowerConduits` lists
+`ThingDefOf.PowerConduit` BY DEF, so a hidden conduit is never a Zzzt candidate.
+That fixes the net AND removes the spark point, which is what a Zzzt-safety
+template should have done from the start.
+
+The distinction that made the dead net invisible is now written down, because it
+is reusable: **transmitters must TOUCH; only CONNECTORS get the six cells** of
+`PowerConnectionMaker.BestTransmitterForConnector`'s `ExpandedBy(6)`. "Within 6
+cells" is true for a stove and false for a battery.
+
+### All three order-honesty defects had wrong premises
+
+`ac407f1` was filed off three failures measured at 48/51 on this bench. Every one
+of the three diagnoses was overturned at source before any code was written.
+
+- **(a) was already fixed.** `9109eaf` and `734211f` had done it hours earlier and
+  both are ancestors of `main`. **The 48/51 baseline was measured against a bench
+  running an assembly built BEFORE `93721ac`** — RimWorld loads the DLL at
+  startup, so a rebuild never reaches a running bench. The BASELINE was stale,
+  not the code.
+- **(b)'s reasoning was backwards.** `workGiverDef != null` is not what excludes
+  `JobGiver_Work`'s autonomous `playerForced`: `GiverTryGiveJobPrioritized` sets
+  `workGiverDef` BEFORE `TryIssueJobPackage` sets `playerForced`, so the
+  autonomous job carries both. `jobGiver is ThinkNode_QueuedJob` is what rejects
+  it. `ordered` keeps its meaning; `order_kind` (work|direct|null) is published
+  alongside.
+- **(c)'s framing was wrong.** `TryTakeOrderedJob` has THREE branches past the
+  early-out, not one. `queue:true` on an IDLE pawn does not queue — it STARTS.
+  Two of the three branches `ClearQueuedJobs`, destroying work already lined up,
+  and the third queues an order the caller never asked to queue while the pawn
+  carries on — and the verb still answered `accepted:1`. `order_effect`
+  (started|queued|gone), `queue_depth` and `queue_dropped` now publish it.
+
+The fixture lesson that came with it is the general one: the suite staged its
+"running job" with `wear`, then advanced 2500 ticks — long enough to FINISH
+wearing. Worn apparel is unspawned, so `ThingArg` refused it, the stage silently
+did nothing, an idle pawn took branch 1, and the resulting queue reading of 0
+looked exactly like a publication bug. **A fixture that fails silently is
+indistinguishable from the defect it was built to detect.**
+
+### `--landmarks` was never passing
+
+Session 9 recorded that 2.5's renders with and without the flag produced an
+identical hash. That was an EMPTY REGISTRY, not agreement — `landmark --list`
+returned `{}`, so there was nothing to draw. The path is untested, not proven.
+The plain `landmark {set:{name,at}}` verb is not dev-gated, so it CAN be
+exercised, and the check is now inverted: two landmarks in the rect, and the
+renders MUST differ.
+
+### A dry-run must not say "passed"
+
+Four of the five drivers in `accept/` ended a `--dry-run` with "RESULT: all N
+checks passed" in green — for a run that SENDS NOTHING and evaluates nothing.
+That is this round's own failure mode reproduced one level up, and it is the
+first thing anyone sees when trying a suite out; two of those numbers were quoted
+as evidence during this very session before it was noticed. All five now report
+the count as expectations PRINTED, say plainly that nothing was sent and no dig
+path was proved, and say to run it live — in yellow (`61e3fc1`).
+
+### What landed
+
+`0c151c1` converge · `0dd1029` build · `03398e4` RUNLOG 9 · `850c1eb` DESIGN
+Class I · `25f8ec6` designate honesty + map-view alphabet · `8089ca7` 4.2 ·
+`88dae16` order honesty · `10da528` DESIGN order_kind · `6775eb6` build ·
+`4b60f3f` 2.5 fixture · `baaaea4` 3.5 · `51f39bc` 3.6 · `0dbea20` playbook ·
+`8675cb2` 70ac258 driver · `61e3fc1` dry-run honesty · `172e168` build.
+
+`172e168` is the **first assembly that has ever contained the dialog and bills
+surfaces.** Verified rather than assumed: InformationalVersion names `61e3fc1`,
+AssemblyConfiguration blob is Release, pdb path is this worktree, and the new op
+strings are present.
+
+Filed: `2a7c064` (p3) — `_label_pass` adds `size/2` to a position that is already
+the centre, so an odd-width building's code draws one cell east of true centre.
+
+### What this session did NOT prove, stated plainly
+
+**NO ACCEPTANCE RAN. Not one suite, not one check, against no bench.** Five
+drivers now exist and plan 615 expectations between them — 4087644 (96), 3.4
+(137), 3.5 (171), 3.6 (119), 70ac258 (92) — and 2.5's legibility fixture is
+staged on paper and unexecuted. Per the standing rule, treat every one of those
+numbers as ZERO evidence. Nothing was closed, correctly: `4087644`, `70ac258`,
+`f7b6207`, `20e5cda`, `48f666c`, `d2e1229`, `96d9315`, `ac407f1`, `8b0b88f`,
+`e6faa51` and `05dd70e` all remain open pending that run.
+
+`20e5cda`'s Acceptance section was AMENDED IN PLACE first, because its second
+criterion could not be met by any implementation — `Verse/NewQuestLetter` has no
+accept option, so no letter option exists to press.
+
+### Process note, recorded against this orchestrator
+
+Eight agents were dispatched against the round's defect list without first
+spending five minutes checking `git log` for what had already been fixed. That
+one cheap pass would have cancelled or shrunk a meaningful fraction of the work —
+(a) was already done, the stale WorldSafe note was already done, five of six
+DESIGN corrections were already done. **Taking a handover brief at face value is
+the exact failure this round existed to catch**, and the orchestrator committed
+it. A staleness sweep belongs before dispatch, not inside each agent.
+
+### Bench state
+
+CLOSED — never launched this session. `autostart.rws` untouched.
