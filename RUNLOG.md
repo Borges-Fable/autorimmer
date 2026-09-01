@@ -2174,7 +2174,7 @@ Logs committed at `accept/runs/s11-20260831/` (`8e6cedb`).
 | `4087644-order-honesty` | 92/97 | **100/100**, exit 0 |
 | `8b0b88f-already-designated` (new) | 121/123 | **123/123**, exit 0 |
 | `3.4-pawn-orders` | 147/150 | **159/159**, exit 0 |
-| `3.5-dialog-verbs` | 48 pass, 0 fail, exit 2 | 104 pass, 0 fail; then 79/86 in phase 3 |
+| `3.5-dialog-verbs` | 48 pass, 0 fail, exit 2 | **89/0** through phase 2; **101/1** in trade |
 
 **Zero red errors in every suite that asserted on them**, across every run.
 
@@ -2244,13 +2244,19 @@ failures, and then reached its trade phase.
 
 ### What did NOT come out green, stated plainly
 
-- **3.5 phase 3 — 79/86, seven failures, UNRESOLVED tonight.** An out-of-range
-  buy was accepted rather than refused, and it journaled a call it should have
-  wholly refused; the silver arithmetic came out +99 instead of ~0. **I am not
-  calling this a mod defect.** The driver bought and sold the SAME def
-  (`ComponentIndustrial`) in one deal, which a single `Tradeable.countToTransfer`
-  cannot represent, and that alone explains the arithmetic. Under diagnosis;
-  `20e5cda` stays open.
+- **3.5's trade phase went 79/86 to 101/102, and the survivor is the night's
+  only unresolved MOD defect.** All seven original failures were the driver's and
+  are fixed (`8904138`): it bought and sold the SAME def, which one signed
+  `Tradeable.CountToTransfer` cannot represent; its silver expectation was
+  `sell_value − buy_value`, structurally zero because `AddDealTotals` includes the
+  currency row where `TradeDeal.UpdateCurrencyCount` skips it; the out-of-range
+  gate is unreachable from a zero row; and `3.2d` asserted nothing because
+  `trade-start` never publishes `force_pause`. The remaining failure: `data.after`
+  reported 50 `ComponentIndustrial` after a purchase that an independent `things`
+  read shows brought the colony to 60. **The trade itself was correct** — silver
+  moved by exactly the promised −360, zero red errors — but the verb's own
+  post-trade echo does not see the goods it just bought. Filed on `7e8c969`;
+  `20e5cda` stays open on it.
 - **`091e3f0` is merged but NOT closed.** The forbidding is proven live from two
   directions — the kit reports 10 forbidden stacks, and `unforbid` independently
   accepts exactly 10, then 0 on a second pass. Left forbidden and advanced 2500
