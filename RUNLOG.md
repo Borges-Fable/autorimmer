@@ -2569,3 +2569,126 @@ the hediff cap that hid it. Serially, from one session, per `16b959a`.
 - **Whether `664e9b9` closes is still Evan's call.** The run failed its hard
   criterion. Either it closes as evidence — the platform proved out, the colony
   did not — or M1 re-runs on a fresh seed with the four fixes the run produced.
+
+## Session 14 — 2026-09-01 (dorian's Linux box). Pre-flight for the round that makes blueprints buildable
+
+No worker was dispatched and no branch was cut. This session did the verify-first
+pass the round's brief demanded, the pre-flight the brief did not know it needed,
+and the git-bug record-keeping that came out of both. Everything below is on
+`main`.
+
+### Four of the brief's claims did not survive verification
+
+Session 13's brief lost four claims to the same pass; this is not a new failure
+mode, it is the pass working.
+
+- **"Is there deconstruct / cancel / build-roof? I looked in `DesignateEngine.cs`
+  and found storage filter categories, not designators."** The table is
+  `DesignationVerbs.cs`; `DesignateEngine.cs` is the target resolver.
+  `deconstruct`, `deconstruct-conduit`, `uninstall`, `cancel`, `claim`,
+  `fill-in`, `strip`, `open` and the whole mine/plant/terrain set all ship, each
+  citing the `Designator_*` class whose own `CanDesignate*` it runs, each gated
+  additionally on `des.Visible`. `build-roof` / `no-roof` / `ignore-roof` ship in
+  `AreaVerbs.cs` — correctly, because the game makes those `Designator_Area*`.
+  **A build round's "needs cancel and deconstruct at minimum" was already met.**
+  And `cancel` is `Designator_Cancel`, which destroys player blueprints and
+  frames, so 3.3's `cancel-layout` is placement-id bookkeeping over a shipped
+  verb rather than new game-facing work.
+- **"`templates/power-room.ir.json` exists and the rest are .md only."** All
+  three templates carry both halves — `bedroom` [5,7], `freezer-kitchen` [11,6],
+  `power-room` [7,7] — in the identical nine-key dialect. The IR is a format
+  with three conforming instances. What is actually open is `INDEX.md`'s own
+  "Row 0 = north is PROPOSED, not established", which is a different question.
+- **`e6faa51` (map-view alphabet identity) was already shipped**, in `28d52ae`,
+  and merely never closed. `Spatial.cs` carries
+  `AlphabetId = "map-view/ascii-1"` in a `channel` block mirroring `map-dump`'s,
+  each naming the other in `distinct_from`. Closed on evidence.
+- **`build` is in the brief's DONE MEANS and was assigned to no session.** A is
+  the shared routine, B is "consumers", C touches no C#. The verb the round is
+  named for had no owner.
+
+### The pre-flight the brief did not anticipate
+
+**The evidence three open issues rest on lived outside the repo, one bench launch
+from being overwritten.** `8b4839f`, `c718e4a` and `3a5ff6c` cite response
+envelopes by name (`results/accs13-026-devspawnthing.json` and four others) and
+journal rows by seq. Those files existed only in `_RimWorld-Agent`'s protocol
+root — the working directory of whatever bench runs next — and this round
+launches benches repeatedly.
+
+What the repo *did* hold was `transcripts/20260901T121508/`, which carries a
+`cmd.json` per call and **no responses**. So the round's premise was banked on
+the ask side and nowhere on the answer side. A transcript proves what was asked;
+it does not prove what the game answered, and the answers are the findings.
+
+Banked at `accept/runs/s13-20260901/`: 65 `accs13-*` envelopes, the 62-row
+journal, and a README recording why. `accs13-026` verified against `8b4839f`'s
+text before committing — `reason` names granite on the interaction cell,
+`blocker` names a `WoodLog` on the target cell with `removal: "none"`, the
+opposite of the truth. Standing lesson written down there: **an issue that cites
+a path under the bench's protocol root cites a file with a lifetime shorter than
+the issue.**
+
+Also on `main`: session 13's two DESIGN decisions were still uncommitted, so
+every worktree cut today would have started without them. Committed. Six stale
+session-13 worktrees pruned (all merged, all clean; the one carrying untracked
+files held a `fakebench` stub root for a different session and an older copy of
+a suite `main` supersedes). Branches kept.
+
+### Resolved by investigation, not queued
+
+- **Roofing needs no spec.** Designation ships (`area`), automatic roofing covers
+  any enclosed non-edge non-fogged player room of ≤26 regions and ≤320 cells —
+  a 7x7 module is 49 — and observation ships three ways. What is owed is a test
+  discipline: `TryGenerateAreaFor` only QUEUES, `TryGenerateAreaNow` runs next
+  tick, so **an acceptance that reads the roof area in the same call as the
+  placement sees nothing and reports a correct implementation as broken.**
+- **"Does the work happen?" is not a work-priority gap.** `work-priorities`
+  ships, fan-out included. The gap is observation and it is total:
+  `grep Blueprint Source/AutoRimmer/` returns **zero**, and `digest` has no
+  construction section. Filed as **`d7c8088`**, with the finding that makes it
+  more than "list the blueprints": **completion is an absence.** A finished build
+  leaves no blueprint and no frame, so `built` and `cancelled` are the same
+  nothing unless the read is keyed on 3.3's placement id and the
+  `Frame.CompleteConstruction` / `FailConstruction` transitions are journaled.
+  Three verified hazards recorded on it, including that `CostListAdjusted`
+  `Log.Error`s on null stuff for a `MadeFromStuff` def — so a naive observer
+  **turns a clean run red by reading it**, and the suites count red errors.
+- **`2a7c064` is half a defect as filed.** The x axis is wrong for odd widths, as
+  reported. The z axis is wrong too, one cell in the opposite direction, for odd
+  heights — invisible until now because the specimen is a 3x1 stove, height 1.
+  A third defect in the same function: the renderer reproduces only the swap half
+  of `GenAdj.AdjustForRotation` and drops the per-axis even-size centre shift, so
+  an even-sized rotated building's derived rect is displaced. The exact formula
+  for both axes and both parities is on the issue, with the even-width answer
+  stated as the acceptance asked.
+- **`7382bdd`'s whitelist-vs-narrow choice is pre-authorized** rather than left
+  to a round trip on a one-DLL tree: attempt the whitelist, fall back to
+  `pos_source` if a shipped suite breaks for anything but a genuine caller bug,
+  record which suites forced it.
+- **The round ships `build`; `place-layout` is next.** DONE MEANS names one verb
+  and one read, and this project's rule is that the acceptance section is the
+  contract. `place-layout --origin P` also cannot state its own convention until
+  the north pin exists, and that pin is this round's output. `build` lands in
+  session B beside `3a5ff6c`, because comment #7 on `1adc737` already establishes
+  that instant mode IS `dev:spawn-thing {buildable:true}` — splitting them means
+  two sessions writing the same `SiteGate` call serially against one DLL.
+- **The north pin moves from 3.3 to `bac4eba`.** It is a decision about
+  `templates/` and `baseviz/`, neither of which is C#; the mod has no opinion on
+  IR orientation and would not until `place-layout` exists. `bac4eba`'s session
+  runs in parallel; 3.3's is serialized behind the site routine.
+
+### git-bug, discharged serially from one place
+
+`e6faa51` **closed** on evidence (`state:done`) · `d7c8088` **new** (construction
+observation, p1/spec/wave:3) · `1adc737` two comments (the three investigation
+resolutions; the scope split) · `bac4eba` (templates correction, the north pin,
+its ownership) · `2a7c064` (the z axis, the rotation shift, the formula) ·
+`7382bdd` (the pre-authorization).
+
+### State at handover
+
+`main` clean, one worktree, no build debt — `git diff -U0 11ef46c..HEAD -- '*.cs'`
+filtered for non-comment change is empty, and `Assemblies/AutoRimmer.dll`'s pdb
+path names this worktree under `obj/Release/`. Nothing has been built, launched
+or branched. The three sessions are ready to cut.
