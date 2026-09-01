@@ -643,12 +643,18 @@ namespace AutoRimmer
         // Faction set BEFORE spawn (SetFactionDirect, the game's own dev-spawn
         // route) so the building is the player's from its first tick — power
         // nets and Building.DeconstructibleBy both key on it.
+        //
+        // THROUGH THE GATE SINCE 3a5ff6c item 3. This used to be a bare
+        // `GenSpawn.Spawn(..., WipeMode.Vanish)` with no validator of any kind,
+        // not even the `CanSpawnAt` that `dev:spawn-thing` uses — so the `power`
+        // step could lay a conduit run through a wall and report a grid. It now
+        // asks `GenConstruct.CanPlaceBlueprintAt` and REFUSES; the widget half
+        // (research, tech level) is reported and not honoured, which is what
+        // keeps this fixture legal on a fresh map where Electricity is
+        // unresearched. FixtureSite's header carries the argument.
         private static Thing SpawnPlayerBuilding(Map map, ThingDef def, IntVec3 at)
-        {
-            var thing = ThingMaker.MakeThing(def);
-            thing.SetFactionDirect(Faction.OfPlayer);
-            return GenSpawn.Spawn(thing, at, map, Rot4.North, WipeMode.Vanish);
-        }
+            => FixtureSite.Spawn(map, def, GenStuff.DefaultStuffFor(def), at, Rot4.North,
+                "journal-selftest", out _);
     }
 
     // Fixture alerts for journal-selftest's `alerts` step (2.6 acceptance).

@@ -33,6 +33,13 @@ namespace AutoRimmer
     //     fixture picks an available recipe itself so the resulting bill is a
     //     REAL one rather than a stuck one; `research_ok` on the bill line is
     //     what proves the serializer would have caught a stuck one.
+    //     THE CAP HALF IS NO LONGER A GOD-HAND (git-bug 0d9cbd7 comment #1,
+    //     point 2): this step adds TWO bills and never cleared, so repeated
+    //     calls pushed the stack past `BillStack.MaxCount`, which the game's own
+    //     UI enforces. It now REFUSES at the cap rather than clearing silently,
+    //     with `clear_bills:true` as the explicit opt-in. The recipe half stays
+    //     a god-hand on purpose — an unresearched bill is a state worth being
+    //     able to stage.
     //   * ResearchManager.SetCurrentProject tests only `baseCost > 0f` — no
     //     prerequisite check at all. Used here on purpose, and the fixture picks
     //     a project whose prerequisites ARE met, so `research.current` describes
@@ -55,19 +62,25 @@ namespace AutoRimmer
 
             var executed = new List<object>();
             var extras = new Dictionary<string, object>();
+            // THE HANDLE THE STEPS PASS TO EACH OTHER (git-bug 0d9cbd7). Before
+            // this existed the switch shared nothing but `extras`, which is
+            // OUTPUT, so a later step had no way to reach an object an earlier
+            // one had made and re-resolved it from the map instead.
+            var chain = new FixtureChain();
+            var seen = new Dictionary<string, int>(StringComparer.Ordinal);
 
             foreach (var step in steps)
             {
                 string target;
                 switch (step)
                 {
-                    case "bench": target = Bench(map, ctx, extras); break;
-                    case "bill": target = AddBill(map, ctx, extras); break;
+                    case "bench": target = Bench(map, ctx, extras, chain); break;
+                    case "bill": target = AddBill(map, ctx, extras, chain); break;
                     case "stockpiles": target = Stockpiles(map, ctx, extras); break;
                     case "growing": target = Growing(map, ctx, extras); break;
                     case "research": target = Research(ctx, extras); break;
-                    case "letter": target = Letter(map, ctx, extras); break;
-                    case "open-letter": target = OpenLetter(extras); break;
+                    case "letter": target = Letter(map, ctx, extras, chain); break;
+                    case "open-letter": target = OpenLetter(extras, chain); break;
                     case "forbid": target = Forbid(map, ctx, extras); break;
                     case "fire": target = Fire(map, ctx, extras); break;
                     default:
@@ -81,11 +94,100 @@ namespace AutoRimmer
                     ["target"] = target,
                 }, Find.TickManager.TicksGame);
                 executed.Add(step);
+                seen[step] = seen.TryGetValue(step, out var n) ? n + 1 : 1;
             }
 
+            // WHAT THE BILLS ACTUALLY LOOK LIKE NOW. `extras["bench"]` is built
+            // inside `Bench(...)`, i.e. BEFORE any `bill` step in the same call
+            // has run, so `expect_bills: 0` and `expect_slots_free: 15` were
+            // literals that a chained call made WRONG. The either/or in the
+            // issue's acceptance ("reflects the bills present when the call
+            // RETURNS *or* the field is removed") is resolved in favour of
+            // KEEPING it and making it true: an independent hand-count is what
+            // the field is for, and deleting it would leave `bills` with nothing
+            // to be checked against. Refreshed here rather than by deferring the
+            // whole block, so the block keeps its position in the envelope.
+            Refresh(extras, chain);
+
             var data = new Dictionary<string, object> { ["executed"] = executed };
+            // A REPEATED STEP IS ALLOWED AND SAYS SO. `steps` is not deduped and
+            // every handler writes `extras["<key>"] = …`, so
+            // `{steps:["bench","bench"]}` really does spawn two tables and
+            // publish only the second — which is legitimate for a fixture (two
+            // benches is a thing a test may want) and silent, which is not.
+            // The chain points at the LAST object created, which is the only
+            // answer that makes `{steps:["bench","bench","bill"]}` mean anything.
+            var repeated = new Dictionary<string, object>();
+            foreach (var kv in seen) if (kv.Value > 1) repeated[kv.Key] = kv.Value;
+            if (repeated.Count > 0)
+            {
+                data["repeated_steps"] = repeated;
+                data["repeated_note"] =
+                    "a step that ran more than once really ran more than once — every object was "
+                    + "created — but each block below reports only the LAST, and a later step in "
+                    + "the same call chains to the LAST. Ask for one per call if you need both ids.";
+            }
             foreach (var kv in extras) data[kv.Key] = kv.Value;
             return data;
+        }
+
+        // The objects this call has created, for the steps that come after.
+        //
+        // THE AUDIT, EVERY STEP IN THE SWITCH (git-bug 0d9cbd7 comment #1, which
+        // corrected the issue's own list: it named four steps that CREATE things
+        // and omitted the one other step that RESOLVES one).
+        //
+        //   RESOLVERS — the whole bug class, both fixed here:
+        //     `bill`         resolved the first player `TableButcher` in
+        //                    `ListerThings.ThingsInGroup(PotentialBillGiver)`.
+        //                    `Verse/ListerThings.Add` APPENDS, so "first" is
+        //                    "oldest spawned" and the second `bench` step in a
+        //                    session lands BEHIND the first. Confirmed live on
+        //                    BORGES: bench #23492 made, bills onto #23491.
+        //     `open-letter`  resolved the first letter in
+        //                    `LetterStack.LettersListForReading` whose label
+        //                    starts with the fixture prefix. All three tells of
+        //                    the same bug: first-match over a shared live list,
+        //                    an error string that ASSERTS the chaining ("run the
+        //                    `letter` step first"), and an id the earlier step
+        //                    already published and nobody consulted.
+        //
+        //   CREATORS — nothing to chain TO, so nothing to fix:
+        //     `bench`, `letter`   the two sources of a handle.
+        //     `stockpiles`, `growing`, `fire`   each picks GROUND, not an object.
+        //                    They ring out from the colonist anchor and
+        //                    `FindClearRect`/`ZoneOk` already exclude cells that
+        //                    hold a zone or an edifice, so two `stockpiles`
+        //                    steps in one call get different rects — the
+        //                    first-match is over CELLS and is re-narrowed by
+        //                    what the previous step did to them.
+        //     `research`     resolves a `ResearchProjectDef` out of the def
+        //                    database, and no step creates one. First-match, but
+        //                    over immutable data.
+        //     `forbid`       resolves a POOL of live haulables (`HaulableEver`,
+        //                    sorted by id) and is genuinely first-match over a
+        //                    shared live list — but no step in the switch creates
+        //                    a haulable, so there is nothing for it to chain to.
+        //                    If one is ever added, this is the step to revisit.
+        private sealed class FixtureChain
+        {
+            public Thing Bench;
+            public Letter Letter;
+        }
+
+        // `expect_bills` and `expect_slots_free` from the bench's REAL stack.
+        // Both were literals (0 and 15) and both are the same defect; the issue's
+        // acceptance names only the first, so fixing only that would have left a
+        // bench holding two bills reporting fifteen free slots.
+        private static void Refresh(Dictionary<string, object> extras, FixtureChain chain)
+        {
+            if (chain.Bench == null) return;
+            if (!(extras.TryGetValue("bench", out var raw) && raw is Dictionary<string, object> block)) return;
+            int count = 0;
+            try { count = (chain.Bench as IBillGiver)?.BillStack?.Count ?? 0; }
+            catch { }
+            block["expect_bills"] = count;
+            block["expect_slots_free"] = Math.Max(0, BillStack.MaxCount - count);
         }
 
         // ------------------------------ bench -------------------------------
@@ -93,19 +195,30 @@ namespace AutoRimmer
         // dev spawner does (SetFactionDirect BEFORE spawn, so it is the player's
         // from its first tick — the `power` step of journal-selftest established
         // that discipline and BillGiver/DeconstructibleBy both key on it).
-        private static string Bench(Map map, VerbContext ctx, Dictionary<string, object> extras)
+        private static string Bench(Map map, VerbContext ctx, Dictionary<string, object> extras,
+            FixtureChain chain)
         {
             var def = ThingDefOf.TableButcher;
             var anchor = Anchor(map);
             var rect = FindClearRect(map, anchor, Math.Max(1, def.size.x) + 1, Math.Max(1, def.size.z) + 1);
-            var thing = ThingMaker.MakeThing(def, GenStuff.DefaultStuffFor(def));
-            thing.SetFactionDirect(Faction.OfPlayer);
-            var spawned = GenSpawn.Spawn(thing, rect.CenterCell, map, Rot4.North, WipeMode.Vanish);
+            // THE GATE, which this step had none of (git-bug 3a5ff6c item 3).
+            // `FindClearRect` walks cells; a butcher table has a footprint AND an
+            // interaction cell, and neither the rect search nor the bare
+            // GenSpawn.Spawn that followed it knew that. FixtureSite runs
+            // GenConstruct.CanPlaceBlueprintAt and refuses rather than staging a
+            // bench no colonist could have built — see its header for why the
+            // widget half is reported and not honoured here.
+            var spawned = FixtureSite.Spawn(map, def, GenStuff.DefaultStuffFor(def),
+                rect.CenterCell, Rot4.North, "world-fixture bench", out var gate);
+            // The handle. Everything the `bill` bug was is the absence of this
+            // one line (git-bug 0d9cbd7).
+            chain.Bench = spawned;
             extras["bench"] = new Dictionary<string, object>
             {
                 ["id"] = spawned.thingIDNumber,
                 ["def"] = def.defName,
                 ["at"] = Positions.Out(spawned.Position),
+                ["gate"] = gate,
                 // What `bills` must independently report.
                 ["expect_bills"] = 0,
                 ["expect_slots_free"] = 15,
@@ -114,9 +227,10 @@ namespace AutoRimmer
         }
 
         // ------------------------------- bill -------------------------------
-        private static string AddBill(Map map, VerbContext ctx, Dictionary<string, object> extras)
+        private static string AddBill(Map map, VerbContext ctx, Dictionary<string, object> extras,
+            FixtureChain chain)
         {
-            var giver = FindBench(map, ctx) as IBillGiver;
+            var giver = FindBench(map, ctx, chain, out string benchSource) as IBillGiver;
             if (giver == null) throw new VerbArgsException("bill needs a bill giver (run the `bench` step first)");
             var thing = (Thing)giver;
 
@@ -145,7 +259,49 @@ namespace AutoRimmer
                 throw new VerbArgsException($"{thing.def.defName} has no runnable recipe"
                     + (wanted != null ? $" named '{wanted}'" : ""));
 
-            var bill = new Bill_Production(chosen);
+            // THE CAP THE MODEL DOES NOT ENFORCE. `RimWorld/BillStack.AddBill`
+            // is `bill.billStack = this; bills.Add(bill);` and validates
+            // nothing, while the game's own UI stops the player at
+            // `BillStack.MaxCount` (15). Eight `bill` steps against one bench
+            // therefore pushed the stack past a cap no player can exceed, and
+            // this step adds TWO bills and never clears.
+            //
+            // REFUSE, DO NOT SILENTLY CLEAR. A fixture that clears destroys
+            // state the caller or an earlier step staged, and it would do it
+            // under a name ("bill") that says nothing about removal. Refusing
+            // names the problem and `clear_bills:true` is the explicit opt-in.
+            bool clearFirst = ctx.Args.Bool("clear_bills", false);
+            int cleared = 0;
+            if (clearFirst)
+            {
+                cleared = giver.BillStack.Count;
+                giver.BillStack.Clear();
+            }
+            if (giver.BillStack.Count + 2 > BillStack.MaxCount)
+                throw new VerbArgsException(
+                    $"#{thing.thingIDNumber} already holds {giver.BillStack.Count} bills and this "
+                    + $"step adds 2, which would pass BillStack.MaxCount ({BillStack.MaxCount}) — a "
+                    + "cap the game's UI enforces and BillStack.AddBill does not. Pass "
+                    + "clear_bills:true to empty the stack first, or name a different bench.");
+
+            // BillUtility.MakeNewBill, NOT `new Bill_Production(recipe)`.
+            // `RimWorld/BillUtility.MakeNewBill` dispatches on the recipe:
+            // `Bill_ProductionWithUft` for `UsesUnfinishedThing`,
+            // `Bill_ResurrectMech` for `mechResurrection`, `Bill_ProductionMech`
+            // for `gestationCycles > 0`, `Bill_Autonomous` for
+            // `formingTicks > 0`, and `Bill_Production` otherwise. This step
+            // takes a caller-supplied `recipe`, so constructing the base class
+            // directly staged the WRONG RUNTIME TYPE for any of those four — the
+            // same "silently stages the wrong object" class this issue is filed
+            // about, one level down (0d9cbd7 comment #1, point 3). Every one of
+            // the four derives from `Bill_Production`, so the property sets below
+            // are still valid; the cast is guarded anyway because a mod recipe
+            // reaching a modded MakeNewBill is not ours to assume about.
+            var bill = chosen.MakeNewBill() as Bill_Production
+                ?? throw new VerbArgsException(
+                    $"BillUtility.MakeNewBill returned a bill that is not a Bill_Production for "
+                    + $"'{chosen.defName}', so the repeat-mode fields this fixture sets do not "
+                    + "exist on it — name a different recipe");
             bill.repeatMode = BillRepeatModeDefOf.TargetCount;
             bill.targetCount = ctx.Args.Int("target_count", 20);
             bill.unpauseWhenYouHave = ctx.Args.Int("unpause_when", 5);
@@ -159,7 +315,7 @@ namespace AutoRimmer
 
             // A second, SUSPENDED bill so the serializer's `suspended` and
             // `state` fields have both values to show in one read.
-            var second = new Bill_Production(chosen);
+            var second = chosen.MakeNewBill() as Bill_Production;
             second.repeatMode = BillRepeatModeDefOf.RepeatCount;
             second.repeatCount = 3;
             second.suspended = true;
@@ -168,7 +324,18 @@ namespace AutoRimmer
             extras["bill"] = new Dictionary<string, object>
             {
                 ["bench_id"] = thing.thingIDNumber,
+                // WHERE THE BENCH CAME FROM — `arg` | `chained` | `first-on-map`.
+                // The same discipline `Dev.PosArg`'s `pos_source` follows
+                // (git-bug 7382bdd), and it is what would have made this issue's
+                // original defect visible in the envelope instead of only in a
+                // hand-comparison of two ids: `first-on-map` after a `bench`
+                // step in the SAME call is now impossible, and seeing it at all
+                // means no bench was made and none was named.
+                ["bench_source"] = benchSource,
+                ["bench_def"] = thing.def?.defName,
                 ["recipe"] = chosen.defName,
+                ["bill_class"] = bill.GetType().Name,
+                ["cleared_first"] = clearFirst ? (object)cleared : null,
                 // The hand-computation `bills` must independently arrive at —
                 // two readers, one truth (the `stockpile` step's discipline).
                 ["expect_bills"] = giver.BillStack.Count,
@@ -188,7 +355,7 @@ namespace AutoRimmer
                     ["suspended"] = true,
                     ["state"] = "suspended",
                 },
-                ["expect_slots_free"] = Math.Max(0, 15 - giver.BillStack.Count),
+                ["expect_slots_free"] = Math.Max(0, BillStack.MaxCount - giver.BillStack.Count),
             };
             return chosen.defName + " x2 on #" + thing.thingIDNumber;
         }
@@ -340,7 +507,8 @@ namespace AutoRimmer
         // hyperlinks has FOUR options with four different labels, which is what
         // "lists the letter with its exact option labels" needs to be a real
         // test rather than a one-button one.
-        private static string Letter(Map map, VerbContext ctx, Dictionary<string, object> extras)
+        private static string Letter(Map map, VerbContext ctx, Dictionary<string, object> extras,
+            FixtureChain chain)
         {
             var at = Anchor(map);
             var hyperlinks = new List<ThingDef> { ThingDefOf.Steel, ThingDefOf.MedicineHerbal };
@@ -376,6 +544,10 @@ namespace AutoRimmer
                 expect.Add("choices threw: " + e.Message);
             }
 
+            // The handle, the other half of git-bug 0d9cbd7. `open-letter` had
+            // the identical defect to `bill` and was named nowhere in the
+            // issue's own audit list — comment #1's omission.
+            chain.Letter = letter;
             extras["letter"] = new Dictionary<string, object>
             {
                 ["id"] = letter.ID,
@@ -396,14 +568,33 @@ namespace AutoRimmer
         // window half of `interactions` gets something to describe without
         // waiting for a real event — and it is a MUTATION, which is why it lives
         // in the fixture. `journal-selftest dialogs-clear` is the escape hatch.
-        private static string OpenLetter(Dictionary<string, object> extras)
+        //
+        // THE SECOND CHAINING BUG, and the issue's own audit list did not
+        // contain it (git-bug 0d9cbd7 comment #1). This resolved the first letter
+        // in `LetterStack.LettersListForReading` whose label starts with the
+        // fixture prefix — first-match over a shared live list, with an error
+        // string that ASSERTS the chaining it did not perform, and an id
+        // (`extras["letter"]["id"]`) the `letter` step had already published and
+        // nobody consulted. Two `letter` steps in a session and this opened the
+        // OLDER one. Fixed the same way `bill` is; `letter_source` says which
+        // route answered.
+        private static string OpenLetter(Dictionary<string, object> extras, FixtureChain chain)
         {
             var stack = Find.LetterStack?.LettersListForReading;
             Letter found = null;
-            if (stack != null)
+            string source = null;
+            // The chain first, and only while the letter is still STACKED: one
+            // that timed out or was dismissed between the two steps is gone, and
+            // opening a dead letter would fail somewhere less legible than here.
+            if (chain?.Letter != null && stack != null && stack.Contains(chain.Letter))
+            {
+                found = chain.Letter;
+                source = "chained";
+            }
+            if (found == null && stack != null)
                 foreach (var l in stack)
                     if (l != null && l.Label.ToString().StartsWith(FixtureLetterLabel, StringComparison.Ordinal))
-                    { found = l; break; }
+                    { found = l; source = "first-in-stack"; break; }
             if (found == null) throw new VerbArgsException("no fixture letter in the stack (run the `letter` step first)");
             found.OpenLetter();
             bool paused = false;
@@ -412,6 +603,7 @@ namespace AutoRimmer
             extras["open_letter"] = new Dictionary<string, object>
             {
                 ["id"] = found.ID,
+                ["letter_source"] = source,
                 ["force_pause_now"] = paused,
                 ["expect_window_type"] = "Dialog_NodeTreeWithFactionInfo",
                 ["note"] = "close it with journal-selftest dialogs-clear before advancing",
@@ -524,16 +716,36 @@ namespace AutoRimmer
             catch { return "?"; }
         }
 
-        private static Thing FindBench(Map map, VerbContext ctx)
+        // THE THREE SOURCES, IN PRECEDENCE ORDER, and the source is published.
+        //
+        //  1. `bench` ARG — an explicit id always wins, which is what keeps the
+        //     two-call workaround in `accept/32b9e01-orders-makingfor.ps1`
+        //     working unchanged (that file's `New-FixtureBench` names the bench
+        //     it just made and asserts `data.bill.bench_id` came back equal).
+        //  2. THE CHAIN — the bench a `bench` step made in THIS call. This is
+        //     the fix: the resolution below was reached even when the answer was
+        //     sitting right there, because the steps shared nothing.
+        //  3. The lister's first player bill giver — the old behaviour, kept for
+        //     `{steps:["bill"]}` on a map that already has a bench, and now
+        //     reported as `first-on-map` so a reader can see it happened.
+        private static Thing FindBench(Map map, VerbContext ctx, FixtureChain chain,
+            out string source)
         {
             var givers = map.listerThings.ThingsInGroup(ThingRequestGroup.PotentialBillGiver);
             if (ctx.Args.Has("bench"))
             {
                 int id = ctx.Args.IntReq("bench");
+                source = "arg";
                 for (int i = 0; i < givers.Count; i++)
                     if (givers[i] != null && givers[i].thingIDNumber == id) return givers[i];
                 throw new VerbArgsException($"no bill giver with id {id}");
             }
+            if (chain?.Bench != null && chain.Bench.Spawned && chain.Bench is IBillGiver)
+            {
+                source = "chained";
+                return chain.Bench;
+            }
+            source = "first-on-map";
             Thing best = null;
             for (int i = 0; i < givers.Count; i++)
             {

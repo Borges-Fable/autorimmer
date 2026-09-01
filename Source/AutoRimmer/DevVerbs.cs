@@ -485,7 +485,8 @@ namespace AutoRimmer
     {
         // --------------------------------------------------------------------
         // dev:spawn-thing {def, stuff?, count?, pos?|stockpile?, quality?,
-        //                  faction?, mode?, minified?, force?, forbid?}
+        //                  faction?, mode?, rot?, buildable?, minified?, force?,
+        //                  forbid?}
         //
         // Provenance: Verse/DebugThingPlaceHelper.DebugSpawn (stack default,
         // stuff, quality, faction, GenPlace.TryPlaceThing, Notify_DebugSpawned)
@@ -547,6 +548,50 @@ namespace AutoRimmer
             if (mode != "near" && mode != "direct")
                 throw new VerbArgsException("mode must be 'near' or 'direct'");
 
+            // ------------------------------------------------- buildable ----
+            // OPT-IN, AND THE DEFAULT DOES NOT MOVE (Evan, 2026-09-01, git-bug
+            // 3a5ff6c). The god-hand is what `dev:*` is FOR and every shipped
+            // suite stages with it; what `buildable:true` adds is the ability to
+            // stage a fixture that is PROVABLY a state 3.3's blueprint mode
+            // could have produced.
+            //
+            // WHY IT IS WORTH ANYTHING, measured rather than argued. The gate
+            // this verb has always used is `Verse/GenSpawn.CanSpawnAt`, and it
+            // runs NO PlaceWorker: not
+            // `PlaceWorker_PreventInteractionSpotOverlap`, not `NotUnderRoof`,
+            // not `Cooler`/`Vent`, not `OnSteamGeyser`, none of the family. It
+            // also skips what `CanPlaceBlueprintAt` tests BEFORE the
+            // PlaceWorkers — fog, `InNoBuildEdgeArea`, `IdenticalThingExists`,
+            // the MonumentMarker rule and `SpaceAlreadyOccupied`, because it
+            // wipes instead. On the session-15 bench `site-survey` refused a
+            // second research bench for `InteractionSpotOverlaps` and this verb
+            // placed it anyway (`placed: 1`), leaving two benches on one
+            // standing square.
+            //
+            // BUILDINGS ONLY. `GenConstruct.CanPlaceBlueprintAt` is the
+            // BLUEPRINT validator; a `Steel` stack has no blueprint, no
+            // footprint gate and no PlaceWorkers, so running it over an item
+            // would answer a question nobody asked. A TerrainDef cannot arrive
+            // here at all — `Dev.Named<ThingDef>` already refused it.
+            bool buildable = a.Bool("buildable", false);
+            if (buildable && def.category != ThingCategory.Building)
+                throw new VerbArgsException(
+                    $"buildable:true runs GenConstruct.CanPlaceBlueprintAt, which is the gate on "
+                    + $"BUILDINGS; '{def.defName}' is category {def.category}. Drop the flag (the "
+                    + "god-hand is the default) or spawn a building.");
+            // A GATED PLACEMENT MAY NOT SLIDE. `mode:"near"` is
+            // GenPlace.TryPlaceThing's radial search, which gates each candidate
+            // on `CanSpawnAt` and can land the thing somewhere other than the
+            // cell the blueprint gate approved — so the envelope would carry a
+            // verdict about one cell and a building on another, which is
+            // git-bug acee526's whole subject. buildable mode is exact-or-refuse.
+            if (buildable && a.Has("mode") && mode != "direct")
+                throw new VerbArgsException(
+                    "buildable:true is exact-or-refuse and mode:'near' slides: GenPlace's radial "
+                    + "search would place the building on a cell the blueprint gate never saw. Pass "
+                    + "mode:'direct' or drop `mode` (buildable implies it).");
+            if (buildable) mode = "direct";
+
             // WHICH WAY IT FACES. There was no way to say until now: the verb
             // passed whatever `ThingMaker.MakeThing` left, which is
             // `Thing.rotationInt`'s field initialiser, i.e. always North. You
@@ -605,6 +650,13 @@ namespace AutoRimmer
             int placed = 0, remaining = count;
             int stackLimit = Math.Max(1, def.stackLimit);
             var failures = new List<object>();
+            // What the wipe erased, and how a player would have had to clear it.
+            // Accumulated across stack iterations; null until the exact-cell
+            // building branch runs, because that is the only branch whose cell
+            // and rotation are known in advance (see WipeWatch).
+            List<object> wiped = null;
+            int wipedSkipped = 0;
+            Dictionary<string, object> gateBlock = null;
 
             while (remaining > 0)
             {
@@ -637,22 +689,83 @@ namespace AutoRimmer
                 {
                     // A building placed "near" fails against its own footprint;
                     // GenSpawn with a wipe mode is the path the game's own
-                    // "Spawn thing with wipe mode" action uses. CanSpawnAt is
+                    // "Spawn thing with wipe mode" action uses. The gate is
                     // checked first so a refusal is an error result rather than
                     // a vanilla Log.Error (which the journal would record as a
                     // red_error, breaking the standing zero-red-errors rule).
-                    if (!GenSpawn.CanSpawnAt(def, target, map, rot, canWipeEdifices: true))
+                    //
+                    // WHICH gate is the whole of `buildable`. The god-hand path
+                    // asks GenSpawn.CanSpawnAt with `canWipeEdifices:true` — the
+                    // most permissive thing vanilla has, and the flag that lets a
+                    // wall in the footprint pass. buildable mode asks SiteGate,
+                    // i.e. GenConstruct.CanPlaceBlueprintAt(godMode:false) plus
+                    // Designator_Build.Visible, and passes NO such flag, because
+                    // there is no such flag on that route: occupancy is decided
+                    // by `CanPlaceBlueprintOver` per occupant, which is exactly
+                    // the rule a colonist's blueprint would have been held to.
+                    bool gateOk;
+                    if (buildable)
                     {
-                        ok = false;
-                        var no = WhyNoSpawn(def, target, map, rot);
-                        string why = no?.Reason
-                            ?? "GenSpawn.CanSpawnAt refused this cell for " + def.defName;
-                        failures.Add(FailureRow(map, target, why, no));
+                        var verdict = SiteGate.Check(map, def, target, rot, stuff);
+                        gateBlock = verdict.Out();
+                        gateOk = verdict.Ok;
+                        if (!gateOk)
+                        {
+                            // The game's own sentence, verbatim, and the same
+                            // failure-row shape the CanSpawnAt branch publishes
+                            // — so a refusal here is indistinguishable in shape
+                            // from the survey that predicted it (git-bug
+                            // c718e4a's acceptance: one routine, one sentence).
+                            string why = verdict.PlaceOk
+                                ? verdict.SelectableDetail
+                                  ?? (def.defName + " is not on the architect menu")
+                                : verdict.PlaceReason;
+                            var row = verdict.PlaceOk
+                                ? null
+                                : SiteVerbs.FirstRefusingRow(map, def, stuff, target, rot);
+                            var failRow = new Dictionary<string, object>
+                            {
+                                ["at"] = Positions.Out(target),
+                                ["reason"] = why,
+                                ["cell"] = row != null ? row["at"] : Positions.Out(target),
+                                ["cell_role"] = row != null
+                                    ? row["role"]
+                                    : (verdict.PlaceOk ? "selectable" : SpawnTier.Def),
+                                ["blocker"] = row != null ? row["blocker"] : null,
+                                // Which HALF refused. "would be refused" and
+                                // "cannot even be selected" must never read
+                                // alike (SiteGate's header), and a caller that
+                                // branches on the clause needs the token.
+                                ["gate"] = verdict.PlaceOk ? "selectable" : "verdict",
+                                ["clause"] = verdict.PlaceOk ? verdict.SelectableClause : null,
+                            };
+                            failures.Add(failRow);
+                        }
                     }
                     else
                     {
+                        gateOk = GenSpawn.CanSpawnAt(def, target, map, rot, canWipeEdifices: true);
+                        if (!gateOk)
+                        {
+                            var no = WhyNoSpawn(def, target, map, rot);
+                            string why = no?.Reason
+                                ?? "GenSpawn.CanSpawnAt refused this cell for " + def.defName;
+                            failures.Add(FailureRow(map, target, why, no));
+                        }
+                    }
+                    if (!gateOk) ok = false;
+                    else
+                    {
+                        // Captured BEFORE the spawn, confirmed after it. The
+                        // wipe is intended on the god-hand path and is what
+                        // construction would have done on the buildable one; in
+                        // neither case may it be silent (git-bug 3a5ff6c).
+                        var watch = WipeWatch.Before(map, def, target, rot);
                         result = GenSpawn.Spawn(thing, target, map, rot, WipeMode.VanishOrMoveAside);
                         ok = result != null;
+                        if (wiped == null) wiped = new List<object>();
+                        wiped.AddRange(watch.Destroyed());
+                        wipedSkipped += watch.Skipped;
                     }
                 }
                 else
@@ -740,10 +853,27 @@ namespace AutoRimmer
                     // 7382bdd was filed for.
                     ["pos_source"] = posSource,
                     ["forbid"] = forbid,
+                    // Which gate this call was held to. The row is the durable
+                    // record, and "was this fixture staged past the blueprint
+                    // validator" is the question `site-audit` exists to ask
+                    // later — it should not have to guess (git-bug 3a5ff6c).
+                    ["buildable"] = buildable,
                 },
                 ["placed"] = placed,
                 ["ids"] = IdsOf(spawned),
             };
+            // THE ERASURE, IN THE JOURNAL, and not only in the envelope. This is
+            // M1 finding A's lesson applied to the other direction: the response
+            // is thrown away and the row is forever, so the row is where "a wall
+            // was vanished to make room" has to live. Absent when the wipe path
+            // did not run at all; an EMPTY list when it ran and erased nothing,
+            // which is a different fact.
+            if (wiped != null)
+            {
+                extra["wiped"] = wiped;
+                extra["wiped_count"] = wiped.Count;
+                if (wipedSkipped > 0) extra["wiped_more"] = wipedSkipped;
+            }
             // Only when asked — an absent key means the caller never asked for
             // the flag, which is not the same as asking and getting nothing.
             if (forbid)
@@ -778,9 +908,22 @@ namespace AutoRimmer
                 ["rot"] = rot.ToStringWord(),
                 ["pos_source"] = posSource,
                 ["mode"] = mode,
+                ["buildable"] = buildable,
                 ["spawned"] = spawned,
                 ["dev"] = stamp,
             };
+            // Which validator passed, published in full so a fixture can prove
+            // its own provenance rather than asserting it: `gate` carries the
+            // gate id, both halves with their `source` strings, and the footprint
+            // the gate was asked about. Present only in buildable mode — the
+            // god-hand path has no blueprint verdict to report, and an empty
+            // block there would read like one.
+            if (gateBlock != null) data["gate"] = gateBlock;
+            if (wiped != null)
+            {
+                data["wiped"] = wiped;
+                if (wipedSkipped > 0) data["wiped_more"] = wipedSkipped;
+            }
             if (failures.Count > 0)
             {
                 data["failed"] = failures;

@@ -1446,3 +1446,311 @@ queue by default (an agent flailing mid-experiment must not page triage).
   would refuse a CORRECT call, which is a worse bug than the one being fixed —
   and `site-survey` reading both `pos` and `at` legitimately is the live proof
   that such overlaps exist. `7382bdd`.
+- 2026-09-01 (session 16) — **`buildable:true` is EXACT-OR-REFUSE and
+  buildings-only, and the erasure it replaces is now on the record.**
+  `dev:spawn-thing {buildable:true}` calls `SiteGate` and honours both halves,
+  which is what the acceptance's unresearched-def bullet asks for. Two things
+  fell out of wiring it. (1) **`mode:"near"` is REFUSED under
+  `buildable:true`.** `GenPlace.TryPlaceThing`'s radial search gates every
+  candidate on `GenSpawn.CanSpawnAt` and can land the building on a cell the
+  blueprint gate never saw, so the envelope would carry a verdict about one cell
+  and a building on another — `acee526`'s whole subject, reintroduced by the verb
+  that exists to close it. `buildable` implies `mode:"direct"`; passing
+  `mode:"near"` with it is `bad-args`. (2) **`canWipeEdifices` is not "not
+  passed" on the buildable path, it does not EXIST there.** It is a parameter of
+  `GenSpawn.CanSpawnAt`, and the buildable path never calls that member;
+  occupancy is decided per occupant by `GenConstruct.CanPlaceBlueprintOver`,
+  which is the rule a colonist's blueprint is held to. The issue's wording ("does
+  not pass it") reads as a flag being withheld; there is no flag.
+  And `wiped[]` is **PREDICTED, THEN CONFIRMED** (`WipeWatch`): candidates from
+  `GenSpawn.SpawningWipes(newDef, oldDef)` called exactly as
+  `WipeExistingThings` calls it, rows built BEFORE the spawn because
+  `Blockers.Describe` reads `PositionHeld`, and a row published only for a
+  candidate that is `Destroyed` afterwards. Prediction alone would be a second
+  implementation of the game's rule; confirmation alone cannot name what went.
+  It also makes `VanishOrMoveAside`'s first half honest — `CheckMoveItemsAside`
+  RELOCATES items, so a moved item is not reported wiped and one whose
+  relocation failed is. The list is on the RESULT and in the JOURNAL ROW, which
+  is M1 finding A's lesson (the response is thrown away, the row is forever).
+  `3a5ff6c`.
+- 2026-09-01 (session 16) — **`dev:starter-kit` needed one call per building
+  unit, not `mode:"direct"`, and `mode:"direct"` alone would have been a
+  REGRESSION.** `3a5ff6c` item 3 asks the kit to pass `mode:"direct"` for
+  buildings, to fix M1's `placed: 0` research bench (the kit passed no `mode`, so
+  a building took `ThingPlaceMode.Near` and reported nothing when the radial
+  search came back full). Done literally, it breaks the `medical` preset:
+  `count: 2` runs `dev:spawn-thing`'s stack loop twice against ONE target cell,
+  and `GenSpawn.SpawningWipes(Bed, Bed)` is true for two edifices, so the second
+  bed VANISHES the first while the envelope still says `placed: 2`. Near was
+  hiding that by scattering. So the kit issues one `dev:spawn-thing` per unit
+  with its own `pos`, chosen by a ring walk from the anchor that skips any cell
+  an earlier unit's `OccupiedRect` already claimed and asks the SAME gate the
+  caller asked for (`SiteGate` when `buildable:true`, `CanSpawnAt` otherwise —
+  choosing against a different predicate than the spawn will use would make the
+  kit report refusals it had chosen itself). When the walk finds nothing it hands
+  the anchor over anyway and lets the verb refuse it: the game's own sentence,
+  the refusing cell and a journal row beat anything the kit could invent, and a
+  silent `placed: 0` is precisely M1 finding A. Items are untouched — `Near` is
+  right for a stack that merges into storage. `3a5ff6c`.
+- 2026-09-01 (session 16) — **The two fixture spawn routes honour the GROUND half
+  of the gate and REPORT the widget half; `dev:spawn-thing {buildable:true}`
+  honours both.** `3a5ff6c` item 3 says `world-fixture`'s `bench` step and
+  `JournalVerbs.SpawnPlayerBuilding` adopt "the same helper with `buildable:true`
+  semantics". Taken as both halves it deletes a working fixture to enforce a rule
+  about a menu: `journal-selftest`'s `power` step lays `PowerConduit`, which
+  carries a research prerequisite of Electricity, and it runs on FRESH quicktest
+  maps — that grid is what `digest.power` is tested against. So `FixtureSite`
+  refuses on `GenConstruct.CanPlaceBlueprintAt`, which is about the ground and is
+  the hole the issue is actually about (both routes previously had NO validator
+  at all — not even the `CanSpawnAt` `dev:spawn-thing` uses, so the bench step
+  could stage a butcher table whose interaction cell was in a wall), and
+  publishes `Designator_Build.Visible`'s answer as `selectable` on every call
+  without acting on it. The asymmetry is the same one `SiteGate`'s header argues
+  for: "the ground refuses this" and "this is not on the architect menu" are
+  different news, and only the first is a claim about buildability.
+  `dev:spawn-thing {buildable:true}` keeps both halves because its own acceptance
+  names the unresearched-def refusal and because it is a verb an agent calls
+  rather than a fixture's private helper. `3a5ff6c`.
+- 2026-09-01 (session 16) — **`site-audit` reports two numbers because a hit and
+  an unselectable are different findings, and it carries its own disclaimer in
+  the envelope.** `hits` is `CanPlaceBlueprintAt`'s refusals with the building
+  itself passed as BOTH `thingToIgnore` and `thing` — the pair
+  `Designator_Install.CanDesignateCell` passes for a reinstall, and without it
+  every building refuses itself with `IdenticalThingExists`. `unselectable` is
+  the widget half and is NOT a hit: an unresearched or now-forbidden building on
+  a played map is ordinary, and folding it in would make the count useless. Fog
+  is EXEMPT by default because `CanPlaceBlueprintAt`'s second clause is
+  `center.Fogged(map)`, so every unexplored ancient ruin would otherwise be a
+  hit; the flag and the skipped count are both published. `heuristic` rides in
+  the result as a sentence — a real game reaches states the validator now refuses
+  (a roof built over a solar panel later, an item hauled onto an interaction
+  spot) — so a suite cannot quote `hit_count` without it. Frames are dropped by
+  name: `ThingDef.IsBuildingArtificial` is `category == Building || IsFrame`, so
+  `ThingRequestGroup.BuildingArtificial` includes them, and a build in progress
+  belongs to `construction` rather than to an audit of what is standing.
+  `3a5ff6c`.
+- 2026-09-01 (session 16) — **`build` is `Designator_Build.DesignateSingleCell`
+  minus four things, and the zero-work branch it KEEPS is the one that looks like
+  a cheat.** Reproduced in the game's own order: destroy any Frame whose
+  `replaceTags` intersect `def.blueprintDef.replaceTags` with
+  `DestroyMode.Cancel`; then either the zero-work direct placement or
+  `GenSpawn.WipeExistingThings(pos, rot, def.blueprintDef, map,
+  DestroyMode.Deconstruct)` followed by `GenConstruct.PlaceBlueprintForBuild`;
+  then `PlaceWorkers[i].PostPlace`. **Dropped on purpose:**
+  `FleckMaker.ThrowMetaPuffs` (a particle effect), `TutorSystem.AllowAction` /
+  `Notify_Event` (a UI session that does not exist here), and
+  `PlayerKnowledgeDatabase.KnowledgeDemonstrated(BuildOrbitalTradeBeacon)` —
+  which WRITES scribed knowledge state and is exactly the kind of write-on-act an
+  agent's placement has no business doing. **Kept on purpose:** vanilla's
+  `WorkToBuild == 0` branch, which places the finished thing rather than a
+  blueprint. Its sibling disjunct `DebugSettings.godMode` is dropped (the
+  session-15 ruling), and dropping the whole condition with it would have made
+  `build` refuse to do what a player's click does — a blueprint needing no work
+  is a blueprint no pawn is ever dispatched to. `mode` in the result is
+  `blueprint` or `instant-zero-work` so the two never read alike.
+  Two guards fell out of writing it. **`!def.BuildableByPlayer` is `bad-args`,
+  and the first version of this entry got the reason wrong.** The guard was
+  written believing `build {def:"Steel"}` would otherwise reach the zero-work
+  branch and god-hand a steel stack. Measured instead of assumed: `WorkToBuild`'s
+  `defaultBaseValue` is **1**, not 0 (Core `Defs/Stats/Stats_Building_Special.xml`),
+  so a resource takes the BLUEPRINT branch and dies on a null `blueprintDef`.
+  The guard's real value is therefore the SENTENCE, not extra coverage — and the
+  predicate has a name in the game: `Verse/BuildableDef.BuildableByPlayer` is
+  `designationCategory != null`, which is both the condition
+  `DesignationCategoryDef.ResolveDesignators` uses to generate a
+  `Designator_Build` and the condition
+  `ThingDefGenerator_Buildings.ImpliedBlueprintAndFrameDefs` uses to generate a
+  `blueprintDef`. So "no designator exists" and "no blueprintDef exists" are the
+  same fact, and the verb says which one the caller tripped. Recorded with the
+  correction visible rather than silently fixed, because an unmeasured
+  defaultBaseValue is exactly the kind of claim this log has gone stale on
+  before. And **`cleared` is a different field from
+  `dev:spawn-thing`'s `wiped`, because the wipe MODE differs**: the blueprint
+  path passes `DestroyMode.Deconstruct`, which REFUNDS, while the god-hand passes
+  `Vanish`, which does not. One vocabulary for two behaviours would have made
+  "the game took your wall apart and gave the steel back" indistinguishable from
+  "your wall is gone". `1adc737`, `c718e4a`.
+- 2026-09-01 (session 16) — **The placement registry is IN MEMORY and
+  session-scoped, and that is the observer discipline rather than a shortcut.**
+  `Placements` holds `{id, def, stuff, pos, rot, mapId, mode, journalSeq,
+  completedTick, failures}` in a static table cleared by
+  `Runtime.ResetForGameBoundary`. Nothing is scribed: a placement id is a handle
+  for the agent that issued the placement, not a durable fact about the colony,
+  and writing our own data into the save is the one mutation this mod's whole
+  observer discipline exists to avoid. The DURABLE record is the journal — `build`
+  writes an `action` row carrying the id and the two Frame transitions write
+  `construction` rows carrying it — so a post-mortem reads the ndjson and a live
+  agent reads the table. Clearing on a game boundary is the same bug class as 1.5
+  blocker 2 one layer up: an id names a CELL ON A MAP, and after a load it would
+  resolve against whatever colony loaded next. **`Answer` looks live first and at
+  the recorded completion second, deliberately**, because `Frame.FailConstruction`
+  puts the blueprint BACK — a placement whose frame failed is genuinely
+  `blueprint` again, so failures are a COUNT beside the state and never a state.
+  `cancelled` is the residual, reached only after both positive answers said no.
+  `d7c8088`, `1adc737`.
+- 2026-09-01 (session 16) — **`CostListAdjusted`'s `errorOnNullStuff:false` is a
+  TRAP, and refusing to ask is the only safe guard.** `d7c8088` hazard 2 says
+  reading material cost can emit a red error and asks the implementation to guard
+  `stuffToUse == null` before asking. The obvious guard is the parameter vanilla
+  already provides — `CostListCalculator.CostListAdjusted(BuildableDef, ThingDef,
+  bool errorOnNullStuff = true)` — and it is worse than the error it silences.
+  With `false` and a null stuff on a `MadeFromStuff` def the method falls through
+  to `value.Add(new ThingDefCountClass(stuff, num))` with `stuff` NULL and then
+  `cachedCosts.Add(key, value)` under the key `(entDef, null)`. Vanilla's own
+  error path never inserts that key — it recurses into
+  `(entDef, DefaultStuffFor(entDef))` and returns — so passing `false` converts a
+  red error into a process-lifetime poisoned cache entry holding a
+  `ThingDefCountClass` with a null `thingDef`, which the next vanilla call for
+  that key consumes instead of taking its error branch. An observer mutating a
+  shared game cache is strictly worse than an observer logging. So
+  `Placements.Materials` **does not call it at all** for that pair: `materials` is
+  null and `materials_note` says why. Every path in this mod resolves stuff
+  before placing (`SiteVerbs.ResolveStuff` -> `GenStuff.DefaultStuffFor`), so the
+  case is reachable only for a blueprint someone else made — which is precisely
+  the case the acceptance bullet stages. The cache ITSELF is accepted, same
+  ruling as `BuildableDef.PlaceWorkers`: def-level, keyed on `(entDef, stuff)`,
+  never scribed, reset when `Find.Storyteller.difficulty` changes, and filled by
+  any hover over the architect menu. `d7c8088`.
+- 2026-09-01 (session 16) — **`construction`'s state precedence is
+  `blocked > in-progress > awaiting-materials > ready`, and the issue's listing
+  order is not it.** `d7c8088` names the four states in the order
+  awaiting-materials / ready / in-progress / blocked and says the value "must be
+  computed, not guessed", but a blueprint can satisfy several at once and nothing
+  said which wins. Resolved: `blocked` first, because nothing can proceed while
+  something is in the way and the remedy is different from every other state's;
+  then `in-progress`, because a pawn already on the job outranks a materials
+  shortfall (the pawn is usually fetching the materials, and reporting
+  `awaiting-materials` would send an agent to solve a problem that is already
+  being solved); then `awaiting-materials`; `ready` is the residual, i.e. stocked
+  and nobody on it, which is the one state that means "give somebody the
+  Construction work type". `d7c8088`.
+- 2026-09-01 (session 16) — **A NAIVE `FirstBlockingThing` REPORTS THE COLONIST
+  WHO IS BUILDING IT, and that is a fourth hazard `d7c8088` does not name.**
+  `RimWorld/GenConstruct.BlocksConstruction` ends
+  `if (t is Pawn pawn && !pawn.IsHiddenFromPlayer()) return true;`, and
+  `FirstBlockingThing(constructible, pawnToIgnore)` is the member BOTH
+  construction work givers call — passing the worker precisely so it is excluded.
+  Called with null it names the builder as the blocker, so a build being worked
+  on right now reads `blocked` and an agent goes to fix nothing. So the worker is
+  identified FIRST (one pass over `AllPawnsSpawned` indexing both `targetA` and
+  `targetB`, because `JobDriver_ConstructFinishFrame` puts the constructible in A
+  while `WorkGiver_ConstructDeliverResources`' HaulToContainer puts it in B) and
+  handed to the call; a Pawn that still comes back is PUBLISHED — it is a true
+  fact about the cell — under `blocking_is_pawn`, and does not set the state.
+  Same family as the three the issue does name: every one is a way for a READ to
+  make a healthy colony look broken. `d7c8088`.
+- 2026-09-01 (session 16) — **`Frame.ThingCountNeededWithEnroute` is not worth
+  its exposure; `EnrouteManager.GetEnroute` is.** `d7c8088` hazard 2 leaves the
+  choice open ("decide on-issue whether `WithEnroute` is worth the exposure or
+  whether `enrouteManager.GetEnroute` should be read directly"). Decided: read the
+  manager. The member's two `Log.Error` branches ARE the arithmetic — negative,
+  and greater than could be needed — so calling it is asking the game to
+  red-error on our behalf and then clamping the answer it already clamped.
+  `Verse.AI/EnrouteManager.GetEnroute(IHaulEnroute, ThingDef, Pawn)` is a
+  `TryGetValue` over a stored lookup with no insert, i.e. the same number that
+  member subtracts, and the clamp is one `Math.Max`. Published as `enroute` and
+  `still_wanted` per material so "we have no steel", "the steel is not in a
+  stockpile" and "somebody is already carrying it" are three distinct answers —
+  the last of which is the difference between a stalled build and a slow one.
+  `missing[]` also carries `in_stockpiles` from `map.resourceCounter`, with
+  DigestVerb's caveat: that counter walks SlotGroup haul destinations, so goods
+  on unzoned ground read as ZERO. `d7c8088`.
+- 2026-09-01 (session 16) — **The journal's `action` type shipped in spec 3.2 and
+  was never documented, and five verbs had been writing it for four sessions.**
+  Found while adding the `construction` row to `JOURNAL.md`'s Types table:
+  `DesignationVerbs`, `AreaVerbs`, `PawnActs`, `StorageVerbs` and `ZoneVerbs` all
+  call `Journal.Emit("action", …)` — the non-`dev` twin of the documented `dev`
+  row, i.e. provenance for a state-mutating PLAYER action — and the table listed
+  eleven types, none of them that one. A consumer written from the doc would have
+  dropped every player mutation on the floor while looking complete. Both rows are
+  in the table now. This is the same failure mode as the `Build:` tally in the
+  workspace CLAUDE.md and as `templates/INDEX.md`'s unpinned orientation: a
+  document that is authoritative by convention and updated by nobody in
+  particular. `d7c8088`, `1adc737`.
+- 2026-09-01 (session 16) — **`world-fixture` steps chain through a typed handle,
+  and the audit is "every step in the switch" because the issue's own list was
+  wrong by omission.** `0d9cbd7` named `bill` and asked for an audit of
+  `stockpiles`, `growing`, `research` and `letter` — four steps that CREATE
+  things and therefore have nothing to chain to — and omitted `open-letter`,
+  which RESOLVES one and has all three tells of the same bug: first-match over a
+  shared live list, an error string that ASSERTS the chaining ("run the `letter`
+  step first"), and an id the earlier step already published and nobody
+  consulted. Following the list literally would have closed the issue with the
+  class still open in a second step, which is what its verification comment
+  predicted. **Both resolvers are fixed; the audit is recorded in
+  `FixtureChain`'s header, step by step, including why the ones that look like
+  the same shape are not:** `forbid` genuinely is first-match over a live list
+  (`HaulableEver` sorted by id) but no step creates a haulable, so there is
+  nothing to chain to and it is the step to revisit if one is ever added; and
+  `stockpiles`/`growing`/`fire` pick GROUND rather than an object, with
+  `FindClearRect`/`ZoneOk` already excluding cells an earlier step used.
+  Three resolutions came with it. (1) **`bench_source` / `letter_source` are
+  published** — `arg` | `chained` | `first-on-map` — which is `Dev.PosArg`'s
+  `pos_source` discipline (`7382bdd`) applied here, and is what would have made
+  the original defect visible in the envelope rather than only in a hand
+  comparison of two ids. An explicit arg still wins, so
+  `accept/32b9e01-orders-makingfor.ps1`'s two-call workaround keeps working
+  unchanged. (2) **`expect_bills` is KEPT and made true**, resolving the issue's
+  unsatisfiable either/or: an independent hand-count is the whole point of the
+  field, and deleting it would leave `bills` with nothing to be checked against.
+  It is refreshed after the step loop, and so is **`expect_slots_free`, which is
+  the same defect and which the acceptance does not name** — fixing only the
+  named one would have left a bench holding two bills reporting fifteen free
+  slots. (3) **A repeated step is legal and now says so**: `{steps:["bench",
+  "bench"]}` really does spawn two tables, each block reports only the last, and
+  a later step chains to the last; `repeated_steps` publishes the counts so the
+  truncation is not silent. `0d9cbd7`.
+- 2026-09-01 (session 16) — **The `bill` step's cap is REFUSED, not cleared, and
+  its bill is built by `BillUtility.MakeNewBill`.** Two more findings from
+  `0d9cbd7` comment #1, neither in the issue body. `RimWorld/BillStack.AddBill`
+  is `bill.billStack = this; bills.Add(bill);` and validates nothing, while the
+  game's UI stops the player at `BillStack.MaxCount` (15) — and this step adds
+  TWO bills and never cleared, so eight calls pushed a stack past a cap no player
+  can exceed. **Refusing beats clearing**: a fixture that clears destroys state
+  the caller or an earlier step staged, and it would do it under a name ("bill")
+  that says nothing about removal; `clear_bills:true` is the opt-in and the
+  cleared count is published. And `new Bill_Production(recipe)` is replaced by
+  `RimWorld/BillUtility.MakeNewBill`, which dispatches to
+  `Bill_ProductionWithUft` (`UsesUnfinishedThing`), `Bill_ResurrectMech`
+  (`mechResurrection`), `Bill_ProductionMech` (`gestationCycles > 0`) or
+  `Bill_Autonomous` (`formingTicks > 0`) — so a caller-supplied `recipe` of any of
+  those four was being staged as the WRONG RUNTIME TYPE, which is this issue's
+  own "silently stages the wrong object" one level down. All four derive from
+  `Bill_Production` (via `Bill_Mech : Bill_Autonomous` for the two mech ones), so
+  the repeat-mode fields still apply; the cast is guarded anyway and
+  `bill_class` is published. `0d9cbd7`.
+- 2026-09-01 (session 16) — **A blueprint's stuff is NOT `Thing.Stuff`, and
+  reading the wrong one made every wooden wall report no materials.** Caught in
+  self-review before any bench saw it. `GenConstruct.PlaceBlueprintForBuild`
+  calls `ThingMaker.MakeThing(sourceDef.blueprintDef)` with NO stuff and then
+  assigns `blueprint_Build.stuffToUse`, so `Thing.Stuff` — the `stuffInt` field —
+  is null on every `Blueprint_Build` while the real answer sits in a field of its
+  own. A `construction` read keyed on `Thing.Stuff` therefore handed
+  `Placements.Materials` a null stuff for a `MadeFromStuff` def, hit the
+  refuse-to-ask guard, and published `materials: null` with a note about a hazard
+  that was not the actual problem — the guard hid the bug it was protecting
+  against. `IConstructible.EntityToBuildStuff()` is the accessor all three types
+  implement (`stuffToUse`, `Frame`'s `base.Stuff`, the minified thing's stuff for
+  an install) and, unlike its interface sibling `TotalMaterialCost()`, it calls no
+  cost list and cannot log. **And that sibling turns out to be a FOURTH
+  red-error route:** `Blueprint_Install.TotalMaterialCost()` opens with
+  `Log.Error("Called MaterialsNeededTotal on a Blueprint_Install.")` before
+  returning an empty list — so an install blueprint is the one case where reading
+  the cost is both wrong (an install needs no materials) and loud. Handled by
+  name. Three of the four red-error routes on this subject are now ones
+  `d7c8088` did not list. `d7c8088`.
+- 2026-09-01 (session 16) — **The tolerated occupant is LISTED, and `blocker` was
+  never the field for it.** `accept/runs/s15-20260901/README.md` item 1: a chair
+  on an interaction cell gave `{ok: true, blocker: null, standable: true}` and
+  named no occupant, so "a chair is there, which is fine" and "the cell is empty"
+  read identically — and that chair is exactly what the NEXT placement's
+  `PlaceWorker_PreventInteractionSpotOverlap` trips on. Fixed additively:
+  `occupants` on an ACCEPTED interaction row, in `Blockers.cs`'s shape plus
+  `tolerated`, `category`, `passability` and `has_interaction_cell`. `blocker`
+  stays null because nothing is blocking, every existing field keeps its meaning,
+  and no alphabet id moves — so this is not the contract change it would have
+  been to overload `blocker`. `has_interaction_cell` is the field that predicts
+  the next refusal: an occupant with its own spot is what the overlap rule
+  objects to and a `DiningChair` (which has none) is not. Filth, motes and
+  attachments are excluded — they are not occupants in any sense a placement
+  cares about. `c718e4a`.
