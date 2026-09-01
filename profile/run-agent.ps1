@@ -78,6 +78,27 @@ $saveData = Join-Path $GAME_DIR 'SaveData'
 $playerLog = Join-Path $GAME_DIR 'Player.log'
 New-Item -ItemType Directory -Force $saveData | Out-Null
 
+# --quicktest and autostart.rws cannot both exist. Root_Entry and Root_Play race
+# on Root.checkedAutostartSaveFile with a scene-targeted long event: the
+# autostart load wins, the quicktest lambda then finds Current.Game != null and
+# skips, and map generation fails. DETERMINISTIC, not flaky — it cost the M1 run
+# two launches before anyone knew why. playbook/quicktest-and-autostart-collide.md,
+# git-bug c8c0199. Refusing rather than warning: the launch cannot succeed.
+$savesDir = Join-Path $saveData 'Saves'
+$autostart = Join-Path $savesDir 'autostart.rws'
+if ($Quicktest -and (Test-Path $autostart)) {
+    Write-Error @"
+refusing: --quicktest cannot run while Saves\autostart.rws exists.
+  Map generation WILL fail (Root.checkedAutostartSaveFile race).
+  Park it, then relaunch:
+    New-Item -ItemType Directory -Force '$savesDir\pre-m1' | Out-Null
+    Move-Item '$autostart' '$savesDir\pre-m1\'
+  Standing decision: autostart.rws stays parked while --quicktest is the bench
+  fixture. See playbook/quicktest-and-autostart-collide.md.
+"@
+    exit 1
+}
+
 $gameArgs = @("-savedatafolder=$saveData", '-logfile', $playerLog)
 if ($Quicktest) { $gameArgs += '-quicktest' }
 $gameArgs += $Pass

@@ -109,6 +109,25 @@ mkdir -p "$GAME_DIR/config"
 printf 'fps_limit=%s\nno_display=1\n' "$FPS" > "$MANGO_CONF"
 export MANGOHUD_CONFIGFILE="$MANGO_CONF"
 
+# --- --quicktest and autostart.rws cannot both exist -------------------------
+# Root_Entry and Root_Play race on Root.checkedAutostartSaveFile with a
+# scene-targeted long event: the autostart load wins, the quicktest lambda then
+# finds Current.Game != null and skips, and map generation fails. It is
+# DETERMINISTIC, not flaky — it cost the M1 run two launches before anyone
+# knew why. See playbook/quicktest-and-autostart-collide.md and git-bug
+# c8c0199. Refusing here rather than warning: the launch cannot succeed, and a
+# warning scrolls past in two minutes of boot log.
+SAVES_DIR="$GAME_DIR/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/Saves"
+if [ "$QUICKTEST" -eq 1 ] && [ -f "$SAVES_DIR/autostart.rws" ]; then
+    echo "refusing: --quicktest cannot run while Saves/autostart.rws exists." >&2
+    echo "  Map generation WILL fail (Root.checkedAutostartSaveFile race)." >&2
+    echo "  Park it, then relaunch:" >&2
+    echo "    mkdir -p \"$SAVES_DIR/pre-m1\" && mv \"$SAVES_DIR/autostart.rws\" \"$SAVES_DIR/pre-m1/\"" >&2
+    echo "  Standing decision: autostart.rws stays parked while --quicktest is" >&2
+    echo "  the bench fixture. See playbook/quicktest-and-autostart-collide.md." >&2
+    exit 1
+fi
+
 GAME_ARGS=()
 [ "$QUICKTEST" -eq 1 ] && GAME_ARGS+=("-quicktest")
 [ "$BATCHMODE" -eq 1 ] && GAME_ARGS+=("-batchmode" "-nographics")
