@@ -331,7 +331,7 @@ namespace AutoRimmer
         {
             var frame = t as Frame;
             var built = t.def.entityDefToBuild;
-            var stuff = t.Stuff;
+            var stuff = BuildStuff(t);
             var worker = Worker(workerIndex, t);
             var blocker = Blocking(t, worker);
             var mats = MaterialRows(map, t, out int missingKinds, out List<object> missing);
@@ -422,8 +422,27 @@ namespace AutoRimmer
             missingKinds = 0;
             missing = new List<object>();
             var built = t.def.entityDefToBuild;
-            var costs = Placements.Materials(built, t.Stuff, out string note);
             var rows = new List<object>();
+            // AN INSTALL COSTS NOTHING, and asking costs a RED ERROR. A
+            // `Blueprint_Install` is a minified thing being put back down, so its
+            // material cost is empty — and `Blueprint_Install.TotalMaterialCost()`
+            // opens with `Log.Error("Called MaterialsNeededTotal on a
+            // Blueprint_Install.")` before returning that empty list. A FOURTH
+            // red-error route on top of the three d7c8088 names, and one more
+            // reason `TotalMaterialCost()` is never called anywhere in this mod;
+            // publishing the built def's cost list here instead would report a
+            // wall's worth of steel for a reinstall that needs none.
+            if (t is Blueprint_Install)
+            {
+                rows.Add(new Dictionary<string, object>
+                {
+                    ["unread"] = "an install blueprint has no material cost "
+                        + "(Blueprint_Install.TotalMaterialCost returns an empty list, after a "
+                        + "Log.Error saying it should not have been asked)",
+                });
+                return rows;
+            }
+            var costs = Placements.Materials(built, BuildStuff(t), out string note);
             if (costs == null)
             {
                 if (note != null)
@@ -528,6 +547,23 @@ namespace AutoRimmer
             catch { return null; }
         }
 
+        // THE STUFF A BLUEPRINT IS MADE OF IS NOT `Thing.Stuff`, and reading the
+        // wrong one made every wooden wall report no materials at all.
+        // `GenConstruct.PlaceBlueprintForBuild` calls
+        // `ThingMaker.MakeThing(sourceDef.blueprintDef)` with NO stuff and then
+        // assigns `blueprint_Build.stuffToUse`, so `Thing.Stuff` (the `stuffInt`
+        // field) is null on every Blueprint_Build while the real answer sits in
+        // a field of its own. `IConstructible.EntityToBuildStuff()` is the
+        // accessor both types implement — `stuffToUse` for a blueprint,
+        // `base.Stuff` for a Frame (which IS made with its stuff), and the
+        // minified thing's stuff for an install — and unlike its sibling
+        // `TotalMaterialCost()` it calls no cost list and cannot log.
+        private static ThingDef BuildStuff(Thing t)
+        {
+            try { return (t as IConstructible)?.EntityToBuildStuff(); }
+            catch { return null; }
+        }
+
         private static float WorkTotal(BuildableDef built, ThingDef stuff)
         {
             if (built == null) return 0f;
@@ -537,7 +573,7 @@ namespace AutoRimmer
 
         private static float WorkLeft(Frame f)
         {
-            try { return Math.Max(0f, WorkTotal(f.def.entityDefToBuild, f.Stuff) - f.workDone); }
+            try { return Math.Max(0f, WorkTotal(f.def.entityDefToBuild, BuildStuff(f)) - f.workDone); }
             catch { return 0f; }
         }
 

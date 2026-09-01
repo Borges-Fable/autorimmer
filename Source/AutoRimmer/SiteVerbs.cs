@@ -541,7 +541,63 @@ namespace AutoRimmer
             // says so without pretending the game refused.
             var row = Row(map, c, "interaction", true, null, null);
             row["standable"] = c.Standable(map);
+            // WHAT IS TOLERATED ON THE CELL, which is the bullet the session-15
+            // bench pass left open (accept/runs/s15-20260901/README.md, item 1;
+            // git-bug c718e4a's acceptance says the tolerated chair "appears
+            // under tiers.interaction as tolerated"). The cell reported
+            // `{ok: true, blocker: null, standable: true}` and named no occupant,
+            // so "a chair is there, which is fine" and "the cell is empty" read
+            // identically — and the difference matters, because that chair is
+            // exactly what the NEXT placement's PlaceWorker_
+            // PreventInteractionSpotOverlap check trips on.
+            //
+            // ADDITIVE, and only on an ACCEPTED row: `blocker` is the wrong
+            // field for this (nothing is blocking) and every existing field
+            // keeps its meaning, so no consumer and no alphabet id moves. The
+            // list is empty when the cell really is empty, which is the
+            // distinction being bought.
+            row["occupants"] = Tolerated(map, c);
             return row;
+        }
+
+        // Everything standing on an interaction cell the gate ACCEPTED, in
+        // Blockers.cs's shape plus the reason it was let through. By construction
+        // each of these passed `InteractionCellStandable`'s two predicates — the
+        // occupant's own `passability` is `Traversability.Standable` and its
+        // `entityDefToBuild` (if it has one) is too — so `removal` on each row is
+        // "how you would clear it if you wanted to", never "you must".
+        //
+        // `has_interaction_cell` is the field that matters for what comes next:
+        // an occupant with its own interaction spot is what
+        // PlaceWorker_PreventInteractionSpotOverlap will object to when a SECOND
+        // building wants this cell, and a chair (`DiningChair`, no interaction
+        // cell) is not.
+        private static List<object> Tolerated(Map map, IntVec3 c)
+        {
+            var list = new List<object>();
+            try
+            {
+                var things = map.thingGrid.ThingsListAtFast(c);
+                for (int i = 0; i < things.Count; i++)
+                {
+                    var t = things[i];
+                    if (t?.def == null) continue;
+                    // Filth, motes and the like are not occupants in any sense a
+                    // placement cares about, and a pawn standing here is walking.
+                    if (t.def.category == ThingCategory.Filth
+                        || t.def.category == ThingCategory.Mote
+                        || t.def.category == ThingCategory.Attachment) continue;
+                    var d = Blockers.Describe(t);
+                    d["tolerated"] = true;
+                    d["category"] = t.def.category.ToString();
+                    d["passability"] = t.def.passability.ToString();
+                    d["has_interaction_cell"] = t.def.HasSingleOrMultipleInteractionCells;
+                    list.Add(d);
+                    if (list.Count >= 8) break;
+                }
+            }
+            catch { }
+            return list;
         }
 
         private static Dictionary<string, object> MarginRow(Map map, IntVec3 c,

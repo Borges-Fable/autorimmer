@@ -1710,3 +1710,38 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `Bill_Production` (via `Bill_Mech : Bill_Autonomous` for the two mech ones), so
   the repeat-mode fields still apply; the cast is guarded anyway and
   `bill_class` is published. `0d9cbd7`.
+- 2026-09-01 (session 16) — **A blueprint's stuff is NOT `Thing.Stuff`, and
+  reading the wrong one made every wooden wall report no materials.** Caught in
+  self-review before any bench saw it. `GenConstruct.PlaceBlueprintForBuild`
+  calls `ThingMaker.MakeThing(sourceDef.blueprintDef)` with NO stuff and then
+  assigns `blueprint_Build.stuffToUse`, so `Thing.Stuff` — the `stuffInt` field —
+  is null on every `Blueprint_Build` while the real answer sits in a field of its
+  own. A `construction` read keyed on `Thing.Stuff` therefore handed
+  `Placements.Materials` a null stuff for a `MadeFromStuff` def, hit the
+  refuse-to-ask guard, and published `materials: null` with a note about a hazard
+  that was not the actual problem — the guard hid the bug it was protecting
+  against. `IConstructible.EntityToBuildStuff()` is the accessor all three types
+  implement (`stuffToUse`, `Frame`'s `base.Stuff`, the minified thing's stuff for
+  an install) and, unlike its interface sibling `TotalMaterialCost()`, it calls no
+  cost list and cannot log. **And that sibling turns out to be a FOURTH
+  red-error route:** `Blueprint_Install.TotalMaterialCost()` opens with
+  `Log.Error("Called MaterialsNeededTotal on a Blueprint_Install.")` before
+  returning an empty list — so an install blueprint is the one case where reading
+  the cost is both wrong (an install needs no materials) and loud. Handled by
+  name. Three of the four red-error routes on this subject are now ones
+  `d7c8088` did not list. `d7c8088`.
+- 2026-09-01 (session 16) — **The tolerated occupant is LISTED, and `blocker` was
+  never the field for it.** `accept/runs/s15-20260901/README.md` item 1: a chair
+  on an interaction cell gave `{ok: true, blocker: null, standable: true}` and
+  named no occupant, so "a chair is there, which is fine" and "the cell is empty"
+  read identically — and that chair is exactly what the NEXT placement's
+  `PlaceWorker_PreventInteractionSpotOverlap` trips on. Fixed additively:
+  `occupants` on an ACCEPTED interaction row, in `Blockers.cs`'s shape plus
+  `tolerated`, `category`, `passability` and `has_interaction_cell`. `blocker`
+  stays null because nothing is blocking, every existing field keeps its meaning,
+  and no alphabet id moves — so this is not the contract change it would have
+  been to overload `blocker`. `has_interaction_cell` is the field that predicts
+  the next refusal: an occupant with its own spot is what the overlap rule
+  objects to and a `DiningChair` (which has none) is not. Filth, motes and
+  attachments are excluded — they are not occupants in any sense a placement
+  cares about. `c718e4a`.
