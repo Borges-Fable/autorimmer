@@ -72,6 +72,13 @@ namespace AutoRimmer
     // a resource count must say "in stockpiles" or count things itself, or it
     // will refuse a build the player could make.
     //
+    // That last sentence was written as a warning and then came true: on
+    // 2026-09-01 `place-layout` reported `short_by: 185` while 869 unforbidden
+    // WoodLog lay ten cells from the site (git-bug 54b0c9a). `Materials.Of` is
+    // the count that asks the builder's own question and is what a verdict must
+    // now come from; `scope: "stockpiles-only"` below stays, because this
+    // section draws no conclusion and the stockpile figure is a real fact.
+    //
     // Single-map by design (v1): everything reads Find.CurrentMap.
     public static class DigestVerb
     {
@@ -345,6 +352,28 @@ namespace AutoRimmer
             return score;
         }
 
+        // THE DIVISOR IS THE ALERT'S EXPLANATION, NOT ITS TRIGGER, and the two
+        // are different members. Verified in the decompiled 1.6 tree:
+        //
+        //   Alert_LowFood.MapWithLowFood  -> `map.resourceCounter
+        //       .TotalHumanEdibleNutrition < 4f * (float)freeColonistsSpawnedCount`
+        //   Alert_LowFood.GetExplanation  -> `FreeColonistsSpawnedCount
+        //       + PrisonersOfColonyCount`
+        //
+        // So the ALERT fires at nutrition per COLONIST < 4, while `food_days`
+        // below divides by colonists PLUS PRISONERS, mirroring the sentence the
+        // player reads. With no prisoners the two are identical; with prisoners
+        // `food_days` is the SMALLER number.
+        //
+        // It matters now that this is a predicate target (spec 1.6): a caller
+        // writing `resources.food_days < N` to LEAD the alert must put N above
+        // 4, not below it. `food_days < 3` is strictly LATER than the alert on
+        // a prisoner-free colony — it only wins when 3 x prisoners > colonists.
+        // The leading-indicator argument is still right, and its real reason is
+        // elsewhere: `Alert_LowFood.GetReport` opens with
+        // `if ((float)Find.TickManager.TicksGame < 150000f) return false;`, so
+        // for the first 2.5 in-game days the alert CANNOT fire however empty
+        // the larder is, and a state predicate can. (git-bug fc287ba #1.)
         private static Dictionary<string, object> ResourceSection(Map map)
         {
             var rc = map.resourceCounter;

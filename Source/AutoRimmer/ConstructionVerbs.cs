@@ -315,6 +315,8 @@ namespace AutoRimmer
                 layoutData["by_state"] = Counts(layoutByState);
                 layoutData["work_left_total"] = Math.Round(lWorkLeft, 1);
                 layoutData["missing"] = MissingRows(map, layoutMissing);
+                if (layoutMissing.Count > 0)
+                    layoutData["materials_basis"] = Materials.Basis(Materials.Builders(map));
                 layoutData["items"] = layoutRows;
                 layoutData["listed"] = layoutRows.Count;
                 layoutData["cap"] = cap;
@@ -406,7 +408,7 @@ namespace AutoRimmer
             var missingOut = MissingRows(map, missingTotal);
             var byStateOut = Counts(byState);
 
-            return new Dictionary<string, object>
+            var data = new Dictionary<string, object>
             {
                 ["rect"] = Footprint.Out(rect),
                 ["rect_source"] = rectSource,
@@ -424,6 +426,12 @@ namespace AutoRimmer
                 ["scan_more"] = scanMore,
                 ["outside_rect"] = outside,
             };
+            // The availability test's provenance, once per envelope rather than
+            // once per row, and only when something was actually asked — the
+            // way `cancel-layout` publishes its `gate`/`gate_detail` pair.
+            if (missingTotal.Count > 0)
+                data["materials_basis"] = Materials.Basis(Materials.Builders(map));
+            return data;
         }
 
         // ------------------------------------------------------- the digest --
@@ -511,22 +519,35 @@ namespace AutoRimmer
 
         // The def -> shortfall rollup, shared by the rect scope and the layout
         // scope so the two cannot answer differently about the same material.
+        //
+        // `available` IS THE CONCLUSION AND `in_stockpiles` IS THE MEASUREMENT
+        // (git-bug 54b0c9a). This row used to publish only the stockpile figure
+        // and `place-layout`'s `shortfall[]` drew a verdict from the same
+        // number — both wrong for the same reason on any map without a
+        // stockpile zone, which is every fresh map. `Materials.Of` asks the
+        // builder's own question instead, and 54b0c9a's acceptance requires
+        // these two verbs to answer CONSISTENTLY, which they now do by calling
+        // the same routine.
         private static List<object> MissingRows(Map map, Dictionary<ThingDef, int> missing)
         {
             var rows = new List<object>();
+            if (missing.Count == 0) return rows;
+            var builders = Materials.Builders(map);
             foreach (var kv in missing)
-                rows.Add(new Dictionary<string, object>
+            {
+                var avail = Materials.Of(map, kv.Key, builders);
+                var row = Materials.BillRow(avail, kv.Value);
+                int shortBy = kv.Value - avail.Available;
+                // `short_by` present ONLY when there is one — presence is the
+                // signal, so a reader never compares a zero against a missing
+                // key. Its absence is the news: the material is there.
+                if (shortBy > 0)
                 {
-                    ["def"] = kv.Key.defName,
-                    ["count"] = kv.Value,
-                    // The number the agent actually needs to act on: what is in
-                    // STOCKPILES. map.resourceCounter walks SlotGroup haul
-                    // destinations, so goods lying on unzoned ground read as
-                    // ZERO — DigestVerb's header states the same caveat and it
-                    // matters more here, because "we have no steel" and "the
-                    // steel is not in a stockpile" are different problems.
-                    ["in_stockpiles"] = Stored(map, kv.Key),
-                });
+                    row["short_by"] = shortBy;
+                    row["hint"] = avail.Hint(shortBy);
+                }
+                rows.Add(row);
+            }
             return rows;
         }
 

@@ -321,7 +321,9 @@ namespace AutoRimmer
             }
             data["preflight"] = preflight;
 
-            data["materials"] = MaterialBill(map, ordered, out var shortfall, out int unpriced);
+            data["materials"] = MaterialBill(map, ordered, out var shortfall, out int unpriced,
+                out var materialsBasis);
+            data["materials_basis"] = materialsBasis;
             data["shortfall"] = shortfall;
             if (unpriced > 0) data["materials_unpriced"] = unpriced;
             data["stuff_defaulted"] = CountDefaulted(ordered);
@@ -1327,8 +1329,17 @@ namespace AutoRimmer
         // here as `ConstructionVerbs` and `DigestVerb` both say it: "we have no
         // steel" and "the steel is not in a stockpile" are different problems
         // and this number cannot tell them apart.
+        //
+        // WHICH IS WHY IT NO LONGER DECIDES ANYTHING (git-bug 54b0c9a). It is
+        // kept, because it is a real measurement and the game's own resource
+        // readout shows it — but `short_by` is a CONCLUSION and now comes from
+        // `Materials.Of`, which asks the question
+        // `WorkGiver_ConstructDeliverResources` asks: is there a reachable,
+        // unforbidden stack. On the M2 run this row said `short_by: 185` while
+        // 869 WoodLog lay ten cells from the site, and the room was then built
+        // out of that "missing" wood.
         private static List<object> MaterialBill(Map map, List<Element> ordered,
-            out List<object> shortfall, out int unpriced)
+            out List<object> shortfall, out int unpriced, out Dictionary<string, object> basis)
         {
             unpriced = 0;
             var total = new Dictionary<ThingDef, int>();
@@ -1348,23 +1359,17 @@ namespace AutoRimmer
             }
             var bill = new List<object>();
             shortfall = new List<object>();
+            // ONE builder snapshot for the whole bill, not one per def: the
+            // pawn list does not change between rows and `FreeColonistsSpawned`
+            // rebuilds its cached list on every access.
+            var builders = Materials.Builders(map);
+            basis = Materials.Basis(builders);
             foreach (var kv in total)
             {
-                int stored = ConstructionVerbs.Stored(map, kv.Key);
-                bill.Add(new Dictionary<string, object>
-                {
-                    ["def"] = kv.Key.defName,
-                    ["count"] = kv.Value,
-                    ["in_stockpiles"] = stored,
-                });
-                if (stored < kv.Value)
-                    shortfall.Add(new Dictionary<string, object>
-                    {
-                        ["def"] = kv.Key.defName,
-                        ["needed"] = kv.Value,
-                        ["in_stockpiles"] = stored,
-                        ["short_by"] = kv.Value - stored,
-                    });
+                var avail = Materials.Of(map, kv.Key, builders);
+                bill.Add(Materials.BillRow(avail, kv.Value));
+                var short_ = Materials.ShortfallRow(avail, kv.Value);
+                if (short_ != null) shortfall.Add(short_);
             }
             return bill;
         }

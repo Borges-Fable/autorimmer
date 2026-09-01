@@ -486,6 +486,24 @@ silent split would invent a def. Bind material with `--stuff DEF=STUFF` (repeat
 it; `*` is the default for every stuffable def not named) or `--stuff-map
 JSON|@file`; `--strict-stuff` refuses to fall back to the game's default at all.
 
+**The material bill separates the measurement from the conclusion.** Each row
+carries `count` (what the layout needs), `available` (reachable, unforbidden
+stacks of that def, by the builder's own test) and `in_stockpiles`
+(`map.resourceCounter`, which walks SlotGroup haul destinations, so goods on
+unzoned ground read as ZERO). `shortfall[]` and `short_by` come from
+`available`, never from `in_stockpiles` — a fresh quicktest map has no stockpile
+zone, and the old behaviour reported `short_by: 185` for a room that was then
+built out of that "missing" wood. When a row IS short, `hint` says which of the
+three problems it is, because `unforbid` fixes one of them and not the others:
+
+```
+rwa place-layout templates/bedroom.ir.json --origin 119,126 --stuff '*=WoodLog' \
+    --dry-run --json | jq -c '.data.shortfall, .data.materials_basis.builders'
+```
+
+`construction`'s `missing[]` answers by the same routine, so the two verbs
+cannot disagree about the same material.
+
 **The roof grid is reported, not sent.** A roof is a DESIGNATION, not a
 placement, and an enclosed room under 320 cells roofs itself next tick anyway
 (`AutoBuildRoofAreaSetter`). `--roof` sends `area {kind:"build-roof"}` as an

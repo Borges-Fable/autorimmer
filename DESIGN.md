@@ -1962,3 +1962,22 @@ queue by default (an agent flailing mid-experiment must not page triage).
   predicate is evaluated ONCE when it is armed, which validates the path and
   seeds the edge, and a broken path names the keys the section actually
   publishes. `fc287ba`, `36999fd`, `7382bdd`.
+- 2026-09-01 (session 19) — **`short_by` comes from the BUILDER's availability
+  test, not from the stockpile counter.** On the run that met M2,
+  `place-layout` reported `short_by: 185` while 869 unforbidden WoodLog lay ten
+  cells from the site and no stockpile zone existed anywhere on the map; the
+  room was then built out of that "missing" wood. `MaterialBill`'s own header
+  already said the number "cannot tell them apart" — and the code three lines
+  below it drew a conclusion from it anyway, which is this project's "candidates
+  + reasons, never bare booleans" rule broken at one remove: the agent got a
+  verdict manufactured from a partial count, with the disclaimer in a source
+  comment it cannot read. Vanilla's own test has no stockpile clause at all —
+  `WorkGiver_ConstructDeliverResources.ResourceValidator` is def match,
+  `IsForbidden(pawn)` and `PawnCanAutomaticallyHaulFast`, and `SlotGroup`,
+  `haulDestination` and `resourceCounter` appear nowhere in that file. So
+  `Materials.Of` counts reachable, unforbidden stacks by asking the colonists
+  who could take the job, `in_stockpiles` stays beside it as the separate
+  measurement it is, and a short row says WHICH problem it is —
+  `forbidden`/`unreachable`/genuinely absent — because `unforbid` fixes one of
+  them and not the others. `CanReserve` is deliberately not applied: a stack
+  somebody is already hauling is not missing. `54b0c9a`.
