@@ -402,11 +402,16 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
             if args.get("halt_on_error") is False:
                 problems.append(f"{name}: halt_on_error disabled")
             # The declared args are not the whole story: TimeDriver.Start
-            # (Source/AutoRimmer/TimeDriver.cs) defaults timeout_ticks to
-            # 600000 whenever `until` is set and timeout_ticks is omitted —
-            # 10x this policy's own cap. An advance that actually ran past
-            # the cap is a real violation even when the declared args look
-            # clean, so check what happened, not just what was asked for.
+            # (Source/AutoRimmer/TimeDriver.cs) applies a DEFAULT timeout when
+            # `until` is set and timeout_ticks is omitted. That default was
+            # 600000 — ten in-game days, 10x this policy's own cap — until
+            # git-bug 1113019 cut it to 60000, one in-game day, which is this
+            # cap exactly. The check stays, for two reasons: an advance that
+            # actually ran past the cap is a real violation even when the
+            # declared args look clean, and a transcript banked before that
+            # change still carries the old default. Check what happened, not
+            # just what was asked for. (The result now says which it was —
+            # `timeout_ticks` beside `timeout_source`: caller | default | none.)
             #
             # But the cap is a TARGET, not a promise, and the driver says so.
             # TimeDriver's stop check runs once per FRAME, after vanilla has

@@ -62,7 +62,16 @@ namespace AutoRimmer
     // sorted by priority descending here; the readout's own list is unsorted.
     //
     // `food_days` is the vanilla Alert_LowFood division (human-edible nutrition
-    // / (colonists + prisoners)), not a consumption simulation.
+    // / (colonists + prisoners)), not a consumption simulation. It is also
+    // STOCKPILE-ONLY and FRESH-ONLY and has NO ROT TERM — `resources.food_rot`
+    // is the honest block beside it and `resources.food_days_basis` says so in
+    // the data. See FoodRot.cs (git-bug 261f2e9).
+    //
+    // `temperature` is the only section whose `ok` concerns a CONTINUOUS value
+    // rather than a count, and it is deliberately narrow: false when a room a
+    // switched-on controller serves is off its target by more than
+    // `tolerance_c`. It publishes no room ROLE, because Room.Role is the
+    // most expensive line in this file and that section is predicate-addressable.
     //
     // RESOURCE COUNTS ARE STOCKPILE-ONLY. `steel`, `wood`, `silver`,
     // `components`, `meds` and `food_nutrition` all come from
@@ -147,7 +156,37 @@ namespace AutoRimmer
                 ["posture"] = PawnActs.PostureSection(map),
                 ["resources"] = ResourceSection(map),
                 ["power"] = PowerSection(map),
+                // IS THE ROOM I TOLD TO BE COLD ACTUALLY COLD (git-bug
+                // 261f2e9). Session 18 built a freezer, wired it, and read
+                // 14.6 C — and the only way to find that out was to call
+                // `room <id>` for a room whose id you already had to know.
+                // Temperature is a continuous value that kills food silently,
+                // which is exactly the class of thing the glance exists for;
+                // `ok` is narrow (a switched-on controller's room off its
+                // target) so it stays an alarm rather than a permanent
+                // complaint. Cheap on session 19's axis — see
+                // TemperatureVerbs' Section header for the per-member argument.
+                ["temperature"] = TemperatureVerbs.Section(map),
                 ["threats"] = ThreatSection(map),
+                // WHICH WAY THE COLONY IS MOVING (git-bug 2d9a1da). Every other
+                // section here is a LEVEL, and a level is what an alert already
+                // is: `Alert_LowFood` fires AT the threshold, which is the
+                // moment it is too late to plant. This block is the SLOPE — the
+                // colony's `ticks_until_bleedout`, which `61794cd` shipped this
+                // week for one pawn. Half of it is the game's own recorders
+                // (wealth, threat points, mood, population, which RimWorld has
+                // graphed since tick 0 and nothing here had ever read); half is
+                // AutoRimmer's own 2,500-tick sampler, because the game records
+                // no food series at all and food is what a ten-day run dies of.
+                //
+                // It is in the GLANCE for the M1 post-mortem's reason: that run
+                // made 27 advances, 10 digests and zero journal calls, so an
+                // indicator behind a verb the agent must remember to call is an
+                // indicator nobody reads. Cheapest section in the file on
+                // session 19's axis — it reads no game state for its own fields
+                // (the ring is already in memory) and the game's half is plain
+                // field reads over 11 recorders. See ColonySampler.TrendSection.
+                ["trends"] = ColonySampler.TrendSection(map),
                 ["changed"] = ChangedSection(since),
             };
         }
@@ -176,7 +215,7 @@ namespace AutoRimmer
         // Nothing here is being sent to a model.
         internal static readonly string[] PredicateSections =
             { "time", "site", "alerts", "construction", "colonists", "work_coverage",
-              "posture", "resources", "power", "threats" };
+              "posture", "resources", "power", "temperature", "threats", "trends" };
 
         internal static bool IsPredicateSection(string name)
         {
@@ -213,7 +252,33 @@ namespace AutoRimmer
                 case "posture": return PawnActs.PostureSection(map);
                 case "resources": return ResourceSection(map);
                 case "power": return PowerSection(map);
+                // Same axis, same verdict as work_coverage and posture: one
+                // walk of the real `allBuildingsColonist` list with a memoised
+                // per-def comp test, one walk of the stored
+                // FoodSourceNotPlantOrTree list with a memoised per-def
+                // Nutrition, region-grid room lookups and plain field reads. No
+                // Room.Role, no Room.GetStat, no pathfind — so
+                // `temperature.ok == false` is an affordable halt, and it is
+                // the one a ten-day food run wants: stop when the room that is
+                // supposed to be cold stops being cold.
+                case "temperature": return TemperatureVerbs.Section(map);
                 case "threats": return ThreatSection(map);
+                // The cheapest predicate section there is: arithmetic over a
+                // ring already in memory plus 11 field reads. So
+                // `advance {until:{condition:{path:"trends.food_days_per_day",
+                // op:"<=", value:-1.0}}}` — "stop when the colony starts losing
+                // more than a food-day per day" — is affordable, and it is the
+                // leading indicator this whole surface was missing.
+                //
+                // ONE TRAP, stated where a caller writing a predicate will read
+                // it: `trends.*_to_zero` is NULL whenever the stock is not
+                // falling, and StateWatch.One() refuses an ordering operator
+                // against null — at arm time that is a clean refusal, but
+                // mid-advance Poll returns false and never halts, so an advance
+                // waiting on `food_days_to_zero <= 2` stops halting the moment
+                // food stops falling. Predicates want `*_per_day`, which is
+                // always a number once `trends.ready` is true.
+                case "trends": return ColonySampler.TrendSection(map);
                 default: return null;
             }
         }
@@ -461,6 +526,19 @@ namespace AutoRimmer
         // `if ((float)Find.TickManager.TicksGame < 150000f) return false;`, so
         // for the first 2.5 in-game days the alert CANNOT fire however empty
         // the larder is, and a state predicate can. (git-bug fc287ba #1.)
+        //
+        // AND IT HAS NO ROT TERM AT ALL — git-bug 261f2e9, and it is the second
+        // half of the same lie. `ResourceCounter.ShouldCount` opens with
+        // `if (t.IsNotFresh()) return false;`, so a stack leaves this division
+        // the instant it finishes rotting, with nothing said during the ramp:
+        // `food_days` holds its value and then falls off a cliff. That is the
+        // M1 death shape (a surface showing a number that is not the thing
+        // killing you) one system over. `food_days` IS NOT REDEFINED — it is a
+        // shipped predicate target with suites asserting on it, and "what the
+        // vanilla alert will do" is a real question. What is added is
+        // `food_days_basis`, so the disclaimer stops living only in this
+        // comment, and `food_rot` beside it, which counts map-wide and carries
+        // the clock. FoodRot.cs holds the argument and the citations.
         private static Dictionary<string, object> ResourceSection(Map map)
         {
             var rc = map.resourceCounter;
@@ -473,6 +551,17 @@ namespace AutoRimmer
                 ["food_days"] = needers > 0 ? Math.Round(nutrition / needers, 1) : -1,
                 ["food_needers"] = needers,
                 ["food_nutrition"] = Mathf.Round(nutrition),
+                // THE DISCLAIMER, IN THE DATA. `Materials.cs` exists because a
+                // true warning in a source comment did not stop the code three
+                // lines below it from drawing a conclusion the agent could not
+                // check (git-bug 54b0c9a). Same fix, applied to the field the
+                // agent actually reads.
+                ["food_days_basis"] = "vanilla Alert_LowFood: map.resourceCounter's "
+                    + "TotalHumanEdibleNutrition / (colonists + prisoners). STOCKPILE-ONLY "
+                    + "(ResourceCounter walks SlotGroup haul destinations, so food on unzoned "
+                    + "ground reads as zero) and FRESH-ONLY (ShouldCount drops anything "
+                    + "IsNotFresh, so rotted food leaves this number with no warning). It has NO "
+                    + "rot term — read `food_rot` for the honest map-wide figure and the clock.",
                 ["meds"] = rc.GetCountIn(ThingCategoryDefOf.Medicine),
                 ["steel"] = rc.GetCount(ThingDefOf.Steel),
                 ["wood"] = rc.GetCount(ThingDefOf.WoodLog),
@@ -480,6 +569,9 @@ namespace AutoRimmer
                 ["components"] = rc.GetCount(ThingDefOf.ComponentIndustrial),
                 // See FIELD DOCS: every count above is stockpile-only.
                 ["scope"] = "stockpiles-only",
+                // The one block in this section that is NOT stockpile-scoped,
+                // and it says so on itself.
+                ["food_rot"] = FoodRot.Block(FoodRot.Of(map), needers, nutrition),
             };
         }
 

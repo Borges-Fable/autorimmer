@@ -191,10 +191,16 @@ BLEEDOUT_KEYS = ["ticks", "blood_loss_severity", "outcome", "deathless_gene",
 # WorkCoverage.Section's FINE row: three fields, and the claim "a row that is
 # FINE costs three fields" is only worth anything if it is checked as a set.
 FINE_ROW_KEYS = ["work", "floor", "have"]
-# …and the UNDER row's full diagnosis. `enabled_but_incapable` is NOT in this
-# list: it is present only when the row has an impaired pawn, which is phase 4.
+# …and the UNDER row's full diagnosis. `enabled_but_incapable` IS in this list
+# as of the session-21 fix: it used to be emitted only when the row had an
+# impaired pawn, so an absent key meant both "nobody here is impaired" and
+# "this build does not publish that key" — the conflation 61794cd already ruled
+# against for `ticks_until_bleedout`. It is now an always-present, possibly
+# empty list, like its `available_pawns` and `candidates` siblings. 3.3p asserts
+# the EMPTY case, which is the half that proves the emission is unconditional.
 UNDER_ROW_KEYS = ["work", "floor", "floor_on", "floor_by", "have", "short_by",
-                  "capable", "enabled", "available", "available_pawns", "candidates"]
+                  "capable", "enabled", "available", "available_pawns", "candidates",
+                  "enabled_but_incapable"]
 
 # PawnSerializer.HediffCap. Phase 9 re-parses it from the source.
 HEDIFF_CAP = 20
@@ -604,10 +610,16 @@ def bed_count():
     """How many beds are on the map, from the game rather than from memory.
 
     `TakeToBedGate("rescue", …)` ends in `RestUtility.FindBedFor`, and with NO
-    bed on the map every candidate is refused `no-bed`, every verdict is
-    `no-rescuer` and `act` is never published — measured on the s21 bench, and
-    the fixture requirement that would otherwise cost a session (40ed42f #3). A
-    bare `--quicktest` map has no buildings at all."""
+    bed on the map every verdict is `no-rescuer` and `act` is never published —
+    measured on the s21 bench, and the fixture requirement that would otherwise
+    cost a session (40ed42f #3). A bare `--quicktest` map has no buildings at
+    all.
+
+    WHICH REFUSAL a candidate gets depends on the PATIENT, not on the bed:
+    `no-bed` is the LAST clause of the rescue branch and only a DOWNED,
+    not-in-bed patient reaches it, because `HealthAIUtility.CanRescueNow` ->
+    `WantsToBeRescued` opens on `!pawn.Downed` and answers `cannot-rescue`
+    first. Phase 6 asserts both halves against the row each one belongs to."""
     e = send("things", {"def": "Bed"})
     have = dig(e, "data.total")
     if not num(have):
@@ -629,9 +641,10 @@ def spawn_bed(num_, near_pawn):
     precondition(num_, "a bed for RestUtility.FindBedFor to find",
                  ARGS.dry_run or dig(e, "ok") is True,
                  "dev:spawn-thing could not stage a bed (%s). Place one by hand "
-                 "beside the casualty and re-run — with no bed the last clause "
-                 "of the rescue gate refuses every rescuer `no-bed` and this "
-                 "whole phase proves nothing." % show(dig(e, "error")))
+                 "beside the casualty and re-run — with no bed the rescue gate "
+                 "refuses every rescuer (`no-bed` for a downed patient, "
+                 "`cannot-rescue` for a standing one) and this whole phase "
+                 "proves nothing." % show(dig(e, "error")))
     return e
 
 
@@ -1250,7 +1263,7 @@ def phase3():
     di = rows.index(dr) if dr in rows else 0
     base = "data.work_coverage.rows.%d" % di
     keys = sorted(set(UNDER_ROW_KEYS))
-    got = sorted(set(dr) - {"enabled_but_incapable"})
+    got = sorted(set(dr))
     check("3.3a", "an UNDER row carries the whole diagnosis",
           ARGS.dry_run or got == keys, "exactly %s" % keys, got)
     eq("3.3b", "Doctor's floor is 2", e, base + ".floor", DOCTOR_FLOOR)
@@ -1283,6 +1296,19 @@ def phase3():
                       "(Pawn_WorkSettings.EnableAndInitialize sorts by "
                       "AverageOfRelevantSkillsFor descending)",
               skills == sorted(skills, reverse=True), "skill descending", skills)
+
+    # THE EMPTY CASE, WHICH IS THE ONE THAT PROVES THE KEY IS UNCONDITIONAL.
+    # 3.0b left exactly one colonist with Doctor enabled and 3.3e says that one
+    # is AVAILABLE, so `Impaired` is arithmetically empty here (enabled 1 =
+    # available 1 + impaired + non-responders). Before the session-21 fix the
+    # key was simply absent in this state, and `shape()` at 4.5a only ever saw
+    # the populated case — which is how the same omission survived into
+    # `work-cover` and failed acceptance 7.2h there instead.
+    shape("3.3p", "digest", e, base + ".enabled_but_incapable", list)
+    eq_val("3.3q", "…and it is EMPTY rather than absent when nobody enabled is "
+                   "missing a capacity — an absent key would mean both 'nobody "
+                   "is impaired' and 'this build does not publish it'",
+           dr.get("enabled_but_incapable"), [])
 
     # ---- a FINE row: three fields and no more -------------------------------
     fine = [(i, r) for i, r in enumerate(rows)
@@ -1441,13 +1467,19 @@ def phase4():
                     "asks for.")
 
     finding("4.7", "`enabled_but_incapable` is unreachable on a COVERED row: "
-                   "WorkCoverage.Section builds the diagnosis inside the "
+                   "WorkCoverage.Section builds the whole diagnosis inside the "
                    "`if (r.Under)` branch, so a colony with two available doctors "
                    "and a handless third is told nothing about the third. The "
                    "block is a diagnosis and there is arguably no problem to "
                    "diagnose — but 'you have a doctor who cannot tend' is the "
                    "kind of thing the M1 post-mortem exists about. Filed on "
-                   "40ed42f, not asserted either way.")
+                   "40ed42f, not asserted either way. NARROWER THAN IT WAS: the "
+                   "INNER guard `if (r.Impaired.Count > 0)` was a separate "
+                   "defect and is fixed — the list is now always present and "
+                   "empty when nobody is impaired (3.3q, 7.2h, 9.8d, 9.11a). "
+                   "What is left is whether a FINE row should stop costing three "
+                   "fields, which is the digest's byte budget and a design "
+                   "decision rather than a shape bug.")
 
 
 # ------------------------------------------------------------------- phase 5 --
@@ -1698,22 +1730,78 @@ def phase6():
     # `no-rescuer` and `act` is absent. That is not a bug and it is not a
     # fixture accident — it is the answer to "why is nobody coming", which is
     # the question the M1 run never got to ask. So it is asserted FIRST.
+    #
+    # ============ WHICH ROW CAN REACH `no-bed`, AND WHICH CANNOT =============
+    # THIS BLOCK USED TO ASSERT `no-bed` ON `cas[0]` AND WAS WRONG TO. Measured
+    # on the s21 bench, 2026-09-01: `cas[0]` is the BLEEDER, who is STANDING,
+    # and `TakeToBedGate("rescue", …)` opens on
+    # `HealthAIUtility.CanRescueNow` -> `WantsToBeRescued`, whose FIRST clause is
+    # `!pawn.Downed`. `no-bed` (`RestUtility.FindBedFor`) is its LAST. So for a
+    # standing patient every candidate that clears `ProviderGate` is refused
+    # `cannot-rescue` and the bed clause is unreachable BY CONSTRUCTION — no
+    # amount of staging produces `no-bed` there, and the mod is right about it
+    # (TriageVerbs.cs's "THE OTHER BOUNDARY, STATED" says so in the source).
+    #
+    # `no-bed` belongs to a DOWNED, not-yet-in-bed patient, which is exactly
+    # what the anaesthetised one staged at 6.0a is. The banked bench envelope
+    # `18-triage-downed.json` is that row and phase 9's 9.6i-9.6k assert it.
+    #
+    # The other refusal on `cas[0]` — `manipulation` on the handless pawn — is
+    # NOT fixture leakage either: 6.8d requires phase 4's handless doctor to be
+    # in the gated list on purpose. The wreckage is carried between phases
+    # deliberately; only this assertion picked the wrong row to read it off.
     if not ARGS.dry_run and S.get("beds0", 0) == 0 and cas:
         row = cas[0]
         gated = as_list(row.get("rescuers_gated_out"))
-        eq_val("6.4a", "with NO bed on the map every casualty reads `no-rescuer`",
-               row.get("verdict"), "no-rescuer")
+        verdicts = [r.get("verdict") for r in cas if isinstance(r, dict)]
+        check("6.4a", "with NO bed on the map EVERY casualty reads `no-rescuer` "
+                      "— with no bed to carry anyone to, nobody clears the gate "
+                      "on anybody",
+              verdicts == ["no-rescuer"] * len(verdicts),
+              "every verdict no-rescuer", verdicts)
         eq_val("6.4b", "…with nothing pathed, because nothing survived the gate",
                (row.get("candidates_total"), row.get("candidates_pathed")), (0, 0))
-        check("6.4c", "…and a refusal names `no-bed`, the last clause of "
-                      "TakeToBedGate",
-              bool(gated) and any(g.get("gate") == "no-bed" for g in gated
-                                  if isinstance(g, dict)),
-              "a gated-out row with gate no-bed", gated[:2])
-        check("6.4d", "…in the GAME's own words, not ours",
-              any("bed" in (g.get("reason") or "").lower() for g in gated
-                  if isinstance(g, dict)),
-              "a reason naming a bed", [g.get("reason") for g in gated[:2]])
+        # THE STANDING CASE, NAMED. This is the half that used to be asserted as
+        # `no-bed` and is not: it is the gate order, measured. The row is chosen
+        # by `downed:false` rather than by index, because casualty order follows
+        # `FreeColonistsSpawned` and is not this suite's to predict.
+        std = [r for r in cas if isinstance(r, dict) and r.get("downed") is not True]
+        if std:
+            sgates = {g.get("gate") for g in as_list(std[0].get("rescuers_gated_out"))
+                      if isinstance(g, dict)}
+            check("6.4b2", "a STANDING casualty's candidates stop at "
+                           "`cannot-rescue`, not at `no-bed`: WantsToBeRescued's "
+                           "first clause is `!pawn.Downed` and the bed lookup is "
+                           "TakeToBedGate's last",
+                  "cannot-rescue" in sgates and "no-bed" not in sgates,
+                  "cannot-rescue present and no-bed absent on standing pawn %s"
+                  % std[0].get("pawn"), sorted(sgates))
+        else:
+            note("6.4b2", "every casualty on this read is DOWNED, so the "
+                          "`cannot-rescue` half of the gate order could not be "
+                          "shown against a standing patient.")
+        # …and the DOWNED one, which is where `no-bed` lives.
+        dwn = [r for r in cas if isinstance(r, dict) and r.get("downed") is True]
+        if dwn:
+            drow = dwn[0]
+            dgated = as_list(drow.get("rescuers_gated_out"))
+            check("6.4c", "…while a DOWNED casualty's refusal names `no-bed`, the "
+                          "last clause of TakeToBedGate",
+                  any(g.get("gate") == "no-bed" for g in dgated
+                      if isinstance(g, dict)),
+                  "a gated-out row with gate no-bed on pawn %s" % drow.get("pawn"),
+                  dgated[:3])
+            check("6.4d", "…in the GAME's own words, not ours "
+                          "(NoNonPrisonerBed.Translate)",
+                  any("bed" in (g.get("reason") or "").lower() for g in dgated
+                      if isinstance(g, dict)),
+                  "a reason naming a bed", [g.get("reason") for g in dgated[:3]])
+        else:
+            note("6.4c", "no casualty is DOWNED on this read, so the `no-bed` "
+                         "clause could not be reached live — it is the last "
+                         "clause of TakeToBedGate and CanRescueNow refuses a "
+                         "standing patient before it. 9.6i-9.6k assert it from "
+                         "the banked bench envelope instead.")
         check("6.4e", "…and NO `act` is published, because there is nobody to "
                       "name in it",
               all("act" not in r for r in cas if isinstance(r, dict)),
@@ -2006,7 +2094,24 @@ def phase7():
            "data.still_under.0.floor", DOCTOR_FLOOR)
         eq("7.2g", "…and the promotion it COULD make was still made", e,
            "data.still_under.0.enabled_this_call", 1)
-        shape("7.2h", "work-cover", e, "data.still_under.0.enabled_but_incapable")
+        # THE ELEVENTH KEY, AND THE ONE THAT WAS CONDITIONAL. `work-cover`'s own
+        # note tells a caller to branch on this list — "`enabled` short means
+        # promote, `capable` short means recruit, a non-empty
+        # `enabled_but_incapable` list means the fix is surgery" — and until the
+        # session-21 fix it was emitted only `if (r.Impaired.Count > 0)`. This
+        # fixture has Doctor OFF across the whole roster (`set_doctor(ids, 0)`
+        # above), so nobody is enabled-but-incapable and the OLD build published
+        # nothing at all here. That is why this is the check that caught it: an
+        # absent key is indistinguishable from a wrong dig path.
+        shape("7.2h", "work-cover", e, "data.still_under.0.enabled_but_incapable",
+              list)
+        imp = as_list(dig(e, "data.still_under.0.enabled_but_incapable"))
+        en = dig(e, "data.still_under.0.enabled")
+        check("7.2i", "…and the impaired are a SUBSET of the enabled, which is "
+                      "what the field means: WorkCoverage.Compute only reaches "
+                      "`Impaired` for a pawn already in `Enabled`",
+              ARGS.dry_run or (num(en) and len(imp) <= en),
+              "len(enabled_but_incapable) <= enabled", (len(imp), en))
 
     # ---- (d) `no-candidate` -------------------------------------------------
     # Now the one promotable pawn is enabled, so there is nobody left at all.
@@ -2076,11 +2181,39 @@ def phase7():
     # not ask for the escape actually receives — and, symmetrically, that the
     # escape every other advance in this file leans on really does something.
     #
-    # The assertion is deliberately on the INVARIANT rather than on a spelling:
-    # `722c951`'s exact refusal code and reason string are its own to define and
-    # are being written in a parallel worktree. What cannot be up for grabs is
-    # that an advance across this suite's own downed colonists does NOT come
-    # back looking like an ordinary completed advance.
+    # ============ THE RULING THIS PHASE RESTS ON (2026-09-01) ================
+    # THE CASUALTY HALT IS ON THE TRANSITION, NOT ON THE STATE. This phase used
+    # to read `722c951`'s "an advance SPANNING an own-faction downing stops at
+    # it" as "an advance made while a colonist is down is refused", staged four
+    # already-downed colonists, and asserted that an unescaped advance across
+    # them could not complete. On the s21 bench it completed — `ok:true
+    # reason:"ticks" ticks:300` — and the mod was right.
+    #
+    # `JournalHooks.Patch_MakeDowned` and `Patch_SetDead` are POSTFIXES ON THE
+    # TRANSITION (`Pawn_HealthTracker.MakeDowned` / `SetDead`), so a pawn
+    # already down when the advance starts emits nothing and the halt does not
+    # fire. That is deliberate and 722c951 #2 says so in as many words: "the
+    # hooks are on the transition, so this cannot re-fire for the same pawn and
+    # cannot wedge." A state halt would mean that once a colonist is down and
+    # cannot be rescued — which on a bedless map is EVERY casualty, verdict
+    # `no-rescuer`, see 6.4a — every subsequent advance refuses forever with no
+    # act that clears it. That is the same argument `40ed42f` part 3 already
+    # used to make the bleedout deadline refuse on `too-slow` and on nothing
+    # else, and the escape does not save it: `through_casualties` is per-call
+    # and not a mode (722c951's 2.17/2.18), so a state halt would force the
+    # escape onto every advance for the rest of the run and train the agent to
+    # pass it blind — which is precisely the guard being switched off.
+    #
+    # 722c951's own words carry the transition reading everywhere they are
+    # specific: "stop early when an own-faction pawn goes down or dies DURING
+    # the advance, returning what happened AND THE TICK IT HAPPENED AT" (a state
+    # has no such tick); "an advance spanning a HOSTILE downing does NOT stop —
+    # prove the filter is on faction, NOT ON THE EVENT" (a downing is an event);
+    # "replay the M1 shape: an advance ACROSS TICK 214,599 stops there".
+    #
+    # Recorded in DESIGN's decisions log and on 722c951. This phase now asserts
+    # BOTH halves of it: 7.5a that the state does not halt (so a run cannot
+    # wedge), 7.6 that the transition does.
     precondition("7.5", "there is a downed own-faction colonist to advance past",
                  ARGS.dry_run or len(S.get("downed") or []) > 0,
                  "phase 7 downed nobody, so the seam cannot be tested")
@@ -2090,49 +2223,160 @@ def phase7():
     if not ARGS.dry_run:
         journal_since(max(0, watermark() - 1), limit=5)
 
+    # ---- (f1) THE STATE DOES NOT HALT — the anti-wedge half -----------------
+    # A bare `{"ticks": 300}` and not a predicate, for `722c951`'s own reason
+    # (`pass_time()`'s note): the subject under test is the advance itself, not
+    # a state the game reaches, and there is no predicate spelling for "some
+    # time passed". 300 is short on purpose — the only bleeder left is phase 2's
+    # subject, whose clock read ~12,500 ticks at 2.4, so nothing NEW can go down
+    # or die inside this window and the completion cannot be luck.
     e = raw_advance({"ticks": 300, "speed": "normal"}, timeout=240)
-    S["unescaped"] = e
-    ok = dig(e, "ok")
-    reason = dig(e, "data.reason")
-    ticks = dig(e, "data.ticks_elapsed")
-    print("  %sunescaped advance: ok=%s reason=%s ticks=%s error=%s%s"
-          % (DIM, ok, reason, ticks, show(dig(e, "error")), OFF))
-    innocuous = (ok is True and reason == "ticks" and num(ticks) and ticks >= 300)
-    check("7.6a", "an advance across an own-faction DOWNED colonist does not come "
-                  "back as an ordinary completed advance — it is refused, or it "
-                  "halts (722c951)",
-          ARGS.dry_run or not innocuous,
-          "ok:false, or a reason that is not a plain `ticks` completion",
-          {"ok": ok, "reason": reason, "ticks_elapsed": ticks,
-           "error": dig(e, "error")})
-    if not ARGS.dry_run:
-        blob = json.dumps(e).lower()
-        check("7.6b", "…and it SAYS why, naming the casualty or the escape",
-              any(w in blob for w in ("casualt", "downed", "through_casualties",
-                                      "unread", "unread_ok")),
-              "a refusal or halt that names the reason",
-              (dig(e, "error.detail") or "")[:300] or show(dig(e, "data.halted_on")))
-    eq("7.6c", "…and whatever happened, the game is left PAUSED",
-       send("digest"), "data.time.paused", True)
+    S["state_advance"] = e
+    print("  %sunescaped advance across %d ALREADY-downed colonist(s): "
+          "ok=%s reason=%s ticks=%s%s"
+          % (DIM, len(S.get("downed") or []), dig(e, "ok"), dig(e, "data.reason"),
+             dig(e, "data.ticks_elapsed"), OFF))
+    eq("7.5a", "an UNESCAPED advance made while own-faction colonists are "
+               "ALREADY down COMPLETES — the halt is on the transition, so a "
+               "colony that cannot rescue its casualty is not wedged", e,
+       "data.reason", "ticks")
+    ge("7.5b", "…and it really ran the ticks it was asked for", e,
+       "data.ticks_elapsed", 300)
 
-    e = advance({"ticks": 300, "speed": "normal"}, timeout=240)
-    S["escaped"] = e
-    eq("7.7a", "…and with `through_casualties` given a reason it proceeds", e,
-       "ok", True)
+    # ---- (f2) THE TRANSITION DOES HALT, unescaped ---------------------------
+    # `journal-selftest --steps down-at` is 722c951's fixture and the ONLY way
+    # to drive this from outside the game: it arms from the command drain and
+    # FIRES from GameComponentTick, i.e. inside DoSingleTick, inside the
+    # advance. A `dev:damage` sent over the protocol lands while the game is
+    # paused and would prove nothing about an advance halting.
+    standing = []
     if not ARGS.dry_run:
-        one_of("7.7b", "…to a normal completion", e, "data.reason",
-               ["ticks", "timeout"])
-        ge("7.7c", "…having actually run", e, "data.ticks_elapsed", 1)
-    eq("7.7d", "…and it still leaves the game paused", send("digest"),
-       "data.time.paused", True)
+        r = send("pawns", {"filter": "colonist", "cap": 200, "order": "id"})
+        for row in as_list(dig(r, "data.list")):
+            if not isinstance(row, dict) or row.get("id") is None:
+                continue
+            if "downed" in as_list(row.get("flags")):
+                continue
+            standing.append(row["id"])
+    print("  %sstanding colonists for the two arms: %s%s" % (DIM, standing, OFF))
+    have_fixture = ARGS.dry_run or len(standing) >= 2
+    precondition("7.5c", "two standing own-faction colonists — one per arm of "
+                         "the escaped/unescaped experiment",
+                 have_fixture,
+                 "found %s standing; 7.6 downs one INSIDE an unescaped advance "
+                 "and 7.7 downs the other inside an escaped one, and the pair "
+                 "is the whole point: same fixture, same span, the escape the "
+                 "only variable" % len(standing))
 
-    note("7.8", "7.6 asserts an INVARIANT, not a spelling: 722c951 owns the "
-                "refusal code and the halt reason and is being written in "
-                "parallel. If 7.6a passes because the advance was REFUSED and "
-                "7.7a because the escape let it through, the seam is proved "
-                "whichever words 722c951 chose. If 722c951 has not merged yet, "
-                "7.6a is the check that fails, and that failure is honest: the "
-                "guard does not exist yet.")
+    DOWN_DELAY = 400          # ticks into the advance the downing fires
+    SPAN = 3000               # the advance's OWN bound, well past it
+
+    if have_fixture:
+        victim_a = standing[0] if standing else 0
+        e = send("journal-selftest", {"steps": ["down-at"],
+                                      "down_delay_ticks": DOWN_DELAY,
+                                      "down_pawn": victim_a})
+        precondition("7.5d", "`journal-selftest --steps down-at` can arm a "
+                             "downing INSIDE an advance",
+                     ARGS.dry_run or dig(e, "ok") is True,
+                     "down-at refused: %s — it is dev-gated like every other "
+                     "step and 722c951 owns it" % show(dig(e, "error")))
+        eq("7.5e", "…on an OWN-FACTION pawn, which is what the filter keys on",
+           e, "data.down_at.player_faction", True)
+        fires = dig(e, "data.down_at.fires_at_tick")
+        # Arming journals a `dev` row of its own; discharge it so the unescaped
+        # advance below meets the CASUALTY guard and not the unread one.
+        if not ARGS.dry_run:
+            journal_since(max(0, watermark() - 1), limit=5)
+        t0 = dig(send("digest", {"sections": ["time"]}), "data.time.tick") or 0
+        # THE ADVANCE'S OWN BOUND IS A PREDICATE — "until the clock reaches T",
+        # T read off the game — so "it stopped early" is a measurement and not
+        # an interpretation. `timeout_ticks` bounds it regardless (git-bug
+        # 1113019: an `until` with no bound whose predicate is already true at
+        # arm time runs unbounded).
+        e = raw_advance({"until": {"condition": {"path": "time.tick",
+                                                 "op": ">=",
+                                                 "value": t0 + SPAN}},
+                         "timeout_ticks": SPAN + 2000, "speed": "fast"},
+                        timeout=300)
+        S["unescaped"] = e
+        ok = dig(e, "ok")
+        reason = dig(e, "data.reason")
+        ticks = dig(e, "data.ticks_elapsed")
+        print("  %sunescaped advance ACROSS a downing (armed %s, bound %s): "
+              "ok=%s reason=%s ticks=%s error=%s%s"
+              % (DIM, fires, t0 + SPAN, ok, reason, ticks,
+                 show(dig(e, "error")), OFF))
+        # THE INVARIANT FIRST, and it is deliberately not a spelling: what
+        # cannot be up for grabs is that an advance which crosses an own-faction
+        # downing does not come back looking like one that ran to its own bound.
+        innocuous = (ok is True and reason in ("ticks", "condition", "timeout"))
+        check("7.6a", "an advance across an own-faction downing does not come "
+                      "back as an ordinary completed advance — it is refused, "
+                      "or it halts (722c951)",
+              ARGS.dry_run or not innocuous,
+              "ok:false, or a reason that is not the advance's own bound",
+              {"ok": ok, "reason": reason, "ticks_elapsed": ticks,
+               "error": dig(e, "error")})
+        eq("7.6b", "…and the spelling 722c951 shipped and proved on a bench is "
+                   "`casualty`", e, "data.reason", "casualty")
+        eq("7.6c", "…identifying itself as a casualty halt", e,
+           "data.halted_on.kind", "casualty")
+        eq("7.6d", "…naming the event class", e, "data.halted_on.event", "downed")
+        eq("7.6e", "…and the pawn, so the response is one `rescue` call away", e,
+           "data.halted_on.pawn_id", victim_a)
+        eq("7.6f", "…and that it was OUR faction", e,
+           "data.halted_on.player_faction", True)
+        check("7.6g", "…and it stopped EARLY — the M1 shape (step 148 crossed a "
+                      "downing at 214,599 and ran on), halted",
+              ARGS.dry_run or (num(ticks) and ticks < SPAN - 1000),
+              "ticks_elapsed well under the predicate's %s" % SPAN, ticks)
+        eq("7.6h", "…and whatever happened, the game is left PAUSED",
+           send("digest"), "data.time.paused", True)
+
+        # ---- (f3) THE SAME EXPERIMENT WITH THE ESCAPE ON --------------------
+        # Same fixture step, same span, a second victim: the escape is the ONLY
+        # variable, which is the shape 722c951's phases 3 and 4 use for the
+        # faction filter.
+        victim_b = standing[1] if len(standing) > 1 else 0
+        e = send("journal-selftest", {"steps": ["down-at"],
+                                      "down_delay_ticks": DOWN_DELAY,
+                                      "down_pawn": victim_b})
+        precondition("7.7", "a second downing armed for the escaped arm",
+                     ARGS.dry_run or dig(e, "ok") is True,
+                     "down-at refused for %s: %s" % (victim_b, show(dig(e, "error"))))
+        t0 = dig(send("digest", {"sections": ["time"]}), "data.time.tick") or 0
+        e = advance({"until": {"condition": {"path": "time.tick", "op": ">=",
+                                             "value": t0 + SPAN}},
+                     "timeout_ticks": SPAN + 2000, "speed": "fast"}, timeout=300)
+        S["escaped"] = e
+        print("  %sESCAPED advance across the same fixture: ok=%s reason=%s "
+              "ticks=%s%s" % (DIM, dig(e, "ok"), dig(e, "data.reason"),
+                              dig(e, "data.ticks_elapsed"), OFF))
+        eq("7.7a", "…and with `through_casualties` given a reason it proceeds",
+           e, "ok", True)
+        eq("7.7b", "…to its OWN bound rather than the casualty — the escape is "
+                   "the only thing that changed", e, "data.reason", "condition")
+        ge("7.7c", "…having actually run PAST the downing it was armed for", e,
+           "data.ticks_elapsed", DOWN_DELAY)
+        shape("7.7d", "advance", e, "data.through_casualties")
+        eq("7.7e", "…and it still leaves the game paused", send("digest"),
+           "data.time.paused", True)
+    else:
+        note("7.6", "the down-at fixture could not be staged, so neither arm of "
+                    "the seam ran. 7.5a still proves the anti-wedge half: an "
+                    "unescaped advance across ALREADY-downed colonists "
+                    "completes.")
+
+    note("7.8", "7.6a asserts an INVARIANT and 7.6b-7.6f the spelling. The "
+                "invariant is what the seam owns: an advance crossing an "
+                "own-faction downing does not return as an ordinary completed "
+                "advance. The spelling is 722c951's and is now merged and "
+                "bench-proved, so asserting it here is a join between the two "
+                "suites rather than a guess. 7.5a is the OTHER half of the "
+                "2026-09-01 ruling and the one this phase used to get wrong: "
+                "the halt is on the transition, so a colony that is already "
+                "carrying a casualty it cannot rescue still advances.")
 
 
 # ------------------------------------------------------------------- phase 8 --
@@ -2461,6 +2705,24 @@ def phase9():
         keys = re.findall(r'\["(\w+)"\]\s*=', m.group(0)) if m else []
         eq_val("9.8c", "…and the FINE row's field list matches FINE_ROW_KEYS",
                keys, FINE_ROW_KEYS)
+        # THE SESSION-21 SHAPE FIX, RE-DERIVED. `enabled_but_incapable` used to
+        # be emitted only `if (r.Impaired.Count > 0)`, which made an absent key
+        # mean both "nobody is impaired" and "this build does not publish it".
+        # 3.3q asserts the empty case live; this asserts that the SOURCE cannot
+        # quietly go back to conditional, which is the half a live suite cannot
+        # see (a fixture with an impaired pawn passes either way — that is
+        # exactly how the same omission survived into `work-cover`).
+        # The guard is looked for as CODE — a line that STARTS with the `if`,
+        # not the string anywhere — because the source comment that records the
+        # fix quotes the old guard verbatim, and a substring search would read
+        # its own changelog as a regression.
+        guard = re.search(r"^\s*if \(r\.Impaired\.Count > 0\)", src, re.M)
+        check("9.8d", "WorkCoverage.Section publishes `enabled_but_incapable` "
+                      "UNCONDITIONALLY on an under-covered row",
+              'd["enabled_but_incapable"] = imp;' in src and not guard,
+              "the assignment present and not guarded by "
+              "`if (r.Impaired.Count > 0)`",
+              "guard still present" if guard else "assignment missing")
 
     src = _src("TriageVerbs.cs")
     if src is None:
@@ -2490,6 +2752,42 @@ def phase9():
         check("9.10a", "`work_coverage` is registered as a predicate section, "
                        "which is what phase 7b arms against",
               "work_coverage" in secs, "work_coverage among %s" % (secs,), secs)
+
+    src = _src("PawnManageVerbs.cs")
+    if src is None:
+        note("9.11", "Source/AutoRimmer/PawnManageVerbs.cs is not in this "
+                     "checkout; work-cover's refusal shape could not be "
+                     "re-derived.")
+    else:
+        # The same fix in its second home — and the one acceptance 7.2h caught.
+        guard = re.search(r"^\s*if \(r\.Impaired\.Count > 0\)", src, re.M)
+        check("9.11a", "`work-cover`'s `still_under` row publishes "
+                       "`enabled_but_incapable` UNCONDITIONALLY",
+              'why["enabled_but_incapable"] = imp;' in src and not guard,
+              "the assignment present and not guarded by "
+              "`if (r.Impaired.Count > 0)`",
+              "guard still present" if guard else "assignment missing")
+
+    src = _src("JournalHooks.cs")
+    if src is None:
+        note("9.12", "Source/AutoRimmer/JournalHooks.cs is not in this checkout; "
+                     "the transition ruling could not be re-derived.")
+    else:
+        # THE 2026-09-01 RULING, RE-DERIVED FROM THE SOURCE. 7.5a asserts on a
+        # bench that an advance across an ALREADY-downed colonist completes; it
+        # only stays true while the casualty journal rows come from POSTFIXES ON
+        # THE TRANSITION. A prefix, a poll, or a hook moved onto `Pawn.Downed`
+        # would turn the halt into a state halt and wedge a ten-day run on the
+        # first casualty nobody can rescue — and 7.5a would then fail, correctly,
+        # but only on a bench. This is the same claim, checkable offline.
+        check("9.12a", "the casualty journal rows are POSTFIXES on the "
+                       "TRANSITIONS `MakeDowned` and `SetDead` — the whole basis "
+                       "of the transition-not-state ruling (722c951 #2, DESIGN "
+                       "2026-09-01)",
+              'nameof(Pawn_HealthTracker.SetDead)' in src
+              and 'HarmonyPatch(typeof(Pawn_HealthTracker), "MakeDowned")' in src
+              and src.count("public static void Postfix") >= 2,
+              "both transitions patched, both as Postfix", None)
 
 
 # ---------------------------------------------------------------------- main --

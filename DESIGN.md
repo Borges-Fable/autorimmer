@@ -108,6 +108,15 @@ afternoon), and the layout form is a **named family rather than a path**,
 because `construction.frames == 0` is the wrong predicate and no amount of edge
 detection makes it the right one.
 
+`timeout_ticks` **defaults to 60,000 — one in-game day — on any `until`
+advance**, and the result publishes `timeout_ticks` beside a `timeout_source` of
+`caller | default | none` so the caller's own bound is distinguishable from
+ours. An `until:{condition}` that is ALREADY TRUE when it arms, with the edge
+required and no positive bound, is **refused** (`unreachable-halt`): the edge
+can never come, so the halt cannot fire. Both are session 21's, and the
+decisions log carries why the day is the idle unit rather than the panic
+button.
+
 **A clock predicate is the one that makes tick arithmetic unnecessary.**
 `advance {ticks:N}` overshoots by up to `MaxTicksPerFrame(speed)` — 30 at
 Ultrafast — and the overshoots accumulate with nothing to re-anchor them. Every
@@ -2425,3 +2434,387 @@ queue by default (an agent flailing mid-experiment must not page triage).
   a standing bleeder and a bedded bleeder outside this refusal, correctly: a
   patient in bed whose DOCTOR cannot arrive in time is a different comparison
   (tend travel, not rescue travel) and is not claimed. `722c951`, `40ed42f`.
+
+- 2026-09-01 (session 21) — **The casualty halt is on the TRANSITION, not on the
+  STATE: an advance made while an own-faction colonist is ALREADY down runs
+  normally, and that is the mod being right.** Raised as a genuine ambiguity by
+  acceptance check 7.6a of `accept/61794cd-bleed-triage.py`, which staged four
+  already-downed colonists and asserted that an un-escaped `advance` could not
+  complete. On the s21 bench it completed — `ok:true reason:"ticks" ticks:300` —
+  and the suite, not the mod, was wrong. `722c951`'s own text pulls both ways in
+  one place only: its Acceptance bullet says "an advance **spanning** an
+  own-faction downing stops at it", which a reader can take as a condition.
+  Everywhere the issue is SPECIFIC it is a transition: the scope extension says
+  "stop early when an own-faction pawn goes down or dies **during the advance**,
+  returning what happened **and the tick it happened at**" — a state has no such
+  tick; the sibling bullet says "an advance spanning a HOSTILE downing does NOT
+  stop — prove the filter is on faction, **not on the event**" — a downing is
+  named as an event; and the replay bullet says "an advance **across tick
+  214,599** stops there". The implementation matches: `JournalHooks.Patch_MakeDowned`
+  and `Patch_SetDead` are POSTFIXES on `Pawn_HealthTracker.MakeDowned` / `SetDead`,
+  so a pawn already down emits nothing.
+  **The design argument decides it independently of the wording.** A state halt
+  wedges a ten-day unattended run: on a bedless map every casualty's verdict is
+  `no-rescuer` (`TakeToBedGate` refuses everybody), there is no act that clears
+  the condition, and every subsequent advance would halt at zero ticks on the
+  same pawn forever. That is the identical reasoning that already made the
+  `bleedout-deadline` refusal fire on `too-slow` and on nothing else, in the
+  entry above. And the escape does not rescue a state halt: `through_casualties`
+  is per-call and deliberately not a mode (`722c951` checks 2.17–2.18), so a
+  state halt would force the escape onto every advance for the rest of the run
+  and train the agent to pass it unread — the guard switched off by fatigue,
+  which is worse than the guard absent. The casualty is not lost meanwhile: it is
+  in every `digest`, in `triage`'s rows with the gate that refused each
+  candidate, and in `pawn.health.ticks_until_bleedout`.
+  The suite now asserts BOTH halves — 7.5a that the state does not halt (the
+  anti-wedge property, previously only an accident), 7.6 that a downing armed
+  INSIDE the advance does, via `722c951`'s own `journal-selftest --steps down-at`
+  fixture — and 9.12a re-derives the transition claim from `JournalHooks.cs` so a
+  hook moved onto `Pawn.Downed` fails offline rather than on a bench. `722c951`,
+  `61794cd`.
+
+- 2026-09-01 (session 21) — **`enabled_but_incapable` is published
+  UNCONDITIONALLY on every diagnosed row — empty list, never absent.** It was
+  emitted only when the impaired list was non-empty, in BOTH homes
+  (`WorkCoverage.Section`'s under-row and `work-cover`'s `still_under` row), so
+  an absent key meant both "nobody enabled here is missing a capacity" and "this
+  build does not publish that key". That is the exact conflation `61794cd`
+  already ruled against for `ticks_until_bleedout` (`null`, never omitted, never
+  `int.MaxValue`) and that `PawnActs.NoStamp()` exists for, and every sibling in
+  the same dictionary — `available_pawns`, `candidates` — is already an
+  always-present, possibly empty list. It cost acceptance check 7.2h, which asked
+  for the key on a refusal whose fixture happened to have Doctor switched off
+  across the roster: nobody was enabled-but-incapable, the key was absent, and
+  the check could not tell that from a wrong dig path. `work-cover`'s `note` now
+  says a **non-empty** list means surgery, and `checklists/triggered.md` item 7
+  says to branch on whether the list has entries rather than on whether it is
+  there. **Not fixed, and deliberately:** the outer `if (r.Under)` that keeps a
+  FINE row to three fields stays — that is the digest's stated byte budget,
+  asserted by 3.4a, and whether a COVERED row should carry the diagnosis at all
+  is a separate question filed as finding 4.7 on `40ed42f`. `40ed42f`.
+
+- 2026-09-01 (session 21) — **`no-bed` is only reachable for a DOWNED patient;
+  a standing one is refused `cannot-rescue` first, and the two are different
+  answers to "why is nobody coming".** `TakeToBedGate("rescue", …)` opens on
+  `HealthAIUtility.CanRescueNow` -> `WantsToBeRescued`, whose FIRST clause is
+  `!pawn.Downed`, and the `RestUtility.FindBedFor` lookup is its LAST. So on a
+  bedless map a downed casualty's candidates all read `no-bed` (banked at
+  `accept/runs/s21-20260901/18-triage-downed.json`) while a STANDING bleeder's
+  all read `cannot-rescue`, and no fixture can make the second produce the first.
+  The entry two above says "`no-bed` for every colonist" on a bedless map; that
+  is true only of the downed patient it was measured on, and this corrects it —
+  the verdict is `no-rescuer` either way, which is what that entry's argument
+  actually rests on. Acceptance checks 6.4c/6.4d were reading the gate off
+  `casualties[0]`, which this suite's fixture makes the standing bleeder; they
+  now select the row by `downed` and 6.4b2 asserts the standing half by name.
+  `40ed42f`.
+- 2026-09-01 (session 22) — **RimWorld ALREADY RECORDS ELEVEN TIME SERIES, and
+  the mod had never read one; so half of the rates spec is a reader, not a
+  sampler.** `RimWorld/HistoryAutoRecorder.Tick` appends `Worker.PullRecord()`
+  to a public `List<float> records` every `def.recordTicksFrequency` ticks, from
+  `RimWorld/History.HistoryTick`, which `Verse/TickManager.DoSingleTick` calls
+  unconditionally. Eleven recorders, all Core, no DLC adds any (verified against
+  `Data/Core/Defs/Misc/HistoryAutoRecording/HistoryAutoRecorders.xml`): four
+  wealth, colonists, prisoners, mood at 30,000 ticks; adaptation, threat points,
+  pop-adaptation, pop-intent in a `devModeOnly` group. **`devModeOnly` gates the
+  UI TAB and nothing else** — `RimWorld/MainTabWindow_History` guards the group
+  with `!groupLocal.def.devModeOnly || Prefs.DevMode` while `HistoryTick` loops
+  every group — so threat points are recorded on a bench with dev mode off and
+  always have been. `grep -rn "HistoryAutoRecorder" Source/AutoRimmer/` returned
+  NOTHING before this round, and the project had already paid for that: session
+  13 answered "did wealth cause the M1 raids?" by decoding `HistoryAutoRecorder`
+  **out of `Autosave-5.rws` by hand**. That decode is now
+  `accept/fixtures/history-autoRecorderGroups-m1-Autosave-1.xml` and the
+  acceptance suite grades against it offline. The loop this exposes is the one
+  the project most needs to see: `Wealth_Total` and `ThreatPoints` are both
+  recorded and raid points scale with wealth
+  (`StorytellerUtility.DefaultThreatPointsNow` over `PointsPerWealthCurve`), so
+  "we died to raiders, build more guns" raises the threat it is answering, and
+  the game has been graphing both sides all along. `2d9a1da`.
+- 2026-09-01 (session 22) — **INDEX IS TICK, and the map is the GAME's, not
+  ours; `aligned` says when it does not hold.** `HistoryAutoRecorderGroup
+  .DrawGraph` plots sample j at day `(float)j * (float)recordTicksFrequency /
+  60000f`, so index j is tick `j*freq`, and `history` publishes
+  `last_point_tick = (count-1)*freq` beside the live clock. The map holds for a
+  recorder that existed at tick 0, which is all eleven; it does NOT hold for one
+  a mod adds to a live save, because `AddOrRemoveHistoryRecorders` creates it
+  empty at PostLoadInit and `Tick`'s `|| !records.Any()` clause appends
+  immediately at whatever tick that was. Rather than assume the common case, the
+  verb publishes `aligned` — the clock against where the index says the last
+  sample should be — so a series whose index cannot be read as a tick says so
+  instead of being discovered. **And the stored number is not always the value:**
+  `HistoryAutoRecorderWorker_ThreatPoints` stores `DefaultThreatPointsNow / 10f`
+  and `_PopIntent` stores `PopulationIntent * 10f`, warned about only in a
+  human-readable def LABEL ("fun points /10"). `stored_scale` publishes the
+  multiplier and NAMES the member it recovers, keyed on defName for exactly
+  those two so a modded recorder gets nothing rather than a guess. `2d9a1da`.
+- 2026-09-01 (session 22) — **Four History members audited, three routed around,
+  and the one that matters is the one that is not a write.** `Find.History
+  .Groups()`, `HistoryAutoRecorderGroup.recorders`, `HistoryAutoRecorder.records`
+  and the def's `recordTicksFrequency`/`label`/`valueFormat` are plain fields and
+  safe. Routed around: `HistoryAutoRecorderDef.Worker`, a lazy-init
+  `Activator.CreateInstance` into `workerInt`; `Verse/Def.LabelCap`, which caches
+  into `cachedLabelCap` on a getter that reads like a plain accessor (`label` is
+  published instead); `HistoryAutoRecorderGroup.DrawGraph`, which rebuilds
+  `curves` and stamps `cachedGraphTickCount`. **`Worker` is refused for a second
+  reason that outranks the write:** calling `PullRecord()` would RE-DERIVE a
+  number the game has already stored, and for ThreatPoints it would run
+  `DefaultThreatPointsNow` on the spot. Serialize, do not reinvent — and the
+  acceptance suite greps the SOURCE WITH COMMENTS AND STRING LITERALS STRIPPED to
+  assert it, because the file argues about these members at length and the naive
+  grep failed the check for doing the documenting the check exists to reward (it
+  hit the verb's own `source` provenance string, measured on the suite's first
+  run). `2d9a1da`.
+- 2026-09-01 (session 22) — **The sampler CONSUMES `DigestVerb.SectionFor` and
+  re-derives nothing, which is what makes it safe, cheap and forward-compatible
+  at once.** This issue's hazard note says a write-on-read bug in a sampler is
+  MULTIPLIED rather than incidental because it runs on a schedule; consuming a
+  builder whose every accessor is already audited takes that risk to zero
+  instead of re-auditing it. It is also the cheapest design available — the
+  research on this issue found 17-18 of the ~24 candidate scalars already
+  computed by `DigestVerb` — and it means the sampler INHERITS changes to the
+  arithmetic rather than forking them: `spec/temp-control` is adding a rot term
+  to `food_days` in parallel, and nothing in `ColonySampler.cs` needs to know.
+  What is deliberately NOT sampled, each for its own reason: wealth / threat /
+  mood / population, because THE GAME ALREADY RECORDS THEM; hostiles, danger and
+  alerts, because those are EVENTS and `Journal.CountsRange` already answers a
+  count over a window; and **weapons, which is the sharpest gap the research
+  found — across all 133 vanilla alert classes NONE covers armament and
+  `ResourceCounter` cannot help because weapons are Uncounted — but which is a
+  NEW DERIVATION (equipped by pawn scan plus spare by `ThingsInGroup(Weapon)`,
+  disjoint populations) that no digest section publishes yet.** It is filed as
+  its own issue rather than smuggled in here; the field table is its landing
+  site, one row once a section publishes the number. `2d9a1da`.
+- 2026-09-01 (session 22) — **A SLOPE IS A STATEMENT ABOUT A WINDOW, and the
+  window is published beside every number; the span floor is the guard, not the
+  point count.** Least squares rather than an endpoint difference, because
+  colony stocks move in LUMPS — a hunt returns 200 nutrition at once — and an
+  endpoint estimate over a window IS one lump at either end while the regression
+  moves by 1/n (measured in the suite: a series whose true slope is −12/day with
+  one +6 lump at the end reads −5.74 endpoint against −10.56 regression). Two
+  floors: at least 3 points, and at least 15,000 ticks of SPAN. The second is
+  the one that matters. At the 2,500-tick cadence three samples span 5,000 ticks
+  — two in-game hours — and reporting a per-day rate off that is a 12x
+  extrapolation presented as a measurement. Below the floor the answer is
+  `null`, `ready` is false, and `not_ready_why` names the floor that was missed;
+  so the first slope of a run arrives at sample 7, a quarter of an in-game day
+  in. `span_ticks` rides every slope regardless, so the extrapolation factor is
+  never hidden. The default window is 24 points = one in-game day, because a
+  colony's food is periodic on exactly that period and a six-point window
+  reports the slope of lunch. `2d9a1da`.
+- 2026-09-01 (session 22) — **`days_to_zero` is the colony's
+  `ticks_until_bleedout`, it is NULL when the stock is not falling, and that null
+  makes it a BAD PREDICATE TARGET — said in the digest's own header because a
+  hazard documented nowhere a caller looks is not documented.** `61794cd` ruled
+  that `int.MaxValue` is published as null rather than as 2147483647 because a
+  sentinel reads like a real deadline; the same argument gives null for "this is
+  not falling, so there is no honest countdown". But `StateWatch.One()` refuses
+  an ordering operator against null, and the two failure modes are not
+  symmetric: at ARM time it is a clean refusal naming the reading, while
+  MID-ADVANCE `Poll` returns false and never halts — so an advance waiting on
+  `trends.food_days_to_zero <= 2` stops halting the moment food stops falling,
+  which is exactly when the good news arrived, and runs to its timeout. **So
+  predicates want `*_per_day`, which is always a number once `ready` is true, and
+  `*_to_zero` is for the agent to read.** The acceptance suite arms the null case
+  and asserts the refusal, so the sentence cannot quietly stop being true. It is
+  also the number that corrects the game's own 1.6x overstatement: `food_days` is
+  nutrition per head, the UI calls that "days worth", and a colonist eats ~1.6
+  nutrition/day — a MEASURED slope needs no such assumption. `2d9a1da`.
+- 2026-09-01 (session 22) — **The sampler ticks on `GameComponentTick`, its ring
+  is VOLATILE and cleared at every game boundary, and the durable tier is a
+  SEPARATE FILE rather than the journal.** Three decisions, one argument each.
+  (1) `GameComponentUpdate` runs every FRAME including while paused, so sampling
+  there would append identical rows at a wall-clock rate while the agent sat
+  thinking and flatten every slope with data containing no game time;
+  `GameComponentTick` runs inside `DoSingleTick`, which also calls
+  `Find.History.HistoryTick()` immediately before it, so a sample sees a history
+  the game has already updated. (2) The ring is cleared at
+  `Runtime.ResetForGameBoundary` — both detectors, beside `Placements.Clear()` —
+  because **a load can move `TicksGame` BACKWARD** and a regression across that
+  seam fits two timelines at once; scribing it into the save would also put this
+  mod's own writes inside the save-diff that exists to prove the mod does not
+  write. The loss is bounded and VISIBLE: `ready` false, `points` small,
+  `first_tick` now. (3) The durable file is
+  `samples/<sid>.ndjson`, copying `Journal.Flush`'s peek-write-dequeue and
+  bounded-reopen discipline and none of its seq/ring/dedupe machinery —
+  **because `Journal.Emit` would have broken `722c951`.** That refusal rests on
+  "an advance that journaled NOTHING creates no obligation, so a quiet colony
+  never pays for this at all", and a periodic row from inside the tick loop
+  makes every advance longer than one cadence journal something, so every
+  subsequent advance refuses: "your colony has news" becomes "time passed". A
+  separate file costs ~90 lines and changes nothing anybody else relies on.
+  `2d9a1da`, `722c951`.
+- 2026-09-01 (session 22) — **The temperature gate is the game's own
+  -273.15..1000 clamp and NOTHING ELSE; the def's advertised range is dead code
+  and is published as an advisory rather than enforced as a refusal.** 261f2e9's
+  acceptance asks that "setting a target below the def's `minTemperature` is a
+  REFUSAL naming the clamp and the value", on the stated premise that
+  "`TemperatureControlProps` carry `minTemperature` / `maxTemperature`, which is
+  the range the UI slider is clamped to". Checked rather than assumed, three
+  things in that sentence are false. **There is no slider** —
+  `RimWorld/CompTempControl.CompGetGizmosExtra` yields five `Command_Action`
+  buttons (-10, -1, "reset to 21", +1, +10). **The fields are named
+  differently** — `CompProperties_TempControl.minTargetTemperature` (-50) and
+  `.maxTargetTemperature` (50). And **nothing in the 1.6 tree reads either
+  one**: grepped unpiped over the whole decompiled source, the only two hits are
+  the declarations. The only clamp that exists is
+  `InterfaceChangeTargetTemperature`'s `Mathf.Clamp(TargetTemperature,
+  -273.15f, 1000f)`, so a player walks a cooler to -273 with the -10 button and
+  the game does not stop them. Implementing the issue's refusal would make a
+  player verb REFUSE SOMETHING A PLAYER CAN DO, which is DESIGN's Action model
+  broken in the other direction and the same class of error as bypassing a gate
+  — the gate lives in the widget, and it is the widget's gate that must be
+  reproduced, not a gate the def merely advertises. What ships: `def_min_c` /
+  `def_max_c` on every row with `def_clamp_enforced: false`,
+  `outside_def_range: true` plus a named `advisory` when a target lies outside,
+  and a `bad-args` refusal citing the member for the clamp that is real. The
+  same reasoning settles the issue's OTHER refusal ask — an unpowered cooler
+  REPORTS `powered:false` and carries an advisory citing
+  `Building_Cooler.TickRare`'s `if (!compPowerTrader.PowerOn) return;`, because
+  `CompGetGizmosExtra` has no power clause either. `261f2e9`.
+- 2026-09-01 (session 22) — **A `Vent` is a `flick` case, and the answer comes
+  from the def rather than from judgement.** 261f2e9 flags "whether the vent
+  belongs in the same verb or is a `flick` case" as worth checking. Core's
+  `Defs/ThingDefs_Buildings/Buildings_Temperature.xml` gives `Vent` exactly one
+  comp, `CompProperties_Flickable`, and NO `CompProperties_TempControl` — so
+  `Building_Vent.compTempControl` is null even though `Building_Vent` derives
+  from `Building_TempControl`, the temperature gizmos never exist for it, and
+  `Building_Vent.TickRare` reads no target at all
+  (`GenTemperature.EqualizeTemperaturesThroughBuilding(this, 14f,
+  twoWay: true)`). A vent has no temperature to set. `temp-set` refuses it by
+  name with that reason and points at `flick`, which is the verb that opens and
+  closes it. Worth recording because the vent is in the Temperature build
+  category, is called a temperature building, and derives from the temperature
+  base class — three signals that all point the wrong way. `261f2e9`.
+- 2026-09-01 (session 22) — **The room a cooler SERVES is the game's own
+  south-rotated cell, not the cell the cooler stands in, and both of its sides
+  must be passable or it does nothing.** `RimWorld/Building_Cooler.TickRare`
+  computes `intVec = Position + IntVec3.South.RotatedBy(Rotation)` and
+  `intVec2 = Position + IntVec3.North.RotatedBy(Rotation)`, pushes the
+  temperature change into `intVec.GetRoom(Map)` and the waste heat into
+  `intVec2` — and wraps the whole block in `if (!intVec2.Impassable(Map) &&
+  !intVec.Impassable(Map))`. A cooler sits IN a wall, so its own cell's room is
+  neither side, and a cooler walled in on its exhaust side draws idle power
+  forever while moving no heat. `temp-control` therefore publishes `serves`
+  (south), `exhaust` (north), `cold_side_blocked` and `hot_side_blocked` with a
+  `serves_basis` naming the member each came from, and `Building_Heater.TickRare`
+  gets its own citation because it uses its OWN room. Three more silent no-op
+  states are published the same way — `GenTemperature.
+  ControlTemperatureTempChange` returns 0f for a room that is null or
+  `UsesOutdoorTemperature` (so a controller in an unroofed or map-edge room
+  stores its target and does nothing), `IsBrokenDown()`, and a flick switch that
+  is off. Every one of them is a state in which the target is accepted and never
+  honoured, which is exactly the shape of the session-18 finding, so each gets a
+  `candidates + reasons` advisory rather than a bare boolean. `261f2e9`.
+- 2026-09-01 (session 22) — **`digest.temperature` is a registered predicate
+  section and its `ok` is deliberately NARROW; the food alarm lives in
+  `resources.food_rot` instead.** 261f2e9 reads as an actuator gap; the
+  investigation found the observation gap underneath it, and the blind spot is
+  the dangerous half — session 18 read 14.6 C only by calling `room <id>` for a
+  room whose id it already had to know, and nothing in the glance said the
+  freezer was at room temperature. A room is WATCHED when a controller serves it
+  or when it holds human-edible food. `ok` is false only when a room a
+  **switched-on** controller serves is more than `tolerance_c` (2 C, OURS,
+  published on every read) on the wrong side of that controller's target.
+  Switched-off controllers are excluded because `CompFlickable.SwitchIsOn` is the
+  player's own recorded intent — a heater off in summer is not a fault —
+  while UNPOWERED ones are NOT excluded, because a freezer whose net died is the
+  emergency the section exists for. Food sitting warm in an uncontrolled room is
+  counted (`food_rooms_uncontrolled`, `food_rooms_unfrozen`) and NOT alarmed
+  here: on a colony with no freezer that alarm would be permanently on, and an
+  alarm that is always on is not an alarm. Cheap on session 19's axis and
+  therefore registered: one walk of the real `allBuildingsColonist` list with a
+  per-def memoised `HasComp`, one walk of the stored
+  `FoodSourceNotPlantOrTree` list with a per-def memoised `Nutrition`,
+  region-grid room lookups and plain field reads. **No `Room.Role` and no
+  `Room.GetStat`** — both run `UpdateRoomStatsAndRole()`, the most expensive
+  line in `DigestVerb`, so a room row here is identified by id/at/cells and a
+  reader who wants the role calls `room <id>` and pays for it there. `261f2e9`.
+- 2026-09-01 (session 22) — **`food_days` is NOT redefined; the rot term ships
+  beside it, and the disclaimer moves out of the source comment and into the
+  data.** `resources.food_days` had no rot term at all (`grep -rn CompRottable
+  Source/AutoRimmer/` returned nothing), and it is worse than incomplete: it is
+  `map.resourceCounter.TotalHumanEdibleNutrition`, whose
+  `UpdateResourceCounts` walks SlotGroup haul destinations (food on unzoned
+  ground reads as ZERO — the DEFAULT state of a quicktest map) and whose
+  `ShouldCount` opens `if (t.IsNotFresh()) return false;`, so a stack leaves the
+  division the instant it finishes rotting with nothing said during the ramp.
+  The number holds its value and then falls off a cliff. **That is the M1 death
+  shape one system over** — M1 died because `BloodLoss` was truncated out of the
+  health read, i.e. a surface showing a number that is not the thing killing
+  you. It is still not redefined: it is a shipped predicate target with suites
+  asserting on it, and "what the vanilla alert will do" is a real question.
+  What ships is `food_days_basis`, a sentence IN THE DATA saying what it does
+  not count — `Materials.cs` exists because a true warning in a source comment
+  did not stop the code three lines below it drawing a conclusion the agent
+  could not check (`54b0c9a`), and this is the same fix applied to the field the
+  agent actually reads — plus `resources.food_rot`, which is map-wide and
+  carries the clock. **`Materials.Of` is deliberately NOT used**, and its own
+  header says why in its last line: "no predicate and no digest section reaches
+  this file". It runs `Pawn.CanReach` per stack per builder — a pathfind, the
+  disqualifier session 19 names explicitly — and it is per-def where food is
+  dozens of defs. The cheap half of the same correction ships instead: a
+  `listerThings` walk gives map-wide nutrition with no reachability, and the
+  honest consequence is PUBLISHED rather than hidden — `nutrition` is an UPPER
+  bound, `nutrition_in_stockpiles` is the LOWER bound, and
+  `nutrition_forbidden` narrows the gap for free because
+  `Thing.IsForbidden(Faction)` short-circuits on `compForbiddable` and never
+  walks a lord. The bands and the clock are the game's own
+  (`GenTemperature.RotRateAtTemperature`, and
+  `CompRottable.CompInspectStringExtra`'s own 0.001/0.999 cutpoints), so the
+  digest says what the player's inspect pane says. **The membership test
+  reproduces all THREE of `ResourceCounter`'s clauses, and the third is the one
+  that is easy to miss:** `CountAsResource` is what keeps CORPSES out, since
+  `ThingDefGenerator_Corpses` sets `ingestible.foodType = FoodTypeFlags.Corpse`
+  and `HumanEdible` is `(OmnivoreHuman & foodType) != 0` with `OmnivoreHuman` =
+  0x1F3F, which HAS the 0x8 Corpse bit — without it a battlefield lands in the
+  larder figure and pins `spoiled_stacks` non-zero forever. They are counted and
+  published as `corpse_stacks_excluded` rather than silently dropped. `261f2e9`.
+- 2026-09-01 (session 21) — **A quiet in-game DAY is the play loop's normal idle
+  unit, so an `until` advance that names no bound gets 60,000 ticks — and an
+  already-true predicate with the edge required and no bound is REFUSED, because
+  its halt cannot fire.** Evan's ruling, and the reframing is the load-bearing
+  half rather than the number: *"a full day without doing anything while you're
+  fully set is pretty typical. Lots of things the colony does itself day to day
+  and ideally if something bad happens, you'll be woken up, you won't have to
+  check."* So the bound is **not a safety net bolted onto an error path** — it is
+  the natural idle period of the loop, an advance that runs a day and returns
+  `reason:"timeout"` is the system working, and the number's job is only
+  "eventually hand control back when nothing interesting happened". The
+  consequence is that **the HALTS are the wake-up mechanism and this raises their
+  status**: `722c951`'s own-faction casualty halt is the primary interrupt, not a
+  guard rail, and the question this bound puts weight on — what ELSE should wake
+  the agent (a raid letter, a breakdown, a mood collapse, a food cliff) — is its
+  own issue, because a day of quiet is only safe to sleep through if the halt set
+  is good enough. **What it replaces was never a decision:** 1.3 shipped 600000
+  (ten in-game days) as "big enough not to get in the way", which for anything a
+  human would notice is no bound at all. **The refusal, and why the mod already
+  knew.** Session 19's edge rule is right (`hour >= 6` is true all afternoon) and
+  is not reopened; but `time.tick >= N` is MONOTONE, so once true there is no
+  crossing left and the halt is unreachable by construction. Session 19 also
+  anticipated this and instrumented it — `true_when_armed`, `saw_false`,
+  `first_false_tick` ship in every `until` envelope — so **this was an
+  ENFORCEMENT gap, not an observation one**: on a bench on 2026-09-01 the mod
+  published `true_when_armed:true, saw_false:false, first_false_tick:null` and
+  accepted the unbounded advance anyway, which then ran **187,541 ticks** and was
+  stopped only by the casualty halt that had shipped hours earlier, with
+  `ok:true`. The refusal is therefore DERIVED from `PathWatch.TrueWhenArmed` and
+  `EdgeRequired`, the same two accessors `Report()` publishes, so the envelope
+  and the enforcement cannot disagree; and it NAMES `edge:false`, because a
+  caller who wrote `time.tick >= now + N` almost always meant "stop as soon as
+  this holds" and handing back the right call beats rejecting the wrong one.
+  **Both halves are needed, and the reason is a RACE.** Reading the clock and
+  arming are two protocol round trips at a 0.25–1 s floor each (`rwa/README.md`:
+  500 ms poller, inbox files younger than 250 ms ignored), so at ~30 tps the
+  clock moves 60–120 ticks in between and a short `now + N` lead is false when
+  computed and true when armed. Refusal alone would make the same call fail or
+  not depending on latency — a flaky refusal, not a fix; the default bound is
+  what makes a lost race benign everywhere the refusal does not fire. The three
+  outcomes are now total: no bound + already true + edge is refused with the fix
+  named; a caller's own bound + already true + edge is session 19 unchanged
+  (waits for a re-crossing, stops at that bound); everything else gets the
+  60,000 default. One extension beyond the literal ruling, recorded because it is
+  a widening: a SUPPLIED `timeout_ticks:0` is refused too — it is the same
+  unreachable halt with the default explicitly switched off, nothing in the repo
+  spells it, and a caller who wants a very long wait can still pass a large
+  finite number. `1113019`, `fc287ba`, `722c951`.

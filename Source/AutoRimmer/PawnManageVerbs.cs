@@ -1299,17 +1299,23 @@ namespace AutoRimmer
                             : "only " + ranked.Count + " candidate(s) could be promoted and the "
                               + "floor needs " + need + " more.",
                     };
-                    if (r.Impaired.Count > 0)
-                    {
-                        var imp = new List<object>();
-                        foreach (var kv in r.Impaired)
-                            imp.Add(new Dictionary<string, object>
-                            {
-                                ["pawn"] = PawnSafe.Name(kv.Key),
-                                ["missing_capacity"] = kv.Value,
-                            });
-                        why["enabled_but_incapable"] = imp;
-                    }
+                    // UNCONDITIONAL — see WorkCoverage.Section's copy of this
+                    // block for the argument. A refusal is READ FOR ITS COUNTS,
+                    // and this is one of the three the note tells the caller to
+                    // branch on ("`enabled` short means promote, `capable`
+                    // short means recruit, an `enabled_but_incapable` list
+                    // means the fix is surgery"). An absent key made "no
+                    // impaired pawn" indistinguishable from "wrong dig path",
+                    // which is how acceptance 7.2h went red on a correct
+                    // colony. Empty list, always present.
+                    var imp = new List<object>();
+                    foreach (var kv in r.Impaired)
+                        imp.Add(new Dictionary<string, object>
+                        {
+                            ["pawn"] = PawnSafe.Name(kv.Key),
+                            ["missing_capacity"] = kv.Value,
+                        });
+                    why["enabled_but_incapable"] = imp;
                     stillUnder.Add(why);
                 }
             }
@@ -1350,8 +1356,9 @@ namespace AutoRimmer
                 ["note"] = "`ok` is whether every targeted floor is now met. A `still_under` row "
                          + "is a fact about the roster — read its `gate`: `no-candidate` means "
                          + "recruit or heal, `too-few-candidates` means the colony is simply too "
-                         + "small, and an `enabled_but_incapable` list means the fix is surgery "
-                         + "rather than a work priority.",
+                         + "small, and a NON-EMPTY `enabled_but_incapable` list means the fix "
+                         + "is surgery rather than a work priority. That list is always "
+                         + "present; empty means nobody enabled is missing a capacity.",
             };
         }
 
