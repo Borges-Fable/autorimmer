@@ -165,6 +165,14 @@ summaries.
   merge-or-retire like any other add. If every branch of the response is
   computable from published state, it is not a checklist item at all — it
   goes to the mod rung (`postmortem.md` step 5).
+- **The other candidate class is an UNCITED LESSON.** `grep -o '\[\[[^]]*\]\]'
+  over the three files, diff against `playbook/INDEX.md`: a lesson no
+  checklist cites is one nothing will surface at the moment it bites, however
+  good the file is. All four M1 lessons sat that way until 2026-09-01 — every
+  pre-M1 lesson was cited, and no M1 one was, because the run that wrote them
+  had no pass that would notice. Either cite it from the moment it fires, or
+  record why it needs no checklist (a launch-time or session-shape lesson may
+  belong to `PLAY-LOOP.md` instead).
 - **Promotion is the cheap direction to be wrong in.** A promoted item starts
   logging immediately, so the retirement pass sees its rows from the next run
   onward and undoes a bad promotion on the same evidence. The asymmetry is
