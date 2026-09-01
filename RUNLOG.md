@@ -3222,5 +3222,102 @@ Two of its failures are confirmed the suite's own: `verbs` **does** list
 `0.5q`'s missing `rolled_back` is absent only on the dry-run path, which is a
 shape question and not a placement one.
 
-Bench left running and paused at tick 14625. `Prefs.xml` restored to the 640x480
-windowed unattended values.
+### Then Evan said he had pictured all the rooms, so the run continued
+
+M2 as written is one room; base composition is `bac4eba` and is held until after
+it. But the bench was warm and two templates were unbuilt, so
+`power-room` (7x7) and `freezer-kitchen` (11x6) went down too — 31 and 40
+elements, both preflight-clean on the first call, `ly-2` and `ly-3`. Research was
+dev-unlocked to get there (`Electricity`, `Batteries`, `AirConditioning`,
+`Firefoam`), which is a god-hand and is journaled as one: the colony did not earn
+these rooms. Evan chose that knowingly over making them research it for real —
+"build now, they might have to mine for resources, we'll see" — and in the event
+nothing had to be mined, since two survival kits covered 585 steel, 340 wood and
+13 components with room to spare.
+
+**Four enclosed rooms, all roofed, all built by colonists:** `66` Bedroom (15
+cells), `69` the power room (25), `73` the freezer half (16), `75` **Kitchen**
+(16) — the kitchen took its role from the stove with nothing asked of it.
+`accept/runs/s18-20260901/four-rooms.png`.
+
+#### The question that found the real gap: how does the generator power the coolers
+
+It did not. `digest.power` read `gen_w 1000, draw_w 0` — the two templates were
+sited by `find-rect` on clear ground about ten cells apart, and neither one's
+conduit stub reached the other, so the freezer spine was a transmitter group with
+no power source on it. **That is `bac4eba`'s thesis reproduced live** — the issue
+is named "so layouts tile instead of landing as islands", and this run landed two
+islands. Evan called it before the instruments did: *"the wires from both rooms
+have to intersect if you want power to go from the generator to the cooler."*
+
+Fixed with a 19-cell `PowerConduit` trunk, written as a throwaway IR grid and
+placed through `place-layout` like any other layout (`ly-4`,
+`accept/runs/s18-20260901/trunk.ir.json`). `draw_w` went 0 -> 40 W. **Building a
+connector out of an inline IR and sending it through the same verb is worth
+remembering** — it needed no new capability, and it is what `bac4eba`'s tiling
+will formalise.
+
+#### A refusal, and a wrong assumption on my side that the source settled
+
+The trunk's FIRST attempt routed straight through the power room and was refused:
+two cells landed on the `WoodFiredGenerator` (2x2, and I had mis-derived its
+position from the template grid). The layout placed **nothing** — `placed_count
+0`, `layout_id null`, `"Space already occupied."` with
+`blocker: {def: WoodFiredGenerator, removal: "deconstruct"}` per cell. First time
+this run exercised the all-or-nothing invariant, and it behaved exactly as
+specified.
+
+I then routed a seven-cell bypass around the generator. Evan: *"no need to route
+around the generator, one line through would have been fine."* Both halves of
+that turned out to be interesting. `Data/Core/.../Buildings_Power.xml` gives
+`WoodFiredGenerator` `<transmitsPower>true</transmitsPower>`, so
+`RimWorld/GenConstruct.CanPlaceBlueprintOver` refuses the conduit on
+
+    if (newThingDef.EverTransmitsPower && oldDef.EverTransmitsPower) return false;
+
+— the game will not take a line through, and **our gate matched the widget
+exactly, so there is nothing to file.** But the clause that refuses it is the
+reason his point stands: the generator IS a transmitter, so it was already
+bridging the two conduit groups, which is why `nets` read 1 with the batteries
+charging. The bypass was seven redundant conduits. Left in place rather than
+unpicked; recorded here instead.
+
+I had spent several minutes before that trying to reason out the net topology
+from `nets: 1` and `draw_w: 0` and getting it wrong in both directions. The
+answer was one grep of a def file and one read of the vanilla clause. **Measure
+or read; do not reason about a game's internals from a digest.**
+
+#### A fourth defect, filed
+
+`261f2e9` — the freezer sits at 14.6 C against a 16 C outdoors, because a
+`Cooler`'s `CompTempControl` defaults to a 21 C target and **nothing in the mod
+touches temperature control at all** (`grep -rl "CompTempControl|targetTemperature|TargetTemperature" Source/AutoRimmer/`
+returns nothing). The 40 W draw across two coolers is the comp's 10% idle, not
+work. So an agent can build a freezer and cannot tell it to freeze, and
+`templates/INDEX.md`'s stated lesson for this template — "**cold that is
+checked**" — is the one of its four that no verb can exercise. That makes it a
+4.1/4.4 gradeability problem as much as a missing setter.
+
+### Status
+
+`1adc737` stays **open**: this run meets its M2-rehearsal bullet except the
+"heated by placed heater" clause, which `bedroom.ir.json` cannot satisfy (no
+heater among Wall/Bed/TorchLamp/Door) — Evan's call whether the template or the
+bullet changes. Its other two bullets, instant mode and a deliberately colliding
+layout, were **not attempted** as a layout-level test; the trunk's refusal
+exercised the invariant incidentally but was not the deliberate collision the
+acceptance asks for. M2 itself is discharged on the muster independently.
+
+Four defects filed, all with Acceptance sections: `54b0c9a`, `36999fd`,
+`261f2e9`, plus the `fc287ba` comment.
+
+**The fixture was SAVED before the bench was closed**, as
+`Saves/s18-four-rooms.rws` (14 MB, tick 76,635, four rooms standing and
+powered). `261f2e9`'s acceptance names "the session-18 fixture", and an issue
+that cites a bench state which dies with the process is this file's own recorded
+lesson from session 13 — a path with a lifetime shorter than the issue. Note it
+is NOT `autostart.rws`, deliberately: that name collides with `--quicktest`
+(`playbook/quicktest-and-autostart-collide.md`), so load it by hand.
+
+Bench closed. `Prefs.xml` restored to the 640x480 windowed unattended values,
+which takes effect at the next launch; this session ran fullscreen throughout.
