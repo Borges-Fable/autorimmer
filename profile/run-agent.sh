@@ -14,6 +14,11 @@
 #                 (rwa watch raises it, spec 1.4).
 #   --quicktest   boot straight into a generated 250x250 test map
 #                 (vanilla -quicktest: Root_Play.SetupForQuickTestPlay).
+#                 REFUSED while Saves/autostart.rws exists — the two race on
+#                 Root.checkedAutostartSaveFile and map gen fails EVERY time.
+#                 Standing decision (DESIGN log 2026-09-01, git-bug c8c0199):
+#                 autostart.rws stays parked while --quicktest is the fixture.
+#                 See playbook/quicktest-and-autostart-collide.md.
 #   --xvfb        fully detached fallback: run inside Xvfb on $XVFB_DISPLAY
 #                 (default :99) instead of the live session. Needs xorg-server-xvfb.
 #   --vnc         with --xvfb: attach x11vnc on port $VNC_PORT (default 5900,
