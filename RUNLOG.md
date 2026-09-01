@@ -3321,3 +3321,141 @@ is NOT `autostart.rws`, deliberately: that name collides with `--quicktest`
 
 Bench closed. `Prefs.xml` restored to the 640x480 windowed unattended values,
 which takes effect at the next launch; this session ran fullscreen throughout.
+
+## Session 19 — 2026-09-01 (dorian's Linux box). "Advance until it's done"
+
+**The round's sentence is now sayable.** `advance {until:{layout:"ly-5"}}` was
+issued once, no tick count anywhere in the call, and returned 10,255 ticks later
+with 22 of 22 elements built, a room the game calls `role: "Bedroom"`,
+`proper: true`, `open_roof_cells: 0`. Session 18 met M2 by advancing 2000 ticks,
+looking, and advancing 6000 more — a guess Evan caught mid-run. That guess is
+gone.
+
+Three issues on one branch (`spec/until-condition`), because
+`Source/AutoRimmer/` is one DLL and they interlock: `36999fd` gives a layout a
+scope an observer can address, `fc287ba` halts on it, `54b0c9a` is the material
+answer both of them report.
+
+### What shipped
+
+**`36999fd` — `construction {layout_id}`.** It used to fall through every branch
+and answer WHOLE-MAP with `ok:true`, `rect_source:"whole-map"` the only tell;
+right on the M2 run only because those 22 blueprints were the only ones on the
+map. Now it is a real scope, `rect_source` reads `layout`, an unknown id is a
+refusal naming what the session knows, and `layout_id` beside
+`rect`/`around`/`id`/`placement_id` is a refusal rather than a precedence rule.
+The headline counts come from `Layouts.Progress`, which is UNCAPPED and cheap;
+only per-element detail is capped. That is the property the halt stands on.
+
+**`fc287ba` — `advance until:{condition|layout}`.** Two forms, and the second is
+the round's real finding.
+
+**`54b0c9a` — `short_by` from the builder's own test.** `Materials.Of` counts
+reachable, unforbidden stacks by asking the colonists who could take the job.
+`in_stockpiles` stays beside it as the separate measurement it is.
+
+### The argument the M2 run settled, and it is not the one the issue expected
+
+The natural spelling of "wait until the build is done" is
+`construction.frames == 0`. **Phase 4 of the acceptance suite MEASURES that
+predicate being true at the moment the 22 blueprints go down** — a room that
+does not exist yet — while the layout scope reports 22 unresolved on the same
+tick. So a path predicate halts instantly and reports success, and **requiring
+an edge does not save it**: session 18's ~900-tick awaiting-materials window is
+a real false→true→false→true sequence and an edge detector halts on the wrong
+crossing.
+
+That is why the layout form is a NAMED FAMILY and not a path. The monotone
+claim lives in `Placements.StateOf`: blueprint and frame interchange freely
+(`Frame.FailConstruction` spawns the blueprint again) but neither comes back
+from `built` or `cancelled`. **Some predicates are not expressible as an
+operator over a digest path at all** — DESIGN's decisions log carries it.
+
+### Numbers, all measured, none guessed
+
+| | |
+|---|---|
+| predicate cost, `time.hour` | 0.0219 ms/eval · **0.0015 ms/frame** |
+| predicate cost, layout of 22 | 0.0131 ms/eval · **0.0008 ms/frame** |
+| cadence | 15 frames (`Config.ConditionScanFrames`), ~0.5s |
+| clock crossing | halted 983 ticks in, on `time.hour == 7` |
+| edge, always-true predicate | `reason: timeout`, `true_when_armed: true`, `saw_false: false` |
+| the same predicate, `edge:false` | `reason: condition`, 42 ticks |
+
+The journal-overhead precedent is 0.0039 ms/frame through DPA, so a predicate
+costs a quarter to a half of what the journal already costs. There is no advance
+BUDGET to measure against any more — 1.8 deleted it — so the unit is ms/frame,
+and `until.eval_ms_per_frame` is in every envelope.
+
+### The four runs, and what they did and did not buy
+
+Evan asked mid-round whether running on four maps was enough and what it
+accomplished. **Honest answer: it was iteration, not sampling.** Run 1 shook out
+suite bugs of my own (`verbs` is not an op — it is `status.verbs`, and sending
+it raw answers `unknown-op`, which is what two of `s13-mod-surface`'s "missing
+verb" failures actually were; `find-rect` spirals from ONE `near` and caps at
+20, so three non-overlapping sites need three probes). Run 2 loaded a parser
+fix and caught a real suite bug: asserting `forbid` returned `accepted >= 1`
+when `Designator_Forbid.CanDesignateThing` refuses an already-forbidden thing —
+fixed to assert the STATE afterwards, which is `8b0b88f`'s lesson landing in a
+new suite. Run 3 was green but read its exit code through a pipe. Run 4 is the
+recorded one.
+
+What it DID buy, accidentally, and it is the best evidence in the round: the
+phase-4 build took **22,230 / 6,204 / 8,096 / 10,255 ticks** on the four maps.
+A 3.6x spread — four different answers to the exact number a fixed-tick advance
+would have had to guess.
+
+### What the 140 green checks do NOT cover — filed as `039e359`
+
+None of these is a map-luck gap; more maps would never have reached them.
+`Materials`' **`unreachable`** bucket never fired (forbidden and absent both
+did). A `condition` over **`colonists.list[*]`** — the expensive path, a
+`Room.Role` per colonist per evaluation — was never evaluated, so the one number
+the spec asks to be measured is measured only on the cheapest path available.
+**`scan_cap`/`unscanned`** on a layout over 300 live elements, and the
+**`unknown`** (evicted placement) and **`off_map`** branches, all ship without a
+witness. Written down because a green number that size reads as coverage it does
+not have.
+
+### The acceptance run
+
+`accept/fc287ba-until-state.py`, `accept/runs/s19-20260901/`: **140 checks, 0
+failed, 0 skipped, exit 0 read directly rather than through a pipe.** Raw
+envelopes banked under `envelopes/` and every headline claim re-verified from
+them rather than from the suite's own green number. The clearest pair, both
+dry runs of the same 5x7 bedroom on a map with no stockpile zone:
+
+    acc1adc737-005 (old code)
+      materials  [{"def":"WoodLog","count":185,"in_stockpiles":0}]
+      shortfall  [{"def":"WoodLog","needed":185,"in_stockpiles":0,"short_by":185}]
+    accfc287ba-039 (this round)
+      materials  [{"def":"WoodLog","count":185,"available":300,"in_stockpiles":0,…}]
+      shortfall  []
+
+Phase 5 stages a layout of `Plasteel` on a map with none: it exits on
+`timeout_ticks` and names every unresolved element as `awaiting-materials`,
+which is the diagnosis a fixed-tick advance never gave.
+`accept/runs/s19-20260901/room-built.png` is the room.
+
+### Guard rails, because this round is about arguments that get ignored
+
+`until` now takes exactly ONE matcher and refuses unknown keys — the parse was a
+`ContainsKey` else-if chain, so `until:{conditon:{…}}` armed nothing and
+presented as a timeout with nothing to say. A condition path is validated when
+the advance is ARMED, naming the keys that section really publishes. Eight
+refusals are asserted in phase 0b, and 0.7 checks the clock did not move across
+any of them — every one happens after `TimeDriver.Start` has already set the
+game's speed, so a refusal that forgot to put it back would leave the colony
+running unattended.
+
+`halted_seq` is now published only when it names a journal line. A state halt
+has none, and publishing 0 would send a caller to `journal --since 0`.
+
+### Bench
+
+`_RimWorld-Agent --quicktest`, four fresh maps, watched on workspace 3 at
+2560x1600 fullscreen throughout. The bench's `Mods/AutoRimmer` symlink was
+repointed at the round's worktree for the run and **restored to
+`projects/rimworld/autorimmer` afterwards**; `Prefs.xml` restored to the 640x480
+windowed unattended values. Zero red errors across every run.
