@@ -1338,3 +1338,29 @@ queue by default (an agent flailing mid-experiment must not page triage).
   happened. That is `PawnSafe.Policies`'s `source` discipline applied to a gate:
   "not researched" and "we could not look" must never read alike. `c718e4a`,
   `1adc737`.
+- 2026-09-01 (session 15) — **`site-survey`'s four resolutions, all of them
+  about not letting one field mean two things.** (1) **`pos` and `at` are
+  mutually exclusive and passing both is `bad-args`.** They are different
+  conventions — the game's placement centre versus the footprint's south-west
+  corner — and for an even-sized def they name different cells, so accepting
+  both and preferring one would reproduce exactly the bench failure the verb
+  exists to prevent. `pos_source` rides in the envelope either way, which is
+  `7382bdd`'s narrow fix arriving here on its own merits. (2) **The overlay is a
+  SECOND grid, not extra glyphs in the crop.** Mixing tier markers into
+  `map-view`'s grid would change what a char means, which by `CropRenderer`'s
+  own rule obliges a bump of `map-view/ascii-1` and of `map-dump`'s
+  `distinct_from` — the identity `accept/e6faa51-channel-alphabet.py` enforces.
+  Two grids over one origin/w/h cost nothing and keep both alphabets true:
+  `site-survey/overlay-1` says which TIER a cell is in and nothing about what is
+  on the ground. (3) **The margin tier publishes rows for NOTABLE cells and
+  tallies the rest.** All three tiers keep one row shape, so a consumer written
+  for the footprint reads the margin — but a 3x survey of an 11x6 def is 594
+  margin cells, and 594 rows of "fine" is not a read an agent can use mid-loop.
+  Rows for what is fogged, unstandable, roofed or a door (capped at 40, with
+  `more`); counts for everything; and the picture carries the whole ring, which
+  is what the picture is for. (4) **The two gate tiers test fog and the
+  identical-thing scan PER CELL where vanilla tests only the centre.** Strictly
+  more informative, and it cannot contradict the verdict, because the verdict is
+  `CanPlaceBlueprintAt`'s own answer published verbatim beside the rows rather
+  than re-derived from them. Said out loud in the code because a reader
+  comparing the two will notice the difference. `c718e4a`.
