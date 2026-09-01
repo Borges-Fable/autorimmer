@@ -101,6 +101,24 @@ namespace AutoRimmer
     //    "escape" is not what clears one. Never `Notify_PressedCancel` /
     //    `OnCancelKeyPressed` from tick context; TryRemove is the route.
     //
+    // 6. THE ONE WIDGET GATE THIS FILE DELIBERATELY WAIVES, stated plainly
+    //    because DESIGN's action model says a player verb may not bypass one.
+    //    `Verse/Dialog_NodeTree`'s constructor sets `closeOnCancel = false`,
+    //    and `Verse/Window.OnCancelKeyPressed` is
+    //
+    //        if (closeOnCancel) { Close(); Event.current.Use(); }
+    //
+    //    so THERE IS NO PLAYER ROUTE that clears a node tree without pressing
+    //    one of its options. `dialog-dismiss` clears it anyway. The reason it
+    //    is waived rather than honoured: this spec's Scope requires an
+    //    esc-equivalent that ALWAYS works against a modded dialog nobody has
+    //    read, and 1.7 proved that an unanswerable force-pausing window halts
+    //    every subsequent `advance` at 0 ticks. A faithful verb here would
+    //    leave an unattended run wedged forever, which is the failure this spec
+    //    exists to prevent. Recorded in DESIGN.md's decisions log as waiver 2
+    //    (waiver 1 is `Dialog_NodeTree.InteractiveNow`, see `dialog-choose`),
+    //    and the cost is published in the verb's own `note` — see there.
+    //
     // ---------------- THE THREE LETTERS THAT BREAK THE CONTRACT --------------
     // The spec's contract is "options by label or index, exactly as 2.4 reports
     // them". A grep for `override void OpenLetter` returns exactly five classes;
@@ -525,9 +543,25 @@ namespace AutoRimmer
         // window, which is the one wedging the run; `all:true` clears the whole
         // force-pause stack in one call.
         //
+        // THIS VERB WAIVES A WIDGET GATE, DELIBERATELY. See header note 6:
+        // `Dialog_NodeTree` sets `closeOnCancel = false` and
+        // `Window.OnCancelKeyPressed` closes only `if (closeOnCancel)`, so no
+        // player can clear a node tree without pressing an option. It is waived
+        // because the alternative is a run that is wedged forever (1.7), and
+        // both waivers in this spec are named in DESIGN.md's decisions log.
+        //
         // NOT INERT, and the result says so: TryRemove runs `PreClose()` and
         // `PostClose()`, and `Dialog_NodeTree.PostClose` calls `closeAction()`,
         // which is arbitrary game code set by whoever built the dialog.
+        //
+        // AND IT CAN LEAVE THE DECISION STILL OWED. Dismissing a
+        // `ChoiceLetter_*` node tree WITHOUT choosing skips the option's
+        // `action` closure, and that closure is where the letter removal lives
+        // (`ChoiceLetter.Option_Close` / `Option_ViewInQuestsTab` /
+        // `Option_JumpToLocation` all end in `Find.LetterStack.RemoveLetter(
+        // this)`). So the LETTER SURVIVES a dismissal, `LetterStack
+        // .LetterStackUpdate` can re-open it, and the run re-wedges. The note
+        // says so on every call, and names `letter-choose` as the answer.
         // ====================================================================
         [Verb("dialog-dismiss")]
         public static object DialogDismiss(VerbContext ctx)
@@ -606,8 +640,18 @@ namespace AutoRimmer
                 ["note"] = "dismissal is NOT inert: WindowStack.TryRemove runs PreClose() and "
                     + "PostClose(), and Dialog_NodeTree.PostClose calls `closeAction()`, which is "
                     + "arbitrary game code set by whoever built the dialog. Only the SOUND is "
-                    + "suppressed by doCloseSound:false. Note also that Dialog_NodeTree sets "
-                    + "closeOnCancel = false, so pressing escape would not have cleared it.",
+                    + "suppressed by doCloseSound:false. THIS VERB WAIVES A WIDGET GATE, "
+                    + "deliberately: Dialog_NodeTree's constructor sets closeOnCancel = false and "
+                    + "Verse/Window.OnCancelKeyPressed closes only `if (closeOnCancel)`, so NO PLAYER "
+                    + "ROUTE clears a node tree without pressing an option — escape does nothing. It "
+                    + "is waived because a force-pausing window with no escape hatch halts every "
+                    + "subsequent advance at 0 ticks (spec 1.7). THE CONSEQUENCE: dismissing a "
+                    + "ChoiceLetter node tree without choosing SKIPS the option's `action`, and that "
+                    + "closure is where Find.LetterStack.RemoveLetter(this) lives — so the LETTER "
+                    + "SURVIVES, LetterStack.LetterStackUpdate can re-open it, and the run can "
+                    + "re-wedge on the same decision. Prefer `letter-choose` (or `dialog-choose`) and "
+                    + "keep this verb for dialogs that have no answerable option. Check `letters` in "
+                    + "`interactions` after dismissing.",
             };
             AddStackState(d);
             return d;
