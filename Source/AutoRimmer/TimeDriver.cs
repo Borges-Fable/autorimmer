@@ -492,6 +492,14 @@ namespace AutoRimmer
             // issue, because a day of quiet is only safe to sleep through if
             // the halt set is good enough.
             //
+            // THAT ISSUE IS `280fb78` AND IT IS ANSWERED IN THIS FILE (see
+            // Notice()'s wake block): every letter and every `alert_on` now
+            // halts unconditionally. The two were ruled together in one
+            // conversation and each is the other's precondition — a day-long
+            // default is only safe because the halts wake you, and the halts
+            // are only affordable because a bound stops a quiet day running
+            // forever. Neither should be reverted without the other.
+            //
             // `timeoutSource` distinguishes the caller's own bound from ours.
             // It is ONE field with three values rather than a bound plus a
             // boolean, for the same reason 1113019 requires the refusal below to
