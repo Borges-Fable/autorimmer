@@ -1772,3 +1772,119 @@ queue by default (an agent flailing mid-experiment must not page triage).
   things. Plumbing exists on both ends: `rwa --args-json` carries arbitrary
   nested objects and `DesignateEngine` already accepts a `cells` list.
   `1adc737`.
+- 2026-09-01 (session 17) — **`place-layout`'s `at` is the footprint's
+  NORTH-WEST cell, which is deliberately NOT the corner `build --at` takes, and
+  the divergence is published rather than hidden.** `build --at` and
+  `find-rect`'s `at` are the SOUTH-WEST corner, because that is `[x,z,w,h]`'s own
+  `x,z` and the only sane anchor for a rect. A layout element's anchor is fixed
+  by the IR instead — `templates/INDEX.md` pin 1, "the token sits in the
+  footprint's north-west cell; remaining cells are `.`" — and it HAS to be,
+  because converting north-west to south-west needs the def's ROTATED size
+  (`Footprint.RotatedSize`, i.e. the game's `AdjustForRotation` axis swap), which
+  is exactly the knowledge the client half is not allowed to have. Two anchors in
+  one mod is the bug class this project keeps writing essays about, so the answer
+  is not to pick one but to make both unmistakable: every placement publishes
+  `at` (as given), `pos` (the game's centre) and `footprint` (`[x,z,w,h]`, whose
+  `x,z` is the south-west corner), and the envelope carries `anchor:
+  "north-west"` plus an `anchor_note` naming all three. The conversion itself is
+  one line over `Siting.cs`'s existing map and is never a second copy —
+  `Footprint.TryCentreFor` verifies its own round trip against
+  `GenAdj.OccupiedRect`, so a failure is a refusal rather than a slide. The CLI's
+  `--origin` is the LAYOUT's south-west corner, matching `find-rect`, so
+  surveying a 5x7 and placing a 5x7 name the same ground. `1adc737`.
+- 2026-09-01 (session 17) — **Build order inside a layout: terrain first, the
+  rest in the caller's order, and we never stage.** `1adc737`'s open question,
+  answered by reading the game's gates rather than by picking a pleasing order.
+  Terrain goes first because `RimWorld/GenConstruct.CanPlaceBlueprintAt`'s
+  occupancy loop carries a terrain-specific clause — `entDef is TerrainDef &&
+  thing3.def.category == ThingCategory.Building && thing3.def
+  .terrainAffordanceNeeded != null && !terrainDef3.affordances.Contains(…)`, with
+  a `FoundationAt` escape — so a floor asked for UNDER a building it cannot
+  support is refused, while the same building over the same floor is governed by
+  `CanPlaceBlueprintOver`'s `CoexistsWithFloors` branch and is not. That is an
+  ASYMMETRIC rule and floor-first is its safe half. **Everything else keeps the
+  caller's order, because everything else is symmetric.**
+  `CanPlaceBlueprintOver` lets a non-edifice go under an edifice
+  (`canBuildNonEdificesUnder`, default true) and an edifice go over a non-edifice
+  (`IsEdificeOverNonEdifice`), so conduit-then-wall and wall-then-conduit both
+  pass — which matters, because `power-room`'s deliberate conduit sits in a wall
+  cell. Two edifices in one cell fail both ways. And the two interaction rules
+  refuse in BOTH directions: `InteractionCellStandable` refuses a bench whose
+  spot already holds an unstandable blueprint ("InteractionSpotWillBeBlocked"),
+  `NotBlockingAnyInteractionCells` refuses a wall that would cover a bench's spot
+  ("WouldBlockInteractionSpot"). A layout that violates them is a broken layout,
+  not a mis-ordered one, so no ordering rescues it and inventing one would only
+  hide the defect. **The other half — "stage or trust the work givers" — is
+  trust,** because there is no dependency ordering in construction work at all:
+  `WorkGiver_ConstructDeliverResources` and `WorkGiver_ConstructFinishFrame` scan
+  the player's blueprints and frames with no notion of walls-before-furniture, so
+  "staging" could only mean WITHHOLDING blueprints until some condition we
+  invented was met. That is a scheduler the game does not have, hidden inside a
+  placement verb, and it would make the colony's own work surface a function of
+  our bookkeeping. `1adc737`.
+- 2026-09-01 (session 17) — **A preflight cannot see a layout blocking itself,
+  so the transaction has a ROLLBACK — and the intra-layout interaction check is
+  REPORTED, NEVER REFUSED.** Two halves of one problem. `place-layout` asks the
+  game's gate about a map that does not yet contain the layout, so an element can
+  be legal at preflight and refused at placement by an element placed before it.
+  Self-OVERLAP is answered exactly and without the map, by
+  `GenConstruct.CanPlaceBlueprintOver` over every intersecting pair in placement
+  order — a pure function of two defs and two stuffs. Interaction-cell
+  interference between our own elements is NOT refused, and that is the
+  gate-lives-in-the-widget rule cutting the other way: vanilla's
+  `NotBlockingAnyInteractionCells` only walks `GenAdj.CellsAdjacentCardinal`, so
+  a diagonal arrangement the game accepts exists, and a stricter gate than the
+  widget's is as wrong as a looser one. It is published as `self_conflicts`
+  instead, naming both elements by index. **The gate that decides is asked again
+  immediately before each element is placed**, against the map as it actually is
+  by then; a late refusal with `partial:false` rolls the WHOLE call back —
+  blueprints and frames through `DestroyMode.Cancel` (which refunds, and is
+  `Designator_Cancel.DesignateThing`'s own mode), instant-mode things through
+  `DestroyMode.Vanish` because this is an UNDO and not a deconstruction, terrain
+  restored to the def read before the write. What cannot be undone says so:
+  anything instant mode wiped is gone, and `rollback.incomplete` is the field.
+  Without this, "no partial placement without --partial" would be true of the
+  preflight and false of the call. `1adc737`.
+- 2026-09-01 (session 17) — **Three more of `1adc737`'s open questions, all
+  resolved by reading rather than by choosing.** (1) **Door-in-wall adjacency
+  imposes no validation constraint, because there is no such rule.** `DoorBase`
+  carries exactly one PlaceWorker, `PlaceWorker_DoorLearnOpeningSpeed`, and it
+  overrides `PostPlace` ONLY — no `AllowsPlacing` — so `CanPlaceBlueprintAt`'s
+  PlaceWorker loop imposes nothing on a door. A door is an edifice, so the only
+  rule it meets in a wall layout is edifice-over-edifice in
+  `CanPlaceBlueprintOver` (a door and a wall may not share a cell); adjacency is
+  unconstrained and a free-standing door is legal. The layout's own geometry is
+  the only thing that puts a door in a wall. (2) **The stuff-map is `defName ->
+  stuff defName` with `*` as the default**, an element's own `stuff` beating both,
+  and the invariant "no silent substitutes" is honoured by PUBLISHING rather than
+  by refusing: `GenStuff.DefaultStuffFor` is what `Designator_Build`'s stuff
+  dropdown opens on, and refusing it would make `place-layout
+  templates/bedroom.ir.json` fail out of the box for a template whose own
+  INDEX.md says material is bound at placement. So each placement carries
+  `stuff_source` (`element` | `stuff_map` | `stuff_map:*` | `game-default`), the
+  envelope carries `stuff_defaulted`, and `strict_stuff:true` refuses for a caller
+  that wants it to. (3) **The roof grid is not consumed.** A roof is a
+  DESIGNATION, not a placement; `area {kind:"build-roof"}` already ships gated on
+  `Designator_AreaBuildRoof.CanDesignateCell`, and an enclosed, non-map-edge,
+  non-fogged player room of ≤26 regions and ≤320 cells roofs itself via
+  `AutoBuildRoofAreaSetter` — 49 cells for a 7x7 module, 35 for the 5x7
+  rehearsal. Folding a second designator into this verb's transaction would make
+  one call mean two things, so `rwa place-layout` REPORTS the roof grid and
+  `--roof` sends the `area` call explicitly, as a second call, outside the
+  transaction. `1adc737`.
+- 2026-09-01 (session 17) — **Instant mode uses `WipeMode.VanishOrMoveAside`,
+  and that choice is what makes "instant ≡ blueprint" true rather than nearly
+  true.** `Verse/GenSpawn.Spawn`'s switch runs `CheckMoveItemsAside` before
+  `WipeExistingThings` for that mode and not for `Vanish` — so a wood stack in
+  the footprint is MOVED, which is what a colonist hauling it would have left,
+  instead of destroyed. It matters because `CanPlaceBlueprintOver` lets a
+  haulable through the preflight unconditionally (`oldDef.EverHaulable → true`),
+  so a plain `Vanish` would silently destroy exactly the things blueprint mode
+  hands to a hauler, and the two modes would genuinely diverge on any ground with
+  loose items on it. `WipeWatch` publishes whatever was destroyed anyway, so
+  "nothing was wiped" is a measurement and not an assumption. The equivalence
+  claim itself is settled by `site-audit` over the layout's rect rather than by
+  the issue's original "things-dump diff modulo construction byproducts", which
+  its own verification comment showed was not a decidable predicate: a validator
+  that accepts every placed building means the state is one blueprint mode could
+  have produced. `1adc737`, `3a5ff6c`.
