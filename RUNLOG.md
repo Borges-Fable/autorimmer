@@ -2308,3 +2308,98 @@ RUNNING at session close — `20260901T005842`, autostart.rws, paused. It has be
 mutated by the acceptance runs (policies created, kits spawned, ~12k ticks
 advanced, a quest and a trade caravan staged). **`autostart.rws` on disk is
 untouched**; the next session should relaunch rather than inherit it.
+
+## Session 12 — 2026-08-31 → 09-01 (dorian's Linux box). M1: the ten-day run that stopped on day 6
+
+Written retrospectively in session 13, from `RUNS/m1-20260831/`, the transcript
+(195 ops), the journal (`20260901T022324.ndjson`, 175 events) and the ledger
+(`checklist.ndjson`, 53 lines). Session 12 wrote no RUNLOG section of its own.
+
+**Verdict: the platform passed, the colony failed.** Stopped at Evan's call on
+day 6 of a planned ten, with the hard acceptance already decided against on
+day 4. Crashlanded, faction *New Arrivals*, temperate forest, 250x250, Cassandra
+Rough. Tick span 723 (staged) → 322,314; Spring 1 → Spring 6, year 5500.
+
+### The acceptance, as measured
+
+| criterion | result |
+|---|---|
+| ≥2 of 3 alive at day 10 | **FAILED** — 2 dead on day 4, 1 alive at stop |
+| no dev verbs after staging | **PASSED** — last `dev` row tick **723**; all 50 dev rows at 723 |
+| draft → fight → undraft, final digest 0 drafted | **FAILED** — the one draft ended in an involuntary undraft when Captain was downed. Final digest does read 0 drafted |
+| zero unexplained red errors | **PASSED** — **0 red errors**, whole run |
+| clothes check fires at least once | **PASSED** — `Alert_NeedWarmClothes` on 655, off 1,570, journalled |
+
+Food was never under pressure (60.3 food-days at stop). The "one raid" was a
+`ThreatSmall` manhunter crow; no faction raid arrived in five days.
+
+### What killed the colony — a single crow, and four decisions
+
+Neither colonist died of the crow. Both died of **blood loss, untended**, hours
+later. The chain, in the order it had to break:
+
+1. **Day 1, seek-at-will ON as a standing posture marched all three unarmed
+   colonists 60+ cells at a fogged insect hive.** It was turned OFF — which put
+   them back on the vanilla flee branch, and that is the branch they took when
+   the crow arrived. → `[[seek-off-is-a-decision-to-flee]]`
+2. **The only pawn with Doctor enabled was Table, and Table was the first
+   casualty.** `Alert_NeedDoctor` fired *after* he was down.
+   → `[[one-doctor-is-zero-doctors]]`
+3. **Table went down at 214,599 inside six back-to-back 2,500-tick advances
+   during which only `pawns {filter:"hostile"}` was read** — never the journal,
+   never the digest. He bled for 11,335 ticks.
+   → `[[read-every-return-or-lose-a-colonist]]`
+4. **Captain fled 150 cells into unexplored ground**, went down there, and died
+   before the last colonist could cross the distance.
+
+The four fixes the run produced, for any re-run: an `Area_Allowed` bounding
+where colonists work, `seek-at-will` ON as a standing posture,
+`assign {hostility:"Attack"}`, and **two** doctors.
+
+### Three launches to get one map
+
+`--quicktest` and `autostart.rws` are a **deterministic** map-gen failure, root-
+caused to `Root_Entry`/`Root_Play` racing on `Root.checkedAutostartSaveFile` with
+a scene-targeted long event. Two failures, then a clean launch after moving the
+save to `Saves/pre-m1/`. Both Player.logs were captured *before* the relaunch
+that would have overwritten them — `RUNS/m1-20260831/mapgen-failure-{1,2}.Player.log`.
+→ `[[quicktest-and-autostart-collide]]`, now filed as `c8c0199`.
+
+### The finding that cost the most, and hid the longest
+
+**`dev:spawn-thing` returned `ok:true` with `placed:0`** for the research bench
+(journal seq 66). The bench never existed, `Alert_NeedResearchBench` never
+cleared, and **research could not progress for the entire run**. It went unseen
+for five in-game days because `research-set` kept answering `bench_ok: true` —
+`ResearchVerbs.cs:151` short-circuits when `requiredResearchBuilding == null`,
+which is faithful to vanilla's gate but names the field as though a bench exists.
+
+And once staging ended, the no-dev-verbs invariant made it permanent: with no
+build verb (3.3) there was no way to replace it. `Alert_ColonistsIdle` was up
+for most of the run; four dev-staged buildings were the entire colony for six
+days. Filed on `1adc737`.
+
+### Time was lost, twice, and the record could not say to what
+
+An `rwa advance` whose CLIENT dies leaves the game **running**. `pause` reported
+`was_advancing: true, speed_before: Ultrafast` after a lost tool result.
+`136-advance` and `187-advance` are empty transcript directories — `rwa` mkdirs
+the step before sending and writes both files only after the result returns, so
+an empty directory is the entire fingerprint. **~60,000 ticks — a full in-game
+day — elapsed unobserved, more than once.** Session 12 first blamed a stray
+keypress on the watched window and **corrected that in the ledger**; the
+corrected cause is client death. Mitigation adopted mid-run: read
+`status.paused` before every advance. Filed as `65e7cf9`.
+
+### Session 12's own compliance failure, stated rather than skipped
+
+**Day 1 missed all four daily items** — no sweep ran at all, colony-start ran
+instead — and **day 4 missed three** while the two deaths were being handled.
+`execution-slip` in `postmortem.md`'s taxonomy: a 4.2 compliance finding, not a
+new artifact, and deliberately not papered over with an invented checklist item.
+
+### What session 12 left owed
+
+No RUNLOG section, no post-mortem (mandatory — two deaths), no escalation, and
+**git-bug untouched**: `664e9b9` still carried the same six comments it had
+before the run. Every one of those is discharged in session 13.
