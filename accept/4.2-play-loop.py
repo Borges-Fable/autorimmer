@@ -21,7 +21,9 @@ Checks (PASS/FAIL/WARN per check, exit 0 iff no FAIL):
                       ticks_elapsed <= 60000 + the envelope's own overshoot_bound,
                       halt_on_error never false, no two consecutive 0-tick advances
   transcript-journal  every journal action/dev verb appears among transcript ops,
-                      with journal count <= transcript count per op
+                      with journal count <= transcript count per op — minus the
+                      lines a composite verb declares via caused_seqs, which are
+                      attributed to that composite's own op
   zero-red-errors     no red_error events in the journal window
 
 What this does NOT audit (the labelled human gate — Dorian reads the
@@ -244,20 +246,47 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
             ops = {}
             for e in load_ndjson(Path(transcript_dir) / "log.ndjson"):
                 ops[e.get("op")] = ops.get(e.get("op"), 0) + 1
+            # "journal count <= transcript count per verb" holds only for verbs
+            # the agent issued ITSELF. A composite verb calls other verbs
+            # internally and each nested call journals its own line, so the
+            # journal outruns the transcript with no op missing: m1-20260831's
+            # dev:starter-kit (survival preset) fans out to seven
+            # DevVerbs.SpawnThing calls, giving journal 46 vs transcript 39 for
+            # dev:spawn-thing on a run where nothing was unlogged.
+            #
+            # The join to undo that already ships. StarterKit.cs publishes the
+            # seqs it caused twice — `caused_seqs` on its own journal line and
+            # `caused_journal_seqs` in its result envelope — for exactly this.
+            # Attribute a caused line to the composite that caused it: drop it
+            # from the per-verb tally, where the composite's own line already
+            # stands against the composite's own transcript op.
+            caused = set()
+            for e in events:
+                p = e.get("payload") or {}
+                for key in ("caused_seqs", "caused_journal_seqs"):
+                    v = p.get(key)
+                    if isinstance(v, list):
+                        caused.update(s for s in v if isinstance(s, int))
             jverbs = {}
+            attributed = 0
             for e in events:
                 if e.get("type") in ("action", "dev"):
-                    v = e.get("payload", {}).get("verb")
+                    if e.get("seq") in caused:
+                        attributed += 1
+                        continue
+                    v = (e.get("payload") or {}).get("verb")
                     jverbs[v] = jverbs.get(v, 0) + 1
             gaps = [
                 f"{v}: journal {n} > transcript {ops.get(v, 0)}"
                 for v, n in sorted(jverbs.items())
                 if n > ops.get(v, 0)
             ]
+            note = f" (+{attributed} nested, attributed to their composite verb)" if attributed else ""
             if gaps:
-                report("FAIL", "transcript-journal", "; ".join(gaps))
+                report("FAIL", "transcript-journal", "; ".join(gaps) + note)
             else:
-                report("PASS", "transcript-journal", f"{sum(jverbs.values())} journaled mutations all covered by transcript ops")
+                report("PASS", "transcript-journal",
+                       f"{sum(jverbs.values())} journaled mutations all covered by transcript ops" + note)
         else:
             report("WARN", "transcript-journal", "no transcript log.ndjson — skipped")
     else:
@@ -305,7 +334,8 @@ def build_fixture(root, repo):
         (d / "cmd.json").write_text(json.dumps({"id": f"c{i}", "op": op, "args": args}), encoding="utf-8")
         (d / "result.json").write_text(json.dumps({"id": f"c{i}", "op": op, "ok": True, "data": data}), encoding="utf-8")
     (tr / "log.ndjson").write_text(
-        "\n".join(json.dumps({"op": op, "ok": True}) for op in ("advance", "designate", "advance")) + "\n",
+        "\n".join(json.dumps({"op": op, "ok": True})
+                  for op in ("advance", "designate", "advance", "dev:starter-kit")) + "\n",
         encoding="utf-8")
 
     journal = root / "journal.ndjson"
@@ -313,6 +343,15 @@ def build_fixture(root, repo):
         {"seq": 1, "tick": 0, "type": "session", "payload": {"kind": "boot"}},
         {"seq": 2, "tick": 20000, "type": "letter", "payload": {"def": "NeutralEvent", "label": "Wanderer"}},
         {"seq": 3, "tick": 61000, "type": "action", "payload": {"verb": "designate", "step": "harvest"}},
+        # One composite verb and the two lines it caused. There is no
+        # dev:spawn-thing op in the transcript and there should not be: the
+        # agent issued one op, dev:starter-kit, which spawned internally. The
+        # clean fixture must stay green, so a per-verb tally that counts the
+        # nested lines against a missing op is caught here.
+        {"seq": 4, "tick": 700, "type": "dev", "payload": {"verb": "dev:spawn-thing", "step": "spawn-thing"}},
+        {"seq": 5, "tick": 700, "type": "dev", "payload": {"verb": "dev:spawn-thing", "step": "spawn-thing"}},
+        {"seq": 6, "tick": 700, "type": "dev",
+         "payload": {"verb": "dev:starter-kit", "step": "starter-kit", "caused_seqs": [4, 5]}},
     ]) + "\n", encoding="utf-8")
     return run, journal, tr
 
