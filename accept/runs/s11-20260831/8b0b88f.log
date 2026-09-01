@@ -1,0 +1,180 @@
+AutoRimmer acceptance - already-designated is its own reject key (8b0b88f)
+protocol root: /home/dorian/projects/rimworld/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer
+phases: 0 + 1, 2, 3, 4, 5 + the standing red-error check
+
+==============================================================================
+PHASE 0 - the bench, the fixtures, and THE SHAPE CONTRACT
+==============================================================================
+  0.1a    OK      precondition: the bench answers `status`
+  0.1b    OK      precondition: a game is loaded
+  0.1c    OK      precondition: the bench is PAUSED (the agent owns time)
+  bench: tick=101668 paused=True
+  0.2a    PASS    `journal` publishes data.last_seq
+  0.2b    PASS    `journal` publishes data.events
+  0.2c    PASS    `journal` publishes data.count
+  journal watermark: seq0=77
+  0.3a    PASS    `map-dump` publishes data.map.w
+  0.3b    PASS    `map-dump` publishes data.map.h
+  0.4a    PASS    `pawns` publishes data.list
+  0.4b    PASS    `pawns` publishes data.list.0.id
+  0.4c    PASS    `pawns` publishes data.list.0.at
+  0.4     OK      precondition: at least one spawned colonist
+  anchor: colonist 19809 at [122, 128] on a 250x250 map
+  0.5a    PASS    `designate` publishes data.verb
+  0.5b    PASS    `designate` publishes data.type
+  0.5c    PASS    `designate` publishes data.designator
+  0.5d    PASS    `designate` publishes data.gate
+  0.5e    PASS    `designate` publishes data.designation
+  0.5f    PASS    `designate` publishes data.targeted
+  0.5g    PASS    `designate` publishes data.requested
+  0.5h    PASS    `designate` publishes data.capped
+  0.5i    PASS    `designate` publishes data.target_scope
+  0.5j    PASS    `designate` publishes data.accepted
+  0.5k    PASS    `designate` publishes data.dry_run
+  0.5l    PASS    `designate` publishes data.cells
+  0.5m    PASS    `designate` publishes data.cells_more
+  0.5n    PASS    `designate` publishes data.rejected
+  0.5o    PASS    `designate` publishes data.rejects
+  0.5p    PASS    `designate` publishes data.rejects_more
+  0.5q    PASS    `designate` publishes data.rejects_by_reason
+  0.5r    PASS    `designate` publishes data.designations_before
+  0.5s    PASS    `designate` publishes data.designations_now
+  0.5t    PASS    `designate` publishes data.crop
+  0.5u    PASS    `designate` publishes data.action
+  0.5v    PASS    `designate` publishes data.action.journal_seq
+  0.5w    PASS    the cell-route fixture verb is Designator_Mine (data.designator)
+  0.5x    PASS    and it adds the Mine designation (data.designation)
+  0.6a    PASS    `designate` publishes data.rejects.0.at
+  0.6b    PASS    `designate` publishes data.rejects.0.why
+  0.6c    PASS    `designate` publishes data.rejects.0.reason
+  0.6d    PASS    `designate` publishes data.rejects.0.removal
+  0.7     OK      precondition: a mineable cell within 70 tiles of the anchor
+  mineable fixture cell: [96, 93]
+  0.8a    PASS    `things` publishes data.things
+  0.8b    PASS    `things` publishes data.things.0.id
+  0.8c    PASS    `things` publishes data.things.0.def
+  0.8d    PASS    `things` publishes data.things.0.at
+  0.8e    PASS    `designate` publishes data.ids
+  0.8f    PASS    `designate` publishes data.ids_more
+  0.8     OK      precondition: a mineable THING at [96, 93]
+  mineable fixture thing: id 23152
+  0.9a    PASS    `things` publishes data.things
+  0.9b    PASS    `things` publishes data.things_total
+  0.9c    PASS    the thing-route fixture verb is Designator_PlantsCut (data.designator)
+  0.9d    PASS    and it adds the CutPlant designation (data.designation)
+  0.9     OK      precondition: at least three undesignated plants with known cells
+  plant fixtures: [7584, 7585, 7586] at [[27, 189], [2, 12], [182, 95]]
+  0.10a   PASS    `things` publishes data.things
+  0.10b   PASS    `designate` publishes data.rejects
+  0.10c   PASS    `designate` publishes data.rejects.0.id
+  0.10d   PASS    `designate` publishes data.rejects.0.def
+  0.10e   PASS    `designate` publishes data.rejects.0.label
+  0.10f   PASS    `designate` publishes data.rejects.0.removal
+  0.10    OK      precondition: a non-plant thing that `cut` refuses with no reason
+  control thing (not a plant): id 269
+  0.11a   PASS    `pawns` publishes data.list
+
+==============================================================================
+PHASE 1 - `mine` on a cell: the first order lands, the second is a REDUNDANCY
+==============================================================================
+  1.1a    PASS    the envelope succeeded (ok)
+  1.1b    PASS    one cell accepted (data.accepted)
+  1.1c    PASS    nothing rejected (data.rejected)
+  1.1d    PASS    and the tally is empty (data.rejects_by_reason)
+  1.1e    PASS    the mutation is journalled (data.action.journal_seq)
+  1.1f    PASS    the map gained exactly one Mine designation (designations_before -> designations_now)
+  1.2a    PASS    the envelope still succeeds - a redundancy is not an error (ok)
+  1.2b    PASS    nothing accepted the second time (data.accepted)
+  1.2c    PASS    one cell rejected (data.rejected)
+  1.2d    PASS    THE FIX: `why` is 'already-designated', not 'not-designatable' (data.rejects.0.why)
+  1.2e    PASS    and `reason` is the game's silence, kept as null - AcceptanceReport.WasRejected carries reason "" and DesignateEngine.ReasonOf refuses to invent words (data.rejects.0.reason)
+  1.2f    PASS    the reject names the cell it was aimed at
+  1.2g    PASS    the tally counts it under its own key (data.rejects_by_reason.already-designated)
+  1.2h    PASS    `designate` does NOT publish data.rejects_by_reason.not-designatable — a redundancy is no longer filed as an impossibility
+  1.2i    PASS    the whole tally, so a second key cannot hide behind the first (data.rejects_by_reason)
+  1.2j    PASS    the redundant order added nothing to the map (data.designations_now)
+  1.2k    PASS    and the count did not move across the call (data.designations_before)
+  1.2l    FAIL    `designate` publishes data.action.rejected_by_reason
+          expected: the key to be present
+          actual:   null
+  1.2m    FAIL    the journalled action carries the same tally (data.action.rejected_by_reason)
+          expected: {"already-designated":1}
+          actual:   null
+
+==============================================================================
+PHASE 2 - `cut` on a thing: the same distinction, the other accessor
+==============================================================================
+  2.1a    PASS    the envelope succeeded (ok)
+  2.1b    PASS    the plant is accepted (data.accepted)
+  2.1c    PASS    and named by id (data.ids)
+  2.1d    PASS    nothing rejected (data.rejected)
+  2.1e    PASS    the mutation is journalled (data.action.journal_seq)
+  2.2a    PASS    the envelope still succeeds (ok)
+  2.2b    PASS    nothing accepted the second time (data.accepted)
+  2.2c    PASS    one thing rejected (data.rejected)
+  2.2d    PASS    THE FIX, on the DesignationOn side: `why` is 'already-designated' (data.rejects.0.why)
+  2.2e    PASS    the reject names the thing (data.rejects.0.id)
+  2.2f    PASS    `reason` is null - Designator_Plants.CanDesignateThing returns a bare false and says nothing at all (data.rejects.0.reason)
+  2.2g    PASS    the tally (data.rejects_by_reason)
+  2.2h    PASS    the redundant order added nothing (data.designations_now)
+
+==============================================================================
+PHASE 3 - all four dispatch quadrants, and NO RED ERROR from any of them
+==============================================================================
+  window opens at seq=81
+  3.1a    PASS    Q1 Cell-def / cell route -> DesignationAt(cell): 'already-designated' (data.rejects.0.why)
+  3.1b    PASS    and the designation named is Mine (targetType Cell) (data.designation)
+  3.2a    PASS    Q2 Cell-def / THING route -> DesignationAt(thing.Position): 'already-designated' (data.rejects.0.why)
+  3.2b    PASS    the reject names the rock (data.rejects.0.id)
+  3.2c    PASS    `reason` is null - Designator_Mine.CanDesignateThing returns AcceptanceReport.WasRejected (data.rejects.0.reason)
+  3.2d    PASS    and Blockers still classifies it as clearable by mining (data.rejects.0.removal)
+  3.3a    PASS    Q3 Thing-def / thing route -> DesignationOn(thing): 'already-designated' (data.rejects.0.why)
+  3.3b    PASS    and the designation named is CutPlant (targetType Thing) (data.designation)
+  3.4a    PASS    Q4 Thing-def / CELL route -> GetThingList + DesignationOn: 'already-designated' (data.rejects.0.why)
+  3.4b    PASS    the reject names the plant's cell
+  3.4c    PASS    one target, one rejection (data.rejected)
+  3.4d    PASS    the tally (data.rejects_by_reason)
+  3.5a    PASS    `journal` publishes data.count
+  3.5b    PASS    NO RED ERROR from any of the four quadrants - a DesignationOn/DesignationAt swap Log.Errors (Verse/DesignationManager.cs, both members) and would land here (data.count)
+
+==============================================================================
+PHASE 4 - the two keys are distinct, and one call can carry both
+==============================================================================
+  4.1a    PASS    four targets, four refusals (data.rejected)
+  4.1b    PASS    nothing accepted (data.accepted)
+  4.1c    PASS    THE ISSUE IN ONE ASSERTION: the tally splits 3 redundancies from 1 impossibility (data.rejects_by_reason)
+  4.1d    PASS    the reject list carries both kinds of row
+  4.1e    PASS    and they differ in `why` ALONE - same null `reason`, same `removal`, same key set. That is exactly why this needed a KEY and not a sentence: there was no sentence to add.
+  4.2a    PASS    a genuinely impossible mine order is still 'not-designatable' (data.rejects.0.why)
+  4.2b    PASS    and it still carries the game's OWN words verbatim - Designator_Mine.CanDesignateCell answers "MessageMustDesignateMineable" here (data.rejects.0.reason)
+  4.2c    PASS    `designate` does NOT publish data.rejects_by_reason.already-designated — nothing is designated on a cell a colonist is standing in
+  4.2d    PASS    the tally (data.rejects_by_reason)
+  4.3a    PASS    a dry run splits the tally the same way (data.rejects_by_reason)
+  4.3b    PASS    and mutates nothing (data.dry_run)
+  4.3c    PASS    `designate` publishes data.action.journal_seq
+  4.3d    PASS    so there is no journal line (data.action.journal_seq)
+
+==============================================================================
+PHASE 5 - Designator_Hunt.CanDesignateCell's wrong reason, kept verbatim under a correct `why`
+==============================================================================
+  hunt fixture: pawn 12977 at [109, 55]
+  5.1a    PASS    the animal is marked for hunting (data.accepted)
+  5.1b    PASS    the gate cited is the Thing one (data.gate)
+  5.1c    PASS    and the designation is Hunt (targetType Thing) (data.designation)
+  5.2a    PASS    the thing route reports 'already-designated' (data.rejects.0.why)
+  5.2b    PASS    with `reason` null - Designator_Hunt.CanDesignateThing returns a bare false (data.rejects.0.reason)
+  5.3a    PASS    THE MISATTRIBUTION, classified correctly: `why` is 'already-designated' (data.rejects.0.why)
+  5.3b    PASS    and `reason` is the game's OWN wrong words, kept verbatim rather than deleted - Designator_Hunt.CanDesignateCell answers "MessageMustDesignateHuntable" because HuntablesInCell filters through CanDesignateThing, which drops the animal it just marked (data.rejects.0.reason)
+  5.3c    PASS    the gate cited on this route is still the Thing one - the table cites one member per type (data.gate)
+  5.3d    PASS    the tally keys on `why`, so the wrong sentence costs the ledger nothing (data.rejects_by_reason)
+  5.3     NOTE    `why` is the classification and `reason` answers a different question. That is deliberate and recorded at the call site (DesignateEngine.RunCells, KNOWN MISATTRIBUTION): a reason we deleted or invented would be worse than the game's own inaccurate one.
+
+==============================================================================
+STANDING CHECK - no red errors across the whole run
+==============================================================================
+  E.1a    PASS    `journal` publishes data.count
+  E.1b    PASS    no red error since the watermark - every designate in this run went through DesignateEngine.AlreadyDesignated, and the whole hazard is that the wrong accessor Log.Errors instead of returning null (data.count)
+  teardown: cancel over 5 cell(s) -> accepted=5 rejected=0
+
+==============================================================================
+RESULT: 2 FAILED of 123 checks - 1.2l, 1.2m

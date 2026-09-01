@@ -1,0 +1,216 @@
+AutoRimmer spec 3.4 acceptance - pawn orders + policies (git-bug 39c9db7)
+protocol root: /home/dorian/projects/rimworld/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer
+phases: 0 + 1, 2, 3, 4, 5
+
+==============================================================================
+PHASE 0 - preflight: the bench is live and 3.4's 35 verbs registered
+==============================================================================
+  0.1a    PASS    status answered (ok)
+  0.1b    PASS    a game is loaded (data.gameLoaded)
+  0.1c    PASS    the game is paused (the agent owns time) (data.paused)
+  0.1d    PASS    no force-pausing modal is up (spec 1.7 would wedge every advance)
+  0.2     PASS    all 35 of 3.4's ops registered
+  0.3a    PASS    pawns answered (ok)
+  0.3b    OK      precondition: at least two visible colonists
+  0.3c    PASS    the roster order is the documented stable one (data.order)
+  0.3d    PASS    and the cap still selects by attention (data.selected_by)
+  0.3f    OK      precondition: a colonist with Hauling AND Doctor enabled (the actor A)
+  0.3g    OK      precondition: a second colonist to be the patient B
+          actor  A = 19809 (Valentin) - selected by predicate, 4 of 4 colonists qualified
+          target B = 19909 (Thomas)
+  0.4     PASS    journal readable (watermark recorded) (ok)
+          journal watermark seq0 = 140
+  0.5     OK      precondition: manual work priorities are ON (4.7 and 5.1 use priorities 1 and 2)
+          manual priorities: True -> True (0 pawn work rows notified)
+  0.6a    PASS    `pawn{apparel}` publishes data.apparel.worn
+  0.6b    PASS    `pawn{apparel}` publishes data.apparel.insulation_cold_total
+  0.6c    PASS    `pawn{apparel}` publishes data.apparel.forced_count
+  0.6d    PASS    `pawn{apparel}` publishes data.apparel.worn.0.def
+
+==============================================================================
+PHASE 1 - ACCEPTANCE BULLET 1: draft + move + undraft round-trip, and the drafted pawn HOLDS position
+==============================================================================
+  1.1     OK      precondition: a buildable, reachable 1x1 cell near the actor
+          destination = [135,137]
+  1.2a    PASS    draft accepted exactly one pawn (data.counts.accepted)
+  1.2b    PASS    no rejections (data.counts.rejected)
+  1.2c    PASS    the pawn is drafted (data.accepted.0.drafted)
+  1.2d    PASS    it was not already drafted (data.accepted.0.drafted_before)
+  1.2e    PASS    the setter's priorityWork clear is disclosed (data.accepted.0.priority_work_cleared)
+  1.2f    PASS    an `action` journal row was written (data.action.journal_seq)
+  1.2g    PASS    the action row is NOT stamped as a cheat (it is a player verb)
+  1.3     PASS    `pawn` reports drafted:true (data.state.drafted)
+  1.4a    PASS    move-to accepted the pawn (data.counts.accepted)
+  1.4b    PASS    the ordered job is Goto (data.accepted.0.job_def)
+  1.4c    PASS    an `action` row was written (data.action.journal_seq)
+  1.5a    PASS    advance ran to its tick budget (no dialog, no red error) (data.reason)
+  1.6a    PASS    the pawn arrived within 3 cells of the standable destination
+  1.6b    PASS    still drafted (data.state.drafted)
+  1.7a    PASS    advance ran to its tick budget (data.reason)
+  1.7b    PASS    the drafted pawn HELD position across 4000 further ticks
+  1.7c    PASS    still drafted after holding (data.state.drafted)
+  1.7d    PASS    and it is idle-in-combat-stance, not working
+  1.8a    PASS    undraft accepted the pawn (data.counts.accepted)
+  1.8b    PASS    the pawn is undrafted (data.accepted.0.drafted)
+  1.8c    PASS    an `action` row was written (data.action.journal_seq)
+  1.9a    PASS    `undraft {pawns:"colonists"}` is a legal whole-roster call (ok)
+  1.9b    PASS    and it rejects the already-undrafted with a reason, not an error
+  1.10a   PASS    journal has an `action` row for draft
+  1.10b   PASS    journal has an `action` row for move-to
+  1.10c   PASS    journal has an `action` row for undraft
+  1.11    PASS    ZERO red errors across phase 1 (data.count)
+
+==============================================================================
+PHASE 2 - ACCEPTANCE BULLET 2: `prioritize haul` on a specific stack makes that pawn haul it NEXT
+==============================================================================
+  2.1     OK      precondition: the colony has at least one stockpile zone
+  2.2a    PASS    dev:spawn-thing placed the steel (ok)
+  2.2b    PASS    at least one stack landed (data.placed)
+  2.2c    PASS    a thing id came back for the stack
+          steel stack = 27213
+  2.3a    PASS    orders answered (ok)
+  2.3b    PASS    HaulGeneral is offered on the steel stack
+  2.4a    PASS    prioritize succeeded (data.ok)
+  2.4b    PASS    the work giver is the one asked for (data.work)
+  2.4c    PASS    the ordered job is a haul
+  2.4d    PASS    an `action` row was written (data.action.journal_seq)
+  2.4e    PASS    `sustains` reports whether mindState.priorityWork was written
+  2.4f    NOTE    sustains:false - this work giver writes no durable priorityWork, and the result says so rather than claiming a standing order
+  2.5a    PASS    advance ran (data.reason)
+  2.5b    PASS    the pawn's CURRENT job is the haul
+          job report: hauling steel x75 to Stockpile zone 1.
+  2.6a    PASS    advance ran (data.reason)
+  2.6b    PASS    the haul is no longer the current job (it completed)
+  2.7     PASS    clear-priority-work answered (accepted, or refused with a reason) (ok)
+  2.8     PASS    ZERO red errors through phase 2 (data.count)
+
+==============================================================================
+PHASE 3 - ACCEPTANCE BULLET 3: a 'cold' apparel policy assigned, and the pawn RE-DRESSES under advance
+==============================================================================
+  3.0a    PASS    plain pants landed (the staged wardrobe) (data.placed)
+  3.0b    NOTE    pants storage: placed into storage 'Stockpile zone 1'
+  3.0c    PASS    a plain shirt landed too (data.placed)
+          original: worn=["Apparel_Parka","Apparel_Tuque"] insulation_cold_total=45.0 forced=0
+  3.0d    NOTE    needs = Rest=100, Food=100
+  3.0e    PASS    a throwaway plain-clothes policy was created
+  3.0f    PASS    the plain policy was assigned to B (data.counts.accepted)
+  3.0g    PASS    advance ran (data.reason)
+  3.0j    OK      precondition: B is out of every garment the `cold` policy allows, and is wearing something it will have to strip
+  3.1a    PASS    a parka was spawned (ok)
+  3.1b    PASS    the parka landed (data.placed)
+  3.1c    NOTE    dev:spawn-thing storage note: placed into storage 'Stockpile zone 1' at [112,131] (not a check - the real proof is 3.6a, since JobGiver_OptimizeApparel skips anything not in storage)
+  3.1d    PASS    a tuque landed too (data.placed)
+          before: worn=["Apparel_Pants","Apparel_BasicShirt"] insulation_cold_total=9.2 (nothing here is allowed by `cold`, proved at 3.0j)
+  3.2     PASS    no staged garment is force-worn, so the `cold` filter is free to strip all of them
+  3.3a    PASS    policy-new succeeded (ok)
+  3.3b    PASS    the label stuck (data.label)
+  3.3c    PASS    an `action` row was written (data.action.journal_seq)
+  3.3d    PASS    a policy id came back
+  3.3e    PASS    the parka was allowed
+  3.3f    PASS    nothing was refused by the apparel global filter
+  3.4a    PASS    assign accepted the pawn (data.counts.accepted)
+  3.4b    PASS    the apparel lever applied
+  3.4c    PASS    the AFTER read shows the new policy (data.accepted.0.after.apparel)
+  3.4d    PASS    and it was read through PawnSafe's guarded backing-field route (data.accepted.0.after.source)
+  3.4e    PASS    an `action` row was written (data.action.journal_seq)
+  3.5     NOTE    needs = Rest=100, Food=100
+  3.5a    PASS    advance ran (data.reason)
+  3.6a    PASS    the pawn is WEARING the parka - it was NOT at 3.0j, so this can only be JobGiver_OptimizeApparel (within 5000 ticks)
+  3.6b    PASS    cold insulation went UP
+  3.6c    PASS    EVERY previously-worn garment was taken off (JobGiver_OptimizeApparel's RemoveApparel pass)
+          after: worn=["Apparel_Parka","Apparel_Tuque"] insulation_cold_total=45.0 (+35.8) forced=0
+  3.7a    PASS    2.4's `policies` observer sees the new policy
+  3.7b    PASS    and sees the assignment
+  3.8a    PASS    policy-delete refused (a live pawn is using it) (data.ok)
+  3.8b    PASS    and the refusal is the game's own AcceptanceReport string
+  3.8c    PASS    the staging policy deletes cleanly now that nobody uses it (data.ok)
+  3.9     PASS    ZERO red errors through phase 3 (data.count)
+
+==============================================================================
+PHASE 4 - ACCEPTANCE BULLET 4: a surgery bill added, and a doctor PERFORMS it under advance
+==============================================================================
+  4.1a    PASS    a hospital bed was spawned (ok)
+  4.1b    PASS    it landed (data.placed)
+          hospital bed = 27266
+  4.2     PASS    medicine landed in storage (data.placed)
+  4.3a    PASS    dev:damage landed (ok)
+  4.3b    PASS    the patient is still standing (data.state.downed)
+  4.3c    PASS    and is wounded (data.health.hediffs_total)
+  4.4a    PASS    surgery-options answered (ok)
+  4.4b    PASS    research state was read through the guarded route, not GetProgress (data.source)
+  4.4c    OK      precondition: Anesthetize is offered for this pawn
+  4.4d    PASS    and it is ADDABLE (no reason, no missing ingredient)
+  4.5a    PASS    surgery-add succeeded (data.ok)
+  4.5b    PASS    an `action` row was written (data.action.journal_seq)
+  4.5c    PASS    the bill is on the pawn's stack
+  4.5d    PASS    the four CreateSurgeryBill warnings are RETURNED, not messaged (one of them is a force-pausing Dialog_MessageBox)
+  4.6a    PASS    2.4's `bills` observer reports the pawn as a bill giver
+  4.6b    PASS    and lists the Anesthetize bill
+  4.7a    PASS    work-priorities answered (ok)
+  4.7b    PASS    exactly one matrix cell changed (data.cells)
+  4.7c    PASS    and the unit is named so `accepted` is not read as pawns (data.counts.unit)
+  4.7d    PASS    the doctor priority is now 1 (data.changes.0.after)
+  4.7e    PASS    an `action` row was written (data.action.journal_seq)
+          use_priorities = True (0.5 turned this on; with it OFF this call is REFUSED, because GetPriority would return a flat 3)
+  4.8a    PASS    rest-until-healed accepted the patient (data.counts.accepted)
+  4.8b    PASS    an `action` row was written (data.action.journal_seq)
+  4.9a    PASS    advance ran (data.reason)
+  4.9d    PASS    the surgery bill is GONE - a doctor performed it (Bill_Medical deletes itself on completion)
+  4.10    PASS    the patient carries the Anesthetic hediff
+  4.11a   PASS    surgery-remove succeeded (data.ok)
+  4.11b   PASS    an `action` row was written (data.action.journal_seq)
+  4.12    PASS    ZERO red errors through phase 4 (data.count)
+
+==============================================================================
+PHASE 5 - the rest of the surface: the plural forms, the gates that REFUSE, and research
+==============================================================================
+  5.1a    PASS    the matrix form accepted (ok)
+  5.1b    PASS    it wrote up to 4 cells in ONE call (data.cells)
+  5.1c    PASS    and reports the mode (data.mode)
+  5.2a    PASS    copy_from accepted (ok)
+  5.2b    PASS    mode is copy (data.mode)
+  5.2c    PASS    a whole row was written (data.accepted.0.set)
+  5.3a    PASS    setting a DISABLED work type is refused, not attempted (data.counts.accepted)
+  5.3b    PASS    with the work-disabled gate named (data.rejected.0.gate)
+  5.3c    PASS    and NO red error was logged (the whole point of the pre-check) (data.count)
+  5.4a    PASS    a wrapping span accepted (ok)
+  5.4b    PASS    six hours in the span (22,23,0,1,2,3)
+  5.4c    PASS    the 24-char row uses PawnSerializer's own legend
+  5.4d    PASS    an `action` row was written (data.action.journal_seq)
+  5.5     PASS    schedule copy_from accepted (ok)
+  5.6a    PASS    assign accepted both pawns (data.counts.accepted)
+  5.6b    PASS    medical care took (data.accepted.0.after.med_care)
+  5.6c    PASS    hostility took (data.accepted.0.after.hostility_response)
+  5.6d    PASS    the area took (Area_Home overrides AssignableAsAllowed to true) (data.accepted.0.after.area)
+  5.6e    PASS    and whether the area is actually RESPECTED is published
+  5.7a    PASS    area:null (unrestricted) accepted (data.counts.accepted)
+  5.7b    PASS    and the area is cleared - published as null, not omitted (data.accepted.0.after.area)
+  5.8a    PASS    an unknown area is a bad-args (ok)
+  5.8b    PASS    and the error lists the assignable areas and says who owns creation
+  5.9     OK      precondition: at least one startable research project
+  5.9a    PASS    research-set succeeded (data.ok)
+  5.9b    PASS    the manager reads BACK as the new project (durable state, not a hope) (data.current)
+  5.9c    PASS    an `action` row was written (data.action.journal_seq)
+  5.9d    PASS    progress was read through the guarded route (data.source)
+  5.10a   PASS    an unstartable project is refused (data.ok)
+  5.10b   PASS    with CanStartNow's own clause word (the same vocabulary 2.4's blocked_by uses)
+  5.10c   PASS    and it says SetCurrentProject would have accepted it
+  5.11    PASS    research-stop succeeded (data.ok)
+  5.12a   PASS    an UNDRAFTED doctor is refused by the drafted-only gate (data.counts.accepted)
+  5.12b   PASS    with the gate named (data.rejected.0.gate)
+  5.12c   PASS    and the refusal STILL wrote an action row carrying its verdict (data.action.journal_seq)
+  5.13    PASS    drafted, the same call is either accepted or refused for a substantive reason (never 'drafted-only')
+  5.14    PASS    fire-at-will answers with a gate, never silently
+  5.15a   PASS    passing an EXCLUSIVE mode to `enable` is a bad-args (ok)
+  5.15b   PASS    and the error names the red error it prevented
+  5.16a   PASS    warden accepted the prisoner (data.counts.accepted)
+  5.16b   PASS    the exclusive interaction mode took (data.accepted.0.after.interaction)
+  5.16c   PASS    an `action` row was written (data.action.journal_seq)
+  5.16d   PASS    the catalog names the exclusive modes
+  5.16e   PASS    RELEASE IS A MODE (not a Released flag write) (data.accepted.0.after.interaction)
+  5.17    NOTE    DoctorTendToHumanlikes not offered here: the game offers no option for this work giver on this target (not directOrderable, not a WorkGiver_Scanner, the scanner skipped the target, or — if the pawn is drafted — canBeDoneWhileDrafted is false). Call `orders` for what IS offered. - the durable priorityWork write was not exercised
+  5.18a   PASS    ZERO red errors across the WHOLE run (data.count)
+  5.18b   PASS    and no force-pausing modal was left behind (spec 1.7)
+
+==============================================================================
+RESULT: all 159 checks passed

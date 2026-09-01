@@ -21,11 +21,18 @@ IL confirmed on the fresh bench by a live `status` read: **118 verbs**, includin
 
 | suite | checks | result |
 |---|---|---|
-| `3.4-pawn-orders` | 150 | 147 PASS / 3 FAIL — one root cause, a driver fixture defect |
-| `4087644-order-honesty` | 97 | 92 PASS / 5 FAIL |
-| `70ac258-things-stable-order` | 99 | **all 99 passed** (exit 0) |
-| `3.5-dialog-verbs` | 171 planned | 48 PASS / **0 FAIL**, exit 2 on a fixture gap |
-| `3.6-bills-storage` | 116 | **all 116 passed** (exit 0) |
+| suite | first run | after repair |
+|---|---|---|
+| `3.4-pawn-orders` | 147/150 | **159/159** ✅ (`3.4-run2.log`) |
+| `8b0b88f-already-designated` | 121/123 | **123/123** ✅ (`8b0b88f-run2.log`) |
+| `4087644-order-honesty` | 92/97 | **100/100** ✅ (`4087644-run2.log`) |
+| `70ac258-things-stable-order` | **99/99** ✅ | — |
+| `3.6-bills-storage` | **116/116** ✅ | — |
+| `3.5-dialog-verbs` | 48, exit 2 | 104 pass / 0 fail (`3.5-run2.log`); trade phase 79/86 (`3.5-p3.log`) |
+
+**Eleven of the twelve failures across every suite were DRIVER defects needing no
+mod change.** The two real mod defects both sit on the trade surface and are filed
+as `be75bc4` and `7e8c969`.
 
 **Zero red errors in every suite that checked for them** — 3.4's `5.18a`,
 4087644's `6.16`, 3.6's `6.5`, each asserting `data.count` of red errors is 0

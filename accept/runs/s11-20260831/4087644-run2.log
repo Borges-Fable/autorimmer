@@ -1,0 +1,141 @@
+AutoRimmer acceptance - order honesty (4087644)
+protocol root: /home/dorian/projects/rimworld/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer
+phases: 0 + 1, 2, 3, 4, 5, 6
+
+==============================================================================
+PHASE 0 - the bench, the fixture, and THE SHAPE CONTRACT
+==============================================================================
+  0.1     OK      precondition: the bench answers `status`
+  0.2a    PASS    `journal` publishes data.last_seq
+  0.2b    PASS    `journal` publishes data.events
+  0.2c    PASS    `journal` publishes data.count
+  journal watermark: seq0=39
+  0.2d    PASS    `journal` publishes data.events.0.type
+  0.2e    PASS    `journal` publishes data.events.0.payload
+  0.2f    PASS    `journal` publishes data.events.0.payload.verb
+  0.3a    PASS    `pawns` publishes data.list
+  0.3b    OK      precondition: at least two colonists
+  pawns: A=19809 B=19909
+  0.4a    PASS    `things` publishes data.things
+  apparel: 268 (Apparel_Pants)
+  second:  269 (Apparel_CollarShirt)
+  0.5a    PASS    `pawn` publishes data.state
+  0.5b    PASS    `pawn` publishes data.state.job_queue
+  0.5c    PASS    `pawn` publishes data.apparel
+  0.5d    PASS    `pawn` publishes data.apparel.worn
+
+==============================================================================
+PHASE 1 - already-doing-it: the order that changed nothing says so
+==============================================================================
+  1.1a    PASS    the FIRST wear is accepted (data.counts.accepted)
+  1.1b    PASS    and it journalled (data.action.journal_seq)
+  1.2a    PASS    the SECOND, identical wear is NOT accepted (data.counts.accepted)
+  1.2b    PASS    it is gated as already-doing-it (data.rejected.0.gate)
+  1.2c    PASS    the line records that queueing was NOT asked for (data.rejected.0.queue)
+  1.2d    PASS    and the reason names the game's own early-out rather than a phrase of ours
+  1.3a    PASS    the WASTED order still wrote an `action` row (data.action.journal_seq)
+  1.3b    PASS    and the row is not disguised as 'nothing was mutated'
+  1.4a    PASS    `journal` publishes data.events
+  1.4b    PASS    the journal alone can count the wasted orders (events[].payload.verdict.by_gate.already-doing-it)
+  1.5a    PASS    a QUEUED redundant order is gated the same way (data.rejected.0.gate)
+  1.5b    PASS    and the line says queueing WAS asked for (data.rejected.0.queue)
+  1.5c    PASS    with the reason spelling out that nothing was enqueued
+  1.6     PASS    move-to's own `already-there` gate is untouched (data.rejected.0.gate)
+
+==============================================================================
+PHASE 2 - attribution: who ordered this job, and when
+==============================================================================
+  2.1a    PASS    `pawn` publishes data.state.job_id
+  2.1b    PASS    `pawn` publishes data.state.player_forced
+  2.1c    PASS    `pawn` publishes data.state.job_giver
+  2.1d    PASS    `pawn` publishes data.state.work_giver
+  2.1e    PASS    `pawn` publishes data.state.job_start_tick
+  2.1f    PASS    `pawn` publishes data.state.ordered
+  2.1g    PASS    `pawn` publishes data.state.order_kind
+  2.2a    PASS    an ORDERED job names ThinkNode_QueuedJob as its giver (data.state.job_giver)
+  2.2b    PASS    a direct order carries no WorkGiver (data.state.work_giver)
+  2.2c    PASS    so the triple reads NOT ordered - `ordered` means prioritized-WORK order, not 'the player caused this' (data.state.ordered)
+  2.2d    PASS    and `order_kind` names it a DIRECT order - the field that does answer 'did I cause this' when there is no WorkGiver (data.state.order_kind)
+  2.3     PASS    player_forced is true on an order we gave (data.state.player_forced)
+  2.4     PASS    a RUNNING job has a real start tick (data.state.job_start_tick)
+  2.5     PASS    and a job id (data.state.job_id)
+  2.6a    PASS    a think-tree job does NOT read as ordered (data.state.ordered)
+  2.6b    PASS    and order_kind is null for it - neither work nor direct (data.state.order_kind)
+
+==============================================================================
+PHASE 3 - the job queue: an order that queued, and one that did not
+==============================================================================
+  3.1     PASS    `pawn` publishes data.state.job_queue
+  3.2z    PASS    the stage put a real, non-idle job in curJob - without one TryTakeOrderedJob's idle branch runs the order instead of queueing it and the rest of this phase proves nothing
+  3.2d    PASS    `wear` publishes data.accepted.0.order_effect
+  3.2e    PASS    the order was measured as QUEUED, not started - the flag is the request, order_effect is the result (data.accepted.0.order_effect)
+  3.2a    PASS    the queued order appears in the queue (data.state.job_queue.total)
+  3.2b    PASS    a QUEUED row publishes job_start_tick as null - a queued job has not started, and -1 is not a tick
+  3.2c    PASS    and the queued row names its own job_def, not the running one
+  3.3a    PASS    a colliding queued order takes 4087644's gate (data.rejected.0.gate)
+  3.3     PASS    a COLLIDING queued order enqueued nothing - the queue is unchanged, which is why an empty queue is not evidence the order was refused (data.state.job_queue.total)
+
+==============================================================================
+PHASE 4 - forced apparel: the durable receipt for a forced wear
+==============================================================================
+  4.1     PASS    every worn apparel row publishes `forced`
+  4.2     PASS    `pawn` publishes data.apparel.forced_count
+  4.3     PASS    a COMPLETED forced wear leaves forced:true on that item (JobDriver_Wear's final toil -> OutfitForcedHandler.SetForced)
+  4.4     PASS    and apparel the pawn's own policy put on reads forced:false - the two mechanisms are now distinguishable, which is the question that could not be answered before
+  4.5     PASS    forced_count agrees (data.apparel.forced_count)
+  4.6a    PASS    `journal` publishes data.count
+  4.6b    PASS    reading forced apparel raised NO red error (ForcedApparel.Contains, never IsForced) (data.count)
+
+==============================================================================
+PHASE 5 - the journal rule, and e8f2c32's matrix stamp
+==============================================================================
+  5.1a    PASS    an undrafted doctor is still refused by the drafted-only gate (data.rejected.0.gate)
+  5.1b    PASS    and the refusal NOW writes an action row (supersedes 3.4's check 5.12c) (data.action.journal_seq)
+  5.2a    PASS    the matrix form still answers ok (ok)
+  5.2b    PASS    the unit is still named (data.counts.unit)
+  5.2c    PASS    and a successful matrix write still stamps a real journal_seq (e8f2c32 did not regress) (data.action.journal_seq)
+  5.3a    PASS    `journal` publishes data.count
+  5.3b    PASS    no red errors across the whole run (data.count)
+
+==============================================================================
+PHASE 6 - the remainder: every refusal journals, and move-to queues
+==============================================================================
+  6.1a    PASS    an undrafted doctor is refused by the drafted-only gate (data.rejected.0.gate)
+  6.1b    PASS    and the refusal journals - THE CHECK THAT FAILED (5.1b) (data.action.journal_seq)
+  6.2a    PASS    extinguish at a cell where nothing burns is a REFUSAL, not a silent nothing-to-do (data.rejected.0.gate)
+  6.2b    PASS    and it journals (data.action.journal_seq)
+  6.2c    PASS    the rejected row names the CELL (Outcome.NoAt) (data.rejected.0.at)
+  6.3a    PASS    beat-fire on a pawn that is not burning is a REFUSAL (data.rejected.0.gate)
+  6.3b    PASS    and it journals (data.action.journal_seq)
+  6.3c    PASS    the rejected row names the TARGET (data.rejected.0.thing)
+  6.4a    PASS    man-turret on a thing with no CompMannable is a REFUSAL (data.rejected.0.gate)
+  6.4b    PASS    and it journals (data.action.journal_seq)
+  6.5     PASS    the journal alone shows the refused emergency orders (extinguish, beat-fire, man-turret, tend)
+  6.6a    PASS    wear on a non-apparel thing is a REFUSAL (data.rejected.0.gate)
+  6.6b    PASS    and it journals (data.action.journal_seq)
+  6.7a    PASS    equip on a thing with no CompEquippable is a REFUSAL (data.rejected.0.gate)
+  6.7b    PASS    and it journals (data.action.journal_seq)
+  6.8a    PASS    attack on a target the game offers no option for is a REFUSAL (B is a colonist: not hostile, not an animal, not a building) (data.rejected.0.gate)
+  6.8b    PASS    and it journals (data.action.journal_seq)
+  6.9a    PASS    a prioritize the game does not offer is refused with a gate (data.rejected.0.gate)
+  6.9b    PASS    and it journals - it used to publish 'nothing was mutated' (data.action.journal_seq)
+  6.10a   PASS    the first move-to is accepted (data.counts.accepted)
+  6.10b   PASS    and records that queueing was not asked for (data.accepted.0.queue)
+  6.11a   PASS    a QUEUED move-to is accepted (data.counts.accepted)
+  6.11b   PASS    and says the flag was honoured (data.accepted.0.queue)
+  6.11c   PASS    the job queue GREW - the flag reached TryTakeOrderedJob's requestQueueing
+  6.11d   PASS    the queued row is a Goto of its own (data.state.job_queue.list.0.job_def)
+  6.11e   PASS    and THE RUNNING JOB WAS NOT REPLACED - the measured bug was accepted:1 with an empty queue and the running job gone
+  6.12    PASS    the pawn walks to the FIRST destination first (x moves toward p1, not p2)
+  6.13a   PASS    a move-to to the cell the pawn is ALREADY walking to is not accepted (data.counts.accepted)
+  6.13b   PASS    it takes 4087644's gate (data.rejected.0.gate)
+  6.13c   PASS    and it journals (data.action.journal_seq)
+  6.14    PASS    move-to's own `already-there` gate is still distinct (data.rejected.0.gate)
+  attack target: animal 7537
+  6.15a   PASS    attack REFUSES queue:true rather than dropping it (data.rejected.0.gate)
+  6.15b   PASS    and the reason names the vanilla delegate that cannot pass requestQueueing
+  6.15c   PASS    and it journals (data.action.journal_seq)
+  6.16    PASS    no red errors across the whole run (data.count)
+
+==============================================================================
+RESULT: all 100 checks passed
