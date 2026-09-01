@@ -1,0 +1,248 @@
+AutoRimmer spec 3.5 acceptance — dialog + interaction verbs (git-bug 20e5cda)
+                              + the quest observer         (git-bug 548ef48)
+protocol root: /home/dorian/projects/rimworld/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer
+phases: 0 + 1, 2, 3, 4, 5, 6
+
+==============================================================================
+PHASE 0 — the bench, the dev switch, and THE SHAPE CONTRACT
+==============================================================================
+  0.1     OK      precondition: the bench answers `status`
+  0.1a    PASS    `status` publishes data.gameLoaded
+  0.1b    PASS    `status` publishes data.verbs
+  0.1c    PASS    a game is loaded (data.gameLoaded)
+  0.1d    PASS    no force-pausing modal is up before we begin (data.forcePause)
+  0.2     PASS    all 18 ops of 20e5cda + 548ef48 registered
+  0.3     OK      precondition: devMode is ON (the fixtures need it)
+  0.3a    PASS    and the gate refused for a REASON, not silently (error.code)
+  0.4a    PASS    `journal` publishes data.count
+  0.4b    PASS    `journal` publishes data.last_seq
+  0.4c    PASS    `journal` publishes data.events
+  journal watermark seq0 = 2
+  0.5a    PASS    `interactions` publishes data.force_pause
+  0.5b    PASS    `interactions` publishes data.force_pause.count
+  0.5c    PASS    `interactions` publishes data.blocking
+  0.5d    PASS    `interactions` publishes data.letters
+  0.5e    PASS    `interactions` publishes data.windows
+  0.5f    PASS    and the stack is clear before we start (data.force_pause.count)
+  0.6a    PASS    `advance` publishes data.reason
+  0.6b    PASS    `advance` publishes data.ticks_elapsed
+  0.6c    PASS    advance does NOT publish `data.ticks` (4.8g used to read it) (data.ticks)
+  0.7a    PASS    `quests` publishes data.total
+  0.7b    PASS    `quests` publishes data.counts
+  0.7c    PASS    `quests` publishes data.counts.available
+  0.7d    PASS    `quests` publishes data.counts.ongoing
+  0.7e    PASS    `quests` publishes data.counts.ended
+  0.7f    PASS    `quests` publishes data.counts.dismissed
+  0.7g    PASS    `quests` publishes data.counts.with_outstanding_choice
+  0.7h    PASS    `quests` publishes data.quests
+  0.7i    PASS    `quests` publishes data.action
+  0.7j    PASS    `quests` publishes data.action.journal_seq
+  0.7k    PASS    and an observer stamps it null (present AND null, both proved) (data.action.journal_seq)
+  0.8a    PASS    `trade` with no session refuses at gate no-session (data.gate)
+  0.8b    PASS    `trade` publishes data.gate_cite
+  0.8c    PASS    `comms-choose` with no call refuses at gate no-call (data.gate)
+  0.8d    PASS    `comms-choose` publishes data.gate_cite
+  0.9a    PASS    `dialog-dismiss` publishes data.ok
+  0.9b    PASS    `dialog-dismiss` publishes data.dismissed
+  0.9c    PASS    and it dismissed nothing (data.dismissed)
+  0.10a   PASS    `pawns` publishes data.list
+  0.10b   OK      precondition: at least one visible colonist
+  0.10c   OK      precondition: a colonist capable of Social (the negotiator)
+  negotiator N = 223 (Txabe)
+  0.11    PASS    a refused `trade` carries NO totals block, so the PRESENCE half of the trade shape contract is deferred to 3.2i / 3.8a1 rather than dropped (data.totals)
+
+==============================================================================
+PHASE 1 — 548ef48: the quest log is readable, and reading it does not write
+==============================================================================
+  1.1a    PASS    quests answered (ok)
+  1.1b    PASS    and names itself (data.verb)
+  1.1c    PASS    the state counts rollup is present (data.counts)
+  1.1d    PASS    available count (data.counts.available)
+  1.1e    PASS    ongoing count (data.counts.ongoing)
+  1.1f    PASS    ended count (data.counts.ended)
+  1.1g    PASS    BULLET 3 — dismissed is its own count, not a state (data.counts.dismissed)
+  1.1h    PASS    BULLET 3 — and the result SAYS dismissed is not a decline
+  1.1i    PASS    this call mutated nothing (data.action.journal_seq)
+  1 quests: available=0 ongoing=0 ended=1 dismissed=0 with-choice=0
+  1.2a    PASS    BULLET 4 — reading the quest log TWICE yields an identical projection
+  1.2b    PASS    and the totals match (data.total)
+  1.2c    NOTE    the byte-identical-save half of bullet 4 is the ORCHESTRATOR's to run: save, `quests`, `quest` on every id, save again, diff the <quests> region. This script cannot save without perturbing the very counters it is checking.
+  1.3a    OK      precondition: at least one quest to drill into
+  1.4a    PASS    quest drill-down answered (ok)
+  1.4b    PASS    BULLET 1 — state (data.state)
+  1.4c    PASS    BULLET 1 — expiry (ticks_until_expiry; -1 means never) (data.ticks_until_expiry)
+  1.4d    PASS    BULLET 1 — demands (from QuestPart_RequirementsToAccept) (data.requirements)
+  1.4e    PASS    BULLET 1 — rewards (data.rewards)
+  1.4f    PASS    the parts list (data.parts)
+  1.4g    PASS    and the drill-down mutated nothing (data.action.journal_seq)
+  1.4h    PASS    sections select a subset (data.sections.0)
+  1.4i    PASS    and a subset omits the rest
+  1.4j    PASS    an unknown section is bad-args, never a silent empty result (error.code)
+  1.5     NOTE    no quest on this colony has an outstanding QuestPart_Choice yet — phase 2 stages one and re-checks this bullet there (2.2)
+  1.6a    PASS    state:available filters (data.filter.state)
+  1.6b    PASS    an unknown state is bad-args (error.code)
+  1.7     PASS    BULLET 5 — zero red errors across the whole quest read (data.count)
+
+==============================================================================
+PHASE 2 — 3.5 BULLET 2: a quest offer is read, accepted (choosing first), and its letter dismissed
+==============================================================================
+  2.1s    OK      precondition: dev:incident {def:"GiveQuest_Random"} was accepted
+  2.1     OK      precondition: an available (NotYetAccepted) quest
+  target quest = 1 (An Ally Needing Help)
+  2.2a    PASS    interactions answered (ok)
+  2.2b    PASS    letter-read answered (ok)
+  2.2c    PASS    it is a NewQuestLetter (data.type)
+  2.2d    PASS    and it names the quest it is about (data.quest)
+  its options: View quest | Close
+  2.2e    PASS    the result SAYS a NewQuestLetter has no accept option
+  2.2f    PASS    and reading it mutated nothing (data.action.journal_seq)
+  this quest has 3 outstanding reward choices
+  2.3a    PASS    accept with a choice outstanding is REFUSED, not attempted (data.ok)
+  2.3b    PASS    and names the gate (data.gate)
+  2.3c    PASS    the reason quotes the red error it is preventing
+  2.3d    PASS    and cites the widget clause it reproduces
+  2.3e    PASS    the refusal hands back the choice options so the caller can choose (data.choice.count)
+  2.3f    PASS    and nothing was journaled (the refusal mutated nothing) (data.action.journal_seq)
+  2.3g    PASS    THE INVARIANT: the refused accept logged NO red error (data.count)
+  2.4a    PASS    quest-accept succeeded (data.ok)
+  2.4b    PASS    the quest is ACTIVE (state read back, not assumed)
+  2.4c    PASS    and it carries an acceptance tick (data.acceptance_tick)
+  2.4d    PASS    the mutation is journaled (the action row join key) (data.action.journal_seq)
+  2.4e    PASS    the reward choice was recorded (data.choice_taken)
+  2.4f    PASS    choices before (data.choices_before)
+  2.4g    PASS    choices after Choose — exactly one remains (data.choices_after)
+  2.4h    PASS    and the note states the ordering that avoided the red error
+  2.4i    PASS    ZERO "still has a choice unresolved" red errors
+  2.5a    PASS    the observer agrees the quest is no longer NotYetAccepted
+  2.5b    PASS    and Accept cleared the dismissed flag, as Quest.Accept does (data.dismissed)
+  2.7a    PASS    quest-dismiss set the flag (data.dismissed)
+  2.7a1   PASS    passing `dismissed` explicitly is the SET form (data.mode)
+  2.7a2   PASS    `quest-dismiss` publishes data.subquests
+  2.7a3   PASS    and the note names the subquest propagation the widget does
+  2.7b    PASS    and says plainly it is NOT a decline
+  2.7c    PASS    include_dismissed:false filters it out (cosmetic filtering, exactly)
+  2.7d    PASS    but its STATE is untouched — dismissed is orthogonal to state
+  2.7e    PASS    omitting `dismissed` toggles, as DoDismissButton does (data.mode)
+  2.7f    PASS    and the toggle undid it (data.dismissed)
+  2.8     PASS    zero red errors across the whole accept phase (data.count)
+
+==============================================================================
+PHASE 3 — 3.5 BULLET 1: a real trade, transacted against the model with no window
+==============================================================================
+  3.1a    OK      precondition: a trader pawn on the map
+  trader = 38660
+  3.2a    PASS    trade-start opened a session (data.ok)
+  3.2b    PASS    the session is active (data.session.active)
+  3.2c    PASS    the trader is named (data.session.trader)
+  3.2d    PASS    ZERO force-pausing windows after trade-start — the deal is transacted, not driven (data.force_pause.count)
+  3.2e    PASS    and the verb says the negotiator did NOT walk (data.negotiator_walked)
+  3.2f    PASS    the scribed-thing-id cost of opening a session is DISCLOSED (data.session_cost.scribed_thing_id)
+  3.2g    PASS    journaled (data.action.journal_seq)
+  3.2h    PASS    the deal has tradeables (data.tradeables_total)
+  3.2i    PASS    `trade-start` publishes data.totals.colony_silver
+  3.2j    PASS    `trade-start` publishes data.totals.colony_silver_post_deal
+  3.2k    PASS    `trade-start` publishes data.totals.trader_silver
+  colony silver at open = 2800
+  3.3     PASS    no Dialog_Trade was stacked (status.forcePause absent)
+  3.4a    PASS    trade summarised the session (data.ok)
+  3.4b    PASS    and states the sign convention in the game's own words
+  3.4c    OK      precondition: something the trader has 10+ of, to buy
+  3.4d    OK      precondition: something the colony has 5+ of, to sell
+  BUY  10 x ComponentIndustrial (index 1, trader has 10)
+  SELL  5 x MealSurvivalPack (index 4, colony has 110)
+  3.5a    PASS    `trade-set` publishes data.accepted.0.was
+  3.5b    PASS    `trade-set` publishes data.accepted.0.max
+  3.5c    PASS    the FIRST out-of-range line is ACCEPTED — Transferable.CanAdjustTo returns WasAccepted while ClampAmount(dest) != CountToTransfer (data.ok)
+  3.5d    PASS    and it started from a ZERO row, which is WHY gate 4 could not fire (data.accepted.0.was)
+  3.5e    PASS    so AdjustTo SILENTLY CLAMPED it to the game's own maximum (accepted.0.count == accepted.0.max, both far below the 10009 asked for)
+  3.5f    PASS    a clamp IS a write, so this call DID journal (data.action.journal_seq)
+  3.5g    PASS    `trade-set` publishes data.rejected.0.requested
+  3.5h    PASS    `trade-set` publishes data.action.journal_seq
+  3.5i    PASS    the SECOND, IDENTICAL line is REFUSED — ClampAmount(dest) now EQUALS CountToTransfer, so CanAdjustTo reaches OverflowReport() (data.ok)
+  3.5j    PASS    and names the gate (data.rejected.0.gate)
+  3.5k    PASS    with the game's own bounds echoed — and the max it names is exactly the count call one was clamped to (data.rejected.0.max)
+  3.5l    PASS    and the request echoed back verbatim (data.rejected.0.requested)
+  3.5m    PASS    nothing was journaled for a wholly refused call (data.action.journal_seq)
+  3.5n    PASS    THE INVARIANT: no "Failed to adjust transferable counts" red error, across BOTH calls (data.count)
+  3.6a    PASS    trade-set accepted both lines in ONE call (data.ok)
+  3.6b    PASS    two accepted (data.accepted)
+  3.6c    PASS    none rejected (data.rejected)
+  3.6d    PASS    the buy line reads +10 (data.accepted.0.count)
+  3.6e    PASS    and its action is PlayerBuys (data.accepted.0.action)
+  3.6f    PASS    the sell line reads -5 (data.accepted.1.count)
+  3.6g    PASS    and its action is PlayerSells (data.accepted.1.action)
+  3.6h    PASS    THREE lines carry an action — the buy, the sell, AND the silver row (data.totals.lines_with_action)
+  3.6i    PASS    journaled (data.action.journal_seq)
+  3.6j    PASS    still no window on the stack
+  3.7a    PASS    trade-cancel closed the session (data.ok)
+  3.7b    PASS    and TradeSession.Active is now false (data.session_closed)
+  3.7c    PASS    all THREE staged lines are reported as abandoned, silver row included (data.abandoned)
+  3.7d    PASS    and "untouched" is DEFINED in the result, not left to inference
+  3.7e    PASS    journaled (data.action.journal_seq)
+  3.7f    PASS    reading a closed session is refused, not an NRE (data.ok)
+  3.7g    PASS    and names the gate (data.gate)
+  3.7h    PASS    a fresh session opens (data.ok)
+  3.7i    PASS    CANCEL WAS UNTOUCHED — colony silver is exactly what it was (data.totals.colony_silver)
+  3.7j    PASS    CANCEL WAS UNTOUCHED — trader stock unchanged
+  3.7k    PASS    CANCEL WAS UNTOUCHED — colony stock unchanged
+  3.8a    PASS    both lines staged again (data.ok)
+  3.8a1   PASS    `trade-set` publishes data.totals.colony_silver
+  3.8a2   PASS    `trade-set` publishes data.totals.colony_silver_post_deal
+  3.8a3   PASS    `trade-set` publishes data.totals.trader_silver
+  buy value 434.6, sell value 434.2; colony silver 2800 -> post-deal 2440 (the trader holds 806)
+  map total of ComponentIndustrial before confirm = 100
+  3.9a    PASS    trade-confirm executed (data.ok)
+  3.9b    PASS    and something actually moved (data.actually_traded)
+  3.9c    PASS    the session was closed by the verb (TradeSession.Close has no vanilla caller) (data.session_closed)
+  3.9d    PASS    journaled (data.action.journal_seq)
+  3.9e    PASS    the transacted lines are echoed as evidence (data.transacted)
+  3.9f    PASS    and the post-trade counts are read BACK from the rebuilt deal (data.after)
+  silver 2800 -> 2440 (delta -360); the deal's own pre-confirm post-deal number promised -360
+  3.9g    PASS    BULLET 1 — the deal's promised colony delta IS the currency line it executed (post_deal - colony_silver == transacted silver count)
+  3.9g1   PASS    BULLET 1 — THE MONEY MOVED: the trader's silver fell by exactly the currency line (the side of the trade that is not deal-scoped)
+  3.9g2   FAIL    and the colony-side count did NOT move, which is the documented consequence of GiveSoldThingToPlayer placing at the carrier's cell
+          expected: colony_silver_delta == 0
+          actual:   -360
+  3.9h    PASS    BULLET 1 — THE GOODS MOVED: the trader's stock of the bought def fell by exactly the line
+  3.9h1   PASS    BULLET 1 — and it EXISTS: an independent `things {def}` read over the whole map is up by exactly the bought count
+  3.9h2   PASS    and the colony-side count moved by 0 or by the WHOLE line — never a fraction: whether it counts turns on whether the carrier stood in the home area, not on the deal
+  the bought stock landed OUTSIDE the colony's own scope (colony_now moved by 0 of 10)
+  3.9i    PASS    BULLET 1 — the sold stock left the colony
+  3.9j    PASS    THE INVARIANT: the whole trade ran with no window on the stack
+  3.9k    PASS    zero red errors across the whole trade (data.count)
+
+==============================================================================
+PHASE 4 — 3.5 BULLET 3: an unknown dialog shows opaque, dismisses cleanly, and the run un-wedges
+==============================================================================
+  4.1a    PASS    interactions answered (ok)
+  4.1b    PASS    it carries 1.7's force-pause payload verbatim (data.force_pause)
+  4.1c    PASS    and the stack is clear right now (data.force_pause.count)
+  4.2     NOTE    journal-selftest {steps:['dialogs-clear']} -> True. If this bench's selftest has no dialog fixture, the phase falls through to the letter route below.
+  4.3a    OK      precondition: a choice letter with at least one option
+  letter 0: Quest available: Pollution Dump — options: View quest | Close
+  4.4a    PASS    letter-read answered (ok)
+  4.4b    PASS    the index space matches interactions exactly (data.options.0.index)
+  4.4c    PASS    and the label is the literal words on the button (data.options.0.label)
+  4.4d    PASS    read via the backing field, and it says so (data.source)
+  4.5     NOTE    no disabled option on this letter — the disabled gate is exercised in phase 5 instead (FactionDialogMaker disables MustBeAlly / WaitTime / BadTemperature constantly)
+  4.6     NOTE    nothing opened a force-pausing dialog inside 20000 ticks. The remaining checks in this phase need one; a timing-out letter (ChoiceLetter_AcceptVisitors has a timeout) opens itself on its LAST tick, so a longer advance will get there. Skipping to 4.9.
+  4.9a    PASS    dismiss with a clear stack is ok:true, not an error (data.ok)
+  4.9b    PASS    with nothing dismissed (data.dismissed)
+  4.9c    PASS    and nothing journaled (data.action.journal_seq)
+  4.10a   PASS    letter-choose by LABEL succeeded (data.ok)
+  4.10b   PASS    the letter is gone (data.letter_removed)
+  4.10c   PASS    the route taken is reported (open-window vs letter-choices) (data.via)
+  via = letter-choices
+  4.10d   PASS    journaled (data.action.journal_seq)
+  4.10e   PASS    and the stack is clear after (data.force_pause.count)
+  4.11a   PASS    an unknown letter id is bad-args with a helpful message (error.code)
+  4.11b   PASS    and explains that a timed-out letter is reaped
+  4.12a   PASS    the stack is clear at the end of the phase
+  4.12b   PASS    zero red errors across the whole dialog phase (data.count)
+
+==============================================================================
+PHASE 5 — comms: the DiaNode walker runs headless, and the disabled gate holds
+==============================================================================
+  5.1     SKIP    precondition NOT MET: a comms console
+          the colony has no comms console on the current map. Build one (ThingDefOf.CommsConsole) — it is the only vanilla source of comm targets. Build one and re-run, or skip phase 5.
+          This is a FIXTURE gap, not a 3.5 failure. Stage it and re-run.

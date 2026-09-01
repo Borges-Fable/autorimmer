@@ -118,6 +118,7 @@ def send(op, args=None, timeout=300):
                     env = json.load(fh)
                 if ARGS.echo:
                     print("    <- %s" % json.dumps(env, separators=(",", ":")))
+                note_session(op, env)
                 return env
             except (ValueError, OSError):
                 time.sleep(0.12)
@@ -127,6 +128,19 @@ def send(op, args=None, timeout=300):
             "error": {"code": "acc-timeout",
                       "detail": "no results/%s.json within %ss — is the bench running?"
                                 % (cid, timeout)}}
+
+
+# Session bookkeeping for close_any_session(). Kept HERE rather than at the
+# three call sites, because the call site that matters is the one nobody
+# remembers to add — phase 3 opens a session at 3.2 and again at 3.7h, and every
+# `precondition` after either of those exits the process.
+def note_session(op, env):
+    if op == "trade-start":
+        if dig(env, "data.ok") is True:
+            S["session_open"] = True
+    elif op in ("trade-cancel", "trade-confirm"):
+        if dig(env, "data.session_closed") is True:
+            S["session_open"] = False
 
 
 def dig(obj, path, default=None):
@@ -812,41 +826,66 @@ def phase3():
                 if isinstance(p, dict)
                 and (p.get("trader") is True or "Trader" in str(p.get("kind") or ""))]
 
+    # WILLINGNESS IS PER-TRADER AND THE FIXTURE MUST MEASURE IT, NOT ASSUME IT.
+    # This used to take `traders[0]` and hand it to `trade-start`. On 2026-09-01
+    # a run skipped at 3.2pre with gate `cannot-trade-now` while a perfectly
+    # willing caravan stood on the same map: the previous caravan had left, a
+    # NEW one was still forming up, and it sorted first. `CanTradeNow` is a
+    # property of one ITrader, so the fixture opens sessions until one takes —
+    # which is what a player does, and it is the same "assert the state, do not
+    # assume it" that `8b0b88f` taught the forbid check.
+    #
+    # A failed `trade-start` costs nothing (it refuses before SetupWith); a
+    # SUCCEEDING one opens a session, so the loop stops at the first success and
+    # close_any_session() covers every exit after it.
+    def first_willing(cands):
+        last = None
+        for t in cands:
+            env = send("trade-start", {"trader": t.get("id"), "negotiator": S["N"]})
+            if dig(env, "data.ok") is True:
+                return t, env
+            last = env
+        return None, last
+
     traders = [] if ARGS.dry_run else traders_now()
-    if not traders and not ARGS.dry_run:
-        note("3.1", 'no trader on the map — staging with dev:incident '
-                    '{def:"TraderCaravanArrival"} and advancing until it settles')
-        staged("3.1s", "TraderCaravanArrival")
-        for _ in range(8):
-            a = send("advance", {"ticks": 2500, "max_tps": 400})
-            if dig(a, "data.reason") == "dialog":
-                note("3.1x", "the advance HALTED on a dialog — clearing it with "
-                             "dialog-dismiss, which is exactly what this spec exists to do")
-                send("dialog-dismiss", {"all": True})
-            traders = traders_now()
-            if traders:
-                break
-    precondition("3.1a", "a trader pawn on the map",
-                 ARGS.dry_run or len(traders) >= 1,
+    picked, e = (traders[0] if traders else None, None) if ARGS.dry_run else (None, None)
+    if not ARGS.dry_run:
+        picked, e = first_willing(traders)
+        if picked is None:
+            note("3.1", "%s — staging with dev:incident "
+                        '{def:"TraderCaravanArrival"} and advancing until one settles'
+                        % ("no trader on the map" if not traders else
+                           "%d trader(s) on the map, none willing to trade yet (last "
+                           "gate: %s)" % (len(traders), dig(e, "data.gate"))))
+            if not traders:
+                staged("3.1s", "TraderCaravanArrival")
+            for _ in range(8):
+                a = send("advance", {"ticks": 2500, "max_tps": 400})
+                if dig(a, "data.reason") == "dialog":
+                    note("3.1x", "the advance HALTED on a dialog — clearing it with "
+                                 "dialog-dismiss, which is exactly what this spec exists to do")
+                    send("dialog-dismiss", {"all": True})
+                picked, e = first_willing(traders_now())
+                if picked is not None:
+                    break
+    precondition("3.1a", "a trader willing to trade now",
+                 ARGS.dry_run or picked is not None,
                  'dev:incident {def:"TraderCaravanArrival"} + 8 x 2500 ticks produced no '
-                 "trader. A caravan can take up to a day to arrive and settle; advance "
+                 "WILLING trader (last gate: %s). A caravan can take most of a day to "
+                 "arrive and settle and refuses while forming up or leaving; advance "
                  'further, or stage an orbital trader (dev:incident '
-                 '{def:"OrbitalTraderArrival"}) and use the comms route in phase 5.')
-    S["trader"] = 2001 if ARGS.dry_run else traders[0].get("id")
+                 '{def:"OrbitalTraderArrival"}) and use the comms route in phase 5.'
+                 % (None if ARGS.dry_run else dig(e, "data.gate")))
+    S["trader"] = 2001 if ARGS.dry_run else picked.get("id")
     print("  %strader = %s%s" % (DIM, S["trader"], OFF))
 
     # 3.2 trade-start. The verb reproduces the widget gates and does NOT take
-    #     the job — which is the decision this spec records in DESIGN.
-    e = send("trade-start", {"trader": S["trader"], "negotiator": S["N"]})
-    if dig(e, "data.ok") is not True and not ARGS.dry_run:
-        note("3.2", "trade-start refused at gate '%s': %s"
-                    % (dig(e, "data.gate"), dig(e, "data.reason")))
-        precondition("3.2pre", "the trader is willing to trade now", False,
-                     "gate=%s. If it is cannot-trade-now the caravan has not settled "
-                     "(advance more); if no-path the negotiator is sealed off from it; "
-                     "if negotiator-downed / negotiator-mechanoid the explicit "
-                     "`negotiator` is not a pawn the player could right-click with."
-                     % dig(e, "data.gate"))
+    #     the job — which is the decision this spec records in DESIGN. The
+    #     session is ALREADY OPEN: `first_willing` above opened it, and its
+    #     envelope is what the checks below read, so the phase does not pay a
+    #     second `trade-start` (which would refuse at gate `session-open`).
+    if ARGS.dry_run:
+        e = send("trade-start", {"trader": S["trader"], "negotiator": S["N"]})
     eq("3.2a", "trade-start opened a session", e, "data.ok", True)
     eq("3.2b", "the session is active", e, "data.session.active", True)
     not_null("3.2c", "the trader is named", e, "data.session.trader")
@@ -903,11 +942,18 @@ def phase3():
                  "any 10-stack works. Re-run against a caravan with real stock.")
     precondition("3.4d", "something the colony has 5+ of, to sell",
                  ARGS.dry_run or len(sellable) >= 1,
-                 "the colony has nothing sellable in quantity 5+ within the trader's "
-                 "reach. NOTE the scope: TradeDeal.AddAllTradeables walks "
-                 "ITrader.ColonyThingsWillingToBuy, i.e. the caravan's trade radius, not "
-                 "the whole map. Move goods near the trader, or stage with "
-                 "dev:spawn-thing.")
+                 "the colony has nothing the trader counts as colony stock. THE SCOPE IS "
+                 "NOT A RADIUS, and calling it one costs a staging round: "
+                 "`RimWorld/Pawn_TraderTracker.ColonyThingsWillingToBuy` filters "
+                 "`map.listerThings.AllThings` on `def.category == Item && "
+                 "TradeUtility.PlayerSellableNow && !Position.Fogged && "
+                 "(map.areaManager.Home[pos] || IsInAnyStorage()) && ReachableForTrade`. "
+                 "So the test is THE HOME AREA OR A STOCKPILE — distance to the trader "
+                 "does not enter it. Measured 2026-09-01: 2000 silver spawned ON the "
+                 "trader's own cell counted as ZERO, and the same 2000 spawned at the "
+                 "negotiator counted in full. Stage with `dev:spawn-thing "
+                 "{pos:\"pawn:<negotiator>\"}`, or paint home with "
+                 "`area {kind:\"home\", op:\"add\", rect:[...]}`.")
     # THE TWO SIDES MUST BE DIFFERENT DEFS, and this is not a tidiness
     # preference — it is what makes the phase capable of failing.
     # `RimWorld/Transferable.CountToTransfer` is ONE signed field per row and
@@ -1144,6 +1190,18 @@ def phase3():
     # THE PRE-CONFIRM SNAPSHOT. Taken from whichever `trade-set` last touched
     # the deal — 3.8f below re-stages it, and a snapshot taken only here would
     # be stale by the time 3.9g read it.
+    def map_total(defname):
+        """Every stack of `defname` on the map, summed — the read that is
+        independent of TradeDeal entirely."""
+        if ARGS.dry_run or not defname:
+            return 0
+        env = send("things", {"def": defname, "cap": 5})
+        total = 0
+        for r in as_list(dig(env, "data.rollups")):
+            if isinstance(r, dict) and r.get("def") == defname:
+                total += r.get("count") or 0
+        return total
+
     def snap(env):
         S["buyValue"] = dig(env, "data.totals.buy_value") or 0
         S["sellValue"] = dig(env, "data.totals.sell_value") or 0
@@ -1156,6 +1214,15 @@ def phase3():
                  show(S["silverPost"]), show(S["traderSilver"]), OFF))
 
     snap(e)
+
+    # THE PHYSICAL BASELINE. `data.after` is deal-scoped on the colony side (see
+    # 3.9g below), so "the goods arrived" has to be measured off the MAP, not
+    # off the deal. `things {def}` rolls up every stack of that def on the map
+    # regardless of area, forbidden flag or owner, which is exactly the read the
+    # deal's own colony-side count cannot make.
+    S["buyMap0"] = map_total(S["buy"].get("thing"))
+    print("  %smap total of %s before confirm = %s%s"
+          % (DIM, S["buy"].get("thing"), show(S["buyMap0"]), OFF))
 
     e = send("trade-confirm")
     if dig(e, "data.gate") == "colony-cannot-afford":
@@ -1221,14 +1288,90 @@ def phase3():
           "number promised %s%s"
           % (DIM, S["silverPre"], show(dig(e, "data.colony_silver_after")),
              show(delta), show(expect), OFF))
-    check("3.9g", "BULLET 1 — colony silver moved by EXACTLY what the deal promised "
-                  "(totals.colony_silver_post_deal - totals.colony_silver, read "
-                  "pre-confirm)",
-          is_num(delta) and is_num(expect) and delta == expect,
-          "delta == %s" % show(expect), delta)
     after = [r for r in as_list(dig(e, "data.after")) if isinstance(r, dict)]
     after_buy = [r for r in after if r.get("thing") == S["buy"].get("thing")]
     after_sell = [r for r in after if r.get("thing") == S["sell"].get("thing")]
+    txn = [r for r in as_list(dig(e, "data.transacted")) if isinstance(r, dict)]
+    txn_silver = [r for r in txn if r.get("is_currency") is True]
+    txn_buy = [r for r in txn if r.get("thing") == S["buy"].get("thing")]
+    after_silver = [r for r in after if r.get("thing") == "Silver"]
+
+    # THE COLONY-SIDE NUMBER DOES NOT MOVE ON A BUY, AND THAT IS CORRECT.
+    # Retargeted 2026-09-01 after the first live run of this phase since the
+    # driver was repaired. 3.9g used to read
+    # `data.colony_silver_delta == colony_silver_post_deal - colony_silver` and
+    # FAILED with delta 0 against a promise of 83 — while `trader_now` had moved
+    # 972 -> 889, exactly the 83. Both numbers were right; the assertion was
+    # wrong, and it is the eighth defect of the family the 2026-08-31 round
+    # fixed seven of.
+    #
+    # `RimWorld/Pawn_TraderTracker.GiveSoldThingToPlayer` places a bought thing
+    # with `GenPlace.TryPlaceThing(thing, toGive.PositionHeld, mapHeld,
+    # ThingPlaceMode.Near)` — at the CARAVAN CARRIER's own cell, NOT near the
+    # negotiator — and then `pawn.GetLord()?.extraForbiddenThings.Add(thing)`.
+    # Meanwhile the colony-side count of the rebuilt deal is
+    # `ColonyThingsWillingToBuy`, whose test is `Home[pos] || IsInAnyStorage()`.
+    # A caravan parked outside the home area therefore satisfies neither, so
+    # bought goods are legitimately not colony stock until somebody HAULS them.
+    # Vanilla's own Dialog_Trade prints the same optimistic post-deal column, so
+    # this is a display convention of the game's, not a mod defect.
+    #
+    # (The `extraForbiddenThings` add does NOT forbid them to colonists:
+    # `RimWorld/ForbidUtility.IsForbidden(Thing, Pawn)` consults
+    # `pawn.GetLord()`, the lord of the pawn ASKING, and a colonist has none.
+    # It stops the caravan re-collecting what it just sold. Verified live: both
+    # delivered stacks read `forbidden: false`.)
+    #
+    # So the promise is checked where it is decidable — against the currency
+    # line the deal actually executed — and DELIVERY is checked on the trader's
+    # side and on the map, neither of which is deal-scoped.
+    silver_moved = txn_silver[0].get("count") if txn_silver else None
+    check("3.9g", "BULLET 1 — the deal's promised colony delta IS the currency line "
+                  "it executed (post_deal - colony_silver == transacted silver count)",
+          is_num(expect) and is_num(silver_moved) and expect == silver_moved,
+          "transacted silver count == %s" % show(expect), silver_moved)
+    trader_silver_now = after_silver[0].get("trader_now") if after_silver else None
+    want_trader_silver = (S["traderSilver"] - silver_moved
+                          if is_num(S.get("traderSilver")) and is_num(silver_moved)
+                          else None)
+    check("3.9g1", "BULLET 1 — THE MONEY MOVED: the trader's silver fell by exactly "
+                   "the currency line (the side of the trade that is not deal-scoped)",
+          is_num(trader_silver_now) and is_num(want_trader_silver)
+          and trader_silver_now == want_trader_silver,
+          "trader_now == %s" % show(want_trader_silver), trader_silver_now)
+    # AND THE ASYMMETRY, WHICH IS THE WHOLE POINT AND IS DIRECTIONAL. Measured
+    # across three consecutive live deals on 2026-09-01: a deal that PAID 360
+    # silver moved the colony-side count by exactly -360; a deal that RECEIVED
+    # 83 moved it by 0; a deal that RECEIVED 80 moved it by 69. All three are
+    # correct, and the third is why this check is a BOUND and not an equality.
+    #
+    # OUTFLOW is exact because the stacks are taken FROM colony scope.
+    # INFLOW is not, and it is not all-or-nothing either:
+    # `RimWorld/Tradeable.ResolveTrade` hands the buy to
+    # `TransferableUtility.TransferNoSplit(thingsTrader, …)`, which walks the
+    # trader's stack LIST and calls `GiveSoldThingToPlayer` once per stack —
+    # each landing at THAT stack's own `PositionHeld`, i.e. at whichever caravan
+    # member was carrying it. Different carriers stand in different cells, so
+    # the fraction that lands inside the home area is however many of them
+    # happened to be standing in it. 69 of 80 is what that looks like.
+    #
+    # So the strongest TRUE statement about an inflow is that it is between
+    # nothing and all of it, and the fraction is reported rather than asserted.
+    if is_num(silver_moved) and silver_moved < 0:
+        check("3.9g2", "and an OUTFLOW lands exactly — silver the colony pays is taken "
+                       "FROM colony scope, so the deal-scoped count is authoritative",
+              is_num(delta) and delta == silver_moved,
+              "colony_silver_delta == %s" % show(silver_moved), delta)
+    else:
+        check("3.9g2", "and an INFLOW is bounded by the line, never beyond it — it is "
+                       "placed per-stack at each carrier's own cell, so what counts is "
+                       "however much of the caravan stood inside the home area",
+              is_num(delta) and is_num(silver_moved) and 0 <= delta <= silver_moved,
+              "0 <= colony_silver_delta <= %s" % show(silver_moved), delta)
+        if is_num(delta) and is_num(silver_moved) and silver_moved:
+            print("  %s%s of %s silver landed inside the colony's own scope; the rest is "
+                  "at the caravan and needs hauling%s"
+                  % (DIM, show(delta), show(silver_moved), OFF))
     # A MISSING ROW IS A FAILURE, NOT A SKIP. These two used to sit behind bare
     # `if after_buy:` / `if after_sell:` guards, so an absent row made the check
     # vanish from the run entirely — no PASS, no FAIL, no mention in the RESULT
@@ -1236,14 +1379,45 @@ def phase3():
     # level up: an assertion that did not run reads exactly like one that
     # passed. `data.after` is keyed by ThingDef, so with the buy and sell defs
     # now distinct (see 3.4) both rows must be there.
-    if after_buy:
-        check("3.9h", "BULLET 1 — the bought stock is now in the colony",
-              (after_buy[0].get("colony_now") or 0) > S["buyColony0"],
-              "> %s" % S["buyColony0"], after_buy[0].get("colony_now"))
+    # THE BOUGHT STOCK, PROVED TWICE AND ON NEITHER DEAL-SCOPED NUMBER. Same
+    # retarget as 3.9g: this used to assert `colony_now > buyColony0` and read
+    # 63 against 63 while the trader's own stock had fallen 103 -> 93 and a
+    # brand-new 10-stack sat on the map at the caravan's cell.
+    if after_buy and txn_buy:
+        bought = txn_buy[0].get("count")
+        want_trader = ((txn_buy[0].get("trader_has") or 0) - (bought or 0))
+        check("3.9h", "BULLET 1 — THE GOODS MOVED: the trader's stock of the bought "
+                      "def fell by exactly the line",
+              is_num(bought) and after_buy[0].get("trader_now") == want_trader,
+              "trader_now == %s" % show(want_trader), after_buy[0].get("trader_now"))
+        after_map = map_total(S["buy"].get("thing"))
+        check("3.9h1", "BULLET 1 — and it EXISTS: an independent `things {def}` read "
+                       "over the whole map is up by exactly the bought count",
+              is_num(bought) and is_num(after_map) and is_num(S.get("buyMap0"))
+              and after_map == S["buyMap0"] + bought,
+              "map total == %s + %s" % (show(S.get("buyMap0")), show(bought)), after_map)
+        # HOW MUCH of it counts as colony stock is a function of where each
+        # carrier was standing (see 3.9g2), so the bound is the assertion and
+        # the fraction is reported. What it may NOT do is exceed the line or go
+        # negative — either would mean the rebuilt deal is counting something
+        # this trade did not move.
+        colony_moved = ((after_buy[0].get("colony_now") or 0) - S["buyColony0"])
+        check("3.9h2", "and the colony-side count moved by between nothing and the "
+                       "whole line — the fraction is however much of the caravan stood "
+                       "inside the home area, and is not the deal's to promise",
+              is_num(bought) and 0 <= colony_moved <= bought,
+              "0 <= colony_now - %s <= %s" % (S["buyColony0"], show(bought)),
+              colony_moved)
+        print("  %s%s of %s of the bought stock landed inside the colony's own scope; "
+              "the rest is at the caravan and needs hauling%s"
+              % (DIM, show(colony_moved), show(bought), OFF))
     else:
-        check("3.9h", "BULLET 1 — the bought stock is now in the colony", False,
-              "a `data.after` row for the bought def %s" % S["buy"].get("thing"),
-              [r.get("thing") for r in after])
+        check("3.9h", "BULLET 1 — THE GOODS MOVED: the trader's stock of the bought "
+                      "def fell by exactly the line", False,
+              "a `data.after` AND a `data.transacted` row for the bought def %s"
+              % S["buy"].get("thing"),
+              {"after": [r.get("thing") for r in after],
+               "transacted": [r.get("thing") for r in txn]})
     if after_sell:
         check("3.9i", "BULLET 1 — the sold stock left the colony",
               (after_sell[0].get("colony_now") or 0) < S["sellColony0"],
@@ -1456,6 +1630,21 @@ def phase5():
     if dig(e, "data.ok") is not True and dig(e, "data.gate") == "no-console":
         precondition("5.1", "a comms console", False,
                      "%s Build one and re-run, or skip phase 5." % dig(e, "data.reason"))
+    # A CONSOLE THAT EXISTS BUT CANNOT BE USED IS A FIXTURE GAP, NOT A SPEC
+    # FAILURE, and until 2026-09-01 it presented as eight red checks in 5.3 and
+    # 5.6. The commonest case by far is POWER, and the commonest cause of that
+    # is the sun: a solar generator staged in the afternoon stops generating
+    # after sunset, so a suite that ran green at 16:00 goes red at 22:00 with
+    # nothing about the mod having changed. `comms-targets` publishes
+    # `console_blocked` — RimWorld/Building_CommsConsole.GetFailureReason's own
+    # sentence — so the skip can say which.
+    if dig(e, "data.console.can_use_now") is False:
+        precondition("5.1p", "a USABLE comms console", False,
+                     "the console at %s exists but is not usable: %s. If that is power "
+                     "and the generator is solar, advance to daylight — "
+                     '`advance {until:{condition:{path:"time.hour",op:">=",value:9}}}` — '
+                     "or stage a generator that runs at night."
+                     % (dig(e, "data.console.at"), dig(e, "data.console_blocked")))
     eq("5.1a", "comms-targets answered", e, "ok", True)
     not_null("5.1b", "the console is identified", e, "data.console.id")
     targets = [t for t in as_list(dig(e, "data.targets")) if isinstance(t, dict)]

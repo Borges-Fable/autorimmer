@@ -1,0 +1,77 @@
+AutoRimmer spec 3.5 acceptance — dialog + interaction verbs (git-bug 20e5cda)
+                              + the quest observer         (git-bug 548ef48)
+protocol root: /home/dorian/projects/rimworld/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer
+phases: 0 + 3
+
+==============================================================================
+PHASE 0 — the bench, the dev switch, and THE SHAPE CONTRACT
+==============================================================================
+  0.1     OK      precondition: the bench answers `status`
+  0.1a    PASS    `status` publishes data.gameLoaded
+  0.1b    PASS    `status` publishes data.verbs
+  0.1c    PASS    a game is loaded (data.gameLoaded)
+  0.1d    PASS    no force-pausing modal is up before we begin (data.forcePause)
+  0.2     PASS    all 18 ops of 20e5cda + 548ef48 registered
+  0.3     OK      precondition: devMode is ON (the fixtures need it)
+  0.3a    PASS    and the gate refused for a REASON, not silently (error.code)
+  0.4a    PASS    `journal` publishes data.count
+  0.4b    PASS    `journal` publishes data.last_seq
+  0.4c    PASS    `journal` publishes data.events
+  journal watermark seq0 = 2
+  0.5a    PASS    `interactions` publishes data.force_pause
+  0.5b    PASS    `interactions` publishes data.force_pause.count
+  0.5c    PASS    `interactions` publishes data.blocking
+  0.5d    PASS    `interactions` publishes data.letters
+  0.5e    PASS    `interactions` publishes data.windows
+  0.5f    PASS    and the stack is clear before we start (data.force_pause.count)
+  0.6a    PASS    `advance` publishes data.reason
+  0.6b    PASS    `advance` publishes data.ticks_elapsed
+  0.6c    PASS    advance does NOT publish `data.ticks` (4.8g used to read it) (data.ticks)
+  0.7a    PASS    `quests` publishes data.total
+  0.7b    PASS    `quests` publishes data.counts
+  0.7c    PASS    `quests` publishes data.counts.available
+  0.7d    PASS    `quests` publishes data.counts.ongoing
+  0.7e    PASS    `quests` publishes data.counts.ended
+  0.7f    PASS    `quests` publishes data.counts.dismissed
+  0.7g    PASS    `quests` publishes data.counts.with_outstanding_choice
+  0.7h    PASS    `quests` publishes data.quests
+  0.7i    PASS    `quests` publishes data.action
+  0.7j    PASS    `quests` publishes data.action.journal_seq
+  0.7k    PASS    and an observer stamps it null (present AND null, both proved) (data.action.journal_seq)
+  0.8a    PASS    `trade` with no session refuses at gate no-session (data.gate)
+  0.8b    PASS    `trade` publishes data.gate_cite
+  0.8c    PASS    `comms-choose` with no call refuses at gate no-call (data.gate)
+  0.8d    PASS    `comms-choose` publishes data.gate_cite
+  0.9a    PASS    `dialog-dismiss` publishes data.ok
+  0.9b    PASS    `dialog-dismiss` publishes data.dismissed
+  0.9c    PASS    and it dismissed nothing (data.dismissed)
+  0.10a   PASS    `pawns` publishes data.list
+  0.10b   OK      precondition: at least one visible colonist
+  0.10c   OK      precondition: a colonist capable of Social (the negotiator)
+  negotiator N = 223 (Txabe)
+  0.11    PASS    a refused `trade` carries NO totals block, so the PRESENCE half of the trade shape contract is deferred to 3.2i / 3.8a1 rather than dropped (data.totals)
+
+==============================================================================
+PHASE 3 — 3.5 BULLET 1: a real trade, transacted against the model with no window
+==============================================================================
+  3.1a    OK      precondition: a trader pawn on the map
+  trader = 38660
+  3.2a    PASS    trade-start opened a session (data.ok)
+  3.2b    PASS    the session is active (data.session.active)
+  3.2c    PASS    the trader is named (data.session.trader)
+  3.2d    PASS    ZERO force-pausing windows after trade-start — the deal is transacted, not driven (data.force_pause.count)
+  3.2e    PASS    and the verb says the negotiator did NOT walk (data.negotiator_walked)
+  3.2f    PASS    the scribed-thing-id cost of opening a session is DISCLOSED (data.session_cost.scribed_thing_id)
+  3.2g    PASS    journaled (data.action.journal_seq)
+  3.2h    PASS    the deal has tradeables (data.tradeables_total)
+  3.2i    PASS    `trade-start` publishes data.totals.colony_silver
+  3.2j    PASS    `trade-start` publishes data.totals.colony_silver_post_deal
+  3.2k    PASS    `trade-start` publishes data.totals.trader_silver
+  colony silver at open = 0
+  3.3     PASS    no Dialog_Trade was stacked (status.forcePause absent)
+  3.4a    PASS    trade summarised the session (data.ok)
+  3.4b    PASS    and states the sign convention in the game's own words
+  3.4c    OK      precondition: something the trader has 10+ of, to buy
+  3.4d    SKIP    precondition NOT MET: something the colony has 5+ of, to sell
+          the colony has nothing sellable in quantity 5+ within the trader's reach. NOTE the scope: TradeDeal.AddAllTradeables walks ITrader.ColonyThingsWillingToBuy, i.e. the caravan's trade radius, not the whole map. Move goods near the trader, or stage with dev:spawn-thing.
+          This is a FIXTURE gap, not a 3.5 failure. Stage it and re-run.
