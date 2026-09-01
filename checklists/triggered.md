@@ -84,16 +84,13 @@ to execute.
 11. **Combat roles** — traits first (FSWA already forces Brawlers melee-only),
     then passion, then skill. The weighting formula is a proposal awaiting
     Evan — apply it as a tiebreak, not a rule. [[combat-role-passion-over-skill]]
-12. **Standing combat posture, in this order, before the first advance** —
-    an `Area_Allowed` over base + fields + cleared ground and every pawn
-    assigned to it (`area create`, then `assign`); then `seek-at-will` ON as
-    the standing posture, not something switched on at the letter; then
-    `assign {hostility:"Attack"}` as the backstop for every case seek does
-    not cover (toggle off, drafted, SeekAndKill absent). The area is what
-    stops seek marching the roster at a fogged hive — and it does NOT bind a
-    fleeing pawn, which is the second reason to keep seek on.
-    [[seek-off-is-a-decision-to-flee]] (Evan, 2026-08-31: "manipulate the
-    allow zone" / "and attack, not flee".)
+12. **Standing combat posture** — confirm the posture verb ran. Paint an
+    `Area_Allowed` over base + fields + cleared ground (`area allowed create`,
+    then `area {kind:"allowed", op:"add", rect:[…]}`), then one call:
+    `posture {area:"<label>", seek:"auto"}`. It sets all three settings that
+    must agree and names every pawn it refused. Verdict is
+    `digest.posture.ok`; anything in `posture.flee_risk` is the M1 state and
+    is not a start posture. [[seek-off-is-a-decision-to-flee]]
 
 ## On your own acts
 

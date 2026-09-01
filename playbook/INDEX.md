@@ -17,7 +17,7 @@ no opinion).
 | [[orbital-trade-needs-a-beacon]] | Critical | verified-in-source | any orbital trade — no beacon means the ship sees nothing of yours, and the console alone is not enough |
 | [[one-doctor-is-zero-doctors]] | Critical | observed-at-bench | colony start and every roster change — the only doctor is a likely casualty |
 | [[read-every-return-or-lose-a-colonist]] | Critical | observed-at-bench | any back-to-back short advances — a narrowed read is a blind loop |
-| [[seek-off-is-a-decision-to-flee]] | Critical | verified-in-source | every threat while seek-at-will is off — armed colonists scatter instead of fighting |
+| [[seek-off-is-a-decision-to-flee]] | Critical | verified-in-source | choosing a combat posture — `hostility_response` is decided ABOVE seek, so `Flee` beats it |
 | [[materials-are-a-standing-loop]] | Important | evan-stated | any input trending to zero — designate, don't retry the bill |
 | [[benches-go-indoors]] | Important | evan-stated | siting any bench — enclosure plus the right room |
 | [[growing-zone-default-is-potato]] | Important | verified-in-source | creating/reading growing zones — one raw read commits potato forever |
