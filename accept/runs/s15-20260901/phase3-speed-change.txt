@@ -1,0 +1,99 @@
+AutoRimmer session-13 acceptance — the five M1 mod findings
+  A  dev:spawn-thing refusals reach the journal row  (DevVerbs.cs, Blockers.cs)
+  J  bench_ok is a bench, not a gate                 (ResearchVerbs.cs, ColonyVerbs.cs)
+  K  overshoot_bound from the fastest speed          (TimeDriver.cs)
+  I1 digest.site                                     (WorldSafe.cs, DigestVerb.cs)
+  D  threat-pardon                                   (ThreatPardonVerbs.cs, DigestVerb.cs)
+protocol root: /home/dorian/projects/rimworld/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer
+phases: 0 + 3
+
+==============================================================================
+PHASE 0 — the bench, the dev switch, and THE SHAPE CONTRACT
+==============================================================================
+  0.1     OK      precondition: the bench answers `status`
+  0.1a    PASS    `status` publishes data.gameLoaded
+  0.1b    PASS    `status` publishes data.verbs
+  0.2     PASS    all 6 session-13 ops are registered
+  0.2a    PASS    a game is loaded (data.gameLoaded)
+  0.2b    PASS    no force-pausing modal is up before we begin (data.forcePause)
+  0.3     OK      precondition: devMode is ON (every fixture below needs it)
+  0.4a    PASS    `journal` publishes data.count
+  0.4b    PASS    `journal` publishes data.last_seq
+  0.4c    PASS    `journal` publishes data.events
+  journal watermark seq0 = 2
+  0.5     OK      precondition: `digest` answers
+  0.5a    PASS    `digest` publishes data.site
+  0.5b    PASS    `digest` publishes data.site.biome
+  0.5c    PASS    `digest` publishes data.site.biome_label
+  0.5d    PASS    `digest` publishes data.site.tile
+  0.5e    PASS    `digest` publishes data.site.avg_temp_c
+  0.5f    PASS    `digest` publishes data.site.rainfall
+  0.5g    PASS    `digest` publishes data.site.elevation
+  0.5h    PASS    `digest` publishes data.site.hilliness
+  0.5i    PASS    `digest` publishes data.site.swampiness
+  0.5j    PASS    `digest` publishes data.site.pollution
+  0.5k    PASS    `digest` publishes data.site.map_size
+  0.5l    PASS    `digest` publishes data.site.pocket_map
+  0.5q    PASS    digest.site publishes exactly WorldSafe.Site's fields (data.site)
+  0.5r1   PASS    no `biomes` — Tile.Biomes memoises tmpHasSecondaryBiome/tmpSecondaryBiome (observer-mutation hazard, deliberately skipped) (data.site.biomes)
+  0.5r2   PASS    no `hilliness_label` — Tile.HillinessLabel caches hillinessLabelCached (observer-mutation hazard, deliberately skipped) (data.site.hilliness_label)
+  0.5r3   PASS    no `landmark` — Tile.Landmark is Find.World.landmarks[tile], Odyssey-gated (observer-mutation hazard, deliberately skipped) (data.site.landmark)
+  0.5r4   PASS    no `max_temp` — Tile.MaxTemperature caches cachedMaxTemp (observer-mutation hazard, deliberately skipped) (data.site.max_temp)
+  0.5r5   PASS    no `max_temp_c` — Tile.MaxTemperature caches cachedMaxTemp (observer-mutation hazard, deliberately skipped) (data.site.max_temp_c)
+  0.5r6   PASS    no `min_temp` — Tile.MinTemperature caches cachedMinTemp (observer-mutation hazard, deliberately skipped) (data.site.min_temp)
+  0.5r7   PASS    no `min_temp_c` — Tile.MinTemperature caches cachedMinTemp (observer-mutation hazard, deliberately skipped) (data.site.min_temp_c)
+  0.5r8   PASS    no `secondary_biome` — Tile.Biomes memoises tmpHasSecondaryBiome/tmpSecondaryBiome (observer-mutation hazard, deliberately skipped) (data.site.secondary_biome)
+  0.6a    PASS    `digest` publishes data.threats.hostiles
+  0.6b    PASS    `digest` publishes data.threats.hostiles_pardoned
+  0.6c    PASS    `digest` publishes data.threats.hostiles_unpardoned
+  0.6d    PASS    `digest` publishes data.threats.danger
+  0.6e    PASS    unpardoned = hostiles - pardoned, on the digest's own numbers
+  0.7     OK      precondition: `threat-pardon {}` answers with a listing
+  0.7a    PASS    `threat-pardon` publishes data.verb
+  0.7b    PASS    `threat-pardon` publishes data.ok
+  0.7c    PASS    `threat-pardon` publishes data.hostiles
+  0.7d    PASS    `threat-pardon` publishes data.hostiles_pardoned
+  0.7e    PASS    `threat-pardon` publishes data.hostiles_unpardoned
+  0.7f    PASS    `threat-pardon` publishes data.pardons_held
+  0.7g    PASS    `threat-pardon` publishes data.candidates
+  0.7h    PASS    `threat-pardon` publishes data.action
+  0.7i    PASS    `threat-pardon` publishes data.note
+  0.7j    PASS    `threat-pardon` publishes data.action.journal_seq
+  0.7k    PASS    a bare listing mutated nothing, so no journal line is owed (data.action.journal_seq)
+  0.8a    PASS    `advance` publishes data.reason
+  0.8b    PASS    `advance` publishes data.ticks_elapsed
+  0.8c    PASS    `advance` publishes data.speed
+  0.8d    PASS    `advance` publishes data.overshoot
+  0.8e    PASS    `advance` publishes data.overshoot_bound
+  0.8f    PASS    `advance` publishes data.overshoot_bound_speed
+  0.8g    PASS    `advance` publishes data.max_ticks_in_frame
+  0.8h    PASS    advance does NOT publish `data.ticks` (3.5's 4.8g read it) (data.ticks)
+  0.8i    PASS    advance does NOT echo `timeout_ticks` — the invariant is keyed on what the caller sent (4.2 does the same) (data.timeout_ticks)
+  0.9     OK      precondition: `research` answers
+  0.9a    PASS    `research` publishes data.source
+  0.9b    PASS    `research` publishes data.current.bench_required
+  0.9c    PASS    `research` publishes data.current.bench_ok
+
+==============================================================================
+PHASE 3 — K: the overshoot bound is the FASTEST speed's frame
+==============================================================================
+  3.1a    PASS    the advance ran to its tick budget (data.reason)
+  3.1b    PASS    …at the speed asked for (data.speed)
+  3.1c    PASS    the bound names the speed it came from (data.overshoot_bound_speed)
+  3.1d    PASS    …and equals TimeDriver.MaxTicksPerFrame for it (data.overshoot_bound)
+  3.1e    PASS    the measured overshoot is inside the published bound
+  3.1f    PASS    ticks_elapsed <= ticks + overshoot_bound
+  3.1g    PASS    …and no single frame ran more ticks than the bound
+  3.2a    PASS    the clock is running at Fast before the advance is armed (data.speed)
+  3.2c    PASS    the advance ran at Normal (data.speed)
+  3.2d    PASS    the PRE-ARM Fast is excluded from the high-water mark (data.overshoot_bound_speed)
+  3.2e    PASS    …so the bound is Normal's frame, not Fast's (data.overshoot_bound)
+  3.2f    PASS    and the overshoot is inside it
+  3.3a    PASS    the until-advance ended for a reason it names
+  3.3b    PASS    `advance` publishes data.overshoot_bound
+  3.3c    PASS    ticks_elapsed <= timeout_ticks + overshoot_bound (4.2's key)
+  3.3d    PASS    an until-advance publishes no `overshoot` (Target < 0), which is why 4.2 reads the BOUND (data.overshoot)
+  >>> arming a 20000-tick Ultrafast advance. PRESS `3` (Superfast) in the bench window in the next few seconds. <<<
+  3.4     SKIP    precondition NOT MET: a speed change was seen mid-advance
+          no `speed_changes` in the envelope — the key press did not land inside the advance. Re-run --phase 3 --speed-change.
+          This is a FIXTURE gap, not a session-13 failure. Stage it and re-run.

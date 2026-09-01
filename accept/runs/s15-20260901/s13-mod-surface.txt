@@ -1,0 +1,227 @@
+AutoRimmer session-13 acceptance — the five M1 mod findings
+  A  dev:spawn-thing refusals reach the journal row  (DevVerbs.cs, Blockers.cs)
+  J  bench_ok is a bench, not a gate                 (ResearchVerbs.cs, ColonyVerbs.cs)
+  K  overshoot_bound from the fastest speed          (TimeDriver.cs)
+  I1 digest.site                                     (WorldSafe.cs, DigestVerb.cs)
+  D  threat-pardon                                   (ThreatPardonVerbs.cs, DigestVerb.cs)
+protocol root: /home/dorian/projects/rimworld/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer
+phases: 0 + 1, 2, 3, 4, 5, 8, 9
+
+==============================================================================
+PHASE 0 — the bench, the dev switch, and THE SHAPE CONTRACT
+==============================================================================
+  0.1     OK      precondition: the bench answers `status`
+  0.1a    PASS    `status` publishes data.gameLoaded
+  0.1b    PASS    `status` publishes data.verbs
+  0.2     PASS    all 6 session-13 ops are registered
+  0.2a    PASS    a game is loaded (data.gameLoaded)
+  0.2b    PASS    no force-pausing modal is up before we begin (data.forcePause)
+  0.3     OK      precondition: devMode is ON (every fixture below needs it)
+  0.4a    PASS    `journal` publishes data.count
+  0.4b    PASS    `journal` publishes data.last_seq
+  0.4c    PASS    `journal` publishes data.events
+  journal watermark seq0 = 2
+  0.5     OK      precondition: `digest` answers
+  0.5a    PASS    `digest` publishes data.site
+  0.5b    PASS    `digest` publishes data.site.biome
+  0.5c    PASS    `digest` publishes data.site.biome_label
+  0.5d    PASS    `digest` publishes data.site.tile
+  0.5e    PASS    `digest` publishes data.site.avg_temp_c
+  0.5f    PASS    `digest` publishes data.site.rainfall
+  0.5g    PASS    `digest` publishes data.site.elevation
+  0.5h    PASS    `digest` publishes data.site.hilliness
+  0.5i    PASS    `digest` publishes data.site.swampiness
+  0.5j    PASS    `digest` publishes data.site.pollution
+  0.5k    PASS    `digest` publishes data.site.map_size
+  0.5l    PASS    `digest` publishes data.site.pocket_map
+  0.5q    PASS    digest.site publishes exactly WorldSafe.Site's fields (data.site)
+  0.5r1   PASS    no `biomes` — Tile.Biomes memoises tmpHasSecondaryBiome/tmpSecondaryBiome (observer-mutation hazard, deliberately skipped) (data.site.biomes)
+  0.5r2   PASS    no `hilliness_label` — Tile.HillinessLabel caches hillinessLabelCached (observer-mutation hazard, deliberately skipped) (data.site.hilliness_label)
+  0.5r3   PASS    no `landmark` — Tile.Landmark is Find.World.landmarks[tile], Odyssey-gated (observer-mutation hazard, deliberately skipped) (data.site.landmark)
+  0.5r4   PASS    no `max_temp` — Tile.MaxTemperature caches cachedMaxTemp (observer-mutation hazard, deliberately skipped) (data.site.max_temp)
+  0.5r5   PASS    no `max_temp_c` — Tile.MaxTemperature caches cachedMaxTemp (observer-mutation hazard, deliberately skipped) (data.site.max_temp_c)
+  0.5r6   PASS    no `min_temp` — Tile.MinTemperature caches cachedMinTemp (observer-mutation hazard, deliberately skipped) (data.site.min_temp)
+  0.5r7   PASS    no `min_temp_c` — Tile.MinTemperature caches cachedMinTemp (observer-mutation hazard, deliberately skipped) (data.site.min_temp_c)
+  0.5r8   PASS    no `secondary_biome` — Tile.Biomes memoises tmpHasSecondaryBiome/tmpSecondaryBiome (observer-mutation hazard, deliberately skipped) (data.site.secondary_biome)
+  0.6a    PASS    `digest` publishes data.threats.hostiles
+  0.6b    PASS    `digest` publishes data.threats.hostiles_pardoned
+  0.6c    PASS    `digest` publishes data.threats.hostiles_unpardoned
+  0.6d    PASS    `digest` publishes data.threats.danger
+  0.6e    PASS    unpardoned = hostiles - pardoned, on the digest's own numbers
+  0.7     OK      precondition: `threat-pardon {}` answers with a listing
+  0.7a    PASS    `threat-pardon` publishes data.verb
+  0.7b    PASS    `threat-pardon` publishes data.ok
+  0.7c    PASS    `threat-pardon` publishes data.hostiles
+  0.7d    PASS    `threat-pardon` publishes data.hostiles_pardoned
+  0.7e    PASS    `threat-pardon` publishes data.hostiles_unpardoned
+  0.7f    PASS    `threat-pardon` publishes data.pardons_held
+  0.7g    PASS    `threat-pardon` publishes data.candidates
+  0.7h    PASS    `threat-pardon` publishes data.action
+  0.7i    PASS    `threat-pardon` publishes data.note
+  0.7j    PASS    `threat-pardon` publishes data.action.journal_seq
+  0.7k    PASS    a bare listing mutated nothing, so no journal line is owed (data.action.journal_seq)
+  0.8a    PASS    `advance` publishes data.reason
+  0.8b    PASS    `advance` publishes data.ticks_elapsed
+  0.8c    PASS    `advance` publishes data.speed
+  0.8d    PASS    `advance` publishes data.overshoot
+  0.8e    PASS    `advance` publishes data.overshoot_bound
+  0.8f    PASS    `advance` publishes data.overshoot_bound_speed
+  0.8g    PASS    `advance` publishes data.max_ticks_in_frame
+  0.8h    PASS    advance does NOT publish `data.ticks` (3.5's 4.8g read it) (data.ticks)
+  0.8i    PASS    advance does NOT echo `timeout_ticks` — the invariant is keyed on what the caller sent (4.2 does the same) (data.timeout_ticks)
+  0.9     OK      precondition: `research` answers
+  0.9a    PASS    `research` publishes data.source
+  0.9b    PASS    `research` publishes data.current.bench_required
+  0.9c    PASS    `research` publishes data.current.bench_ok
+
+==============================================================================
+PHASE 1 — A: `dev:spawn-thing` refuses, and the JOURNAL says why
+==============================================================================
+  1.1     OK      precondition: a free buildable cell to stage on
+  staging cell: 125,125
+  1.2     OK      precondition: a plain WoodLog can be staged on that cell
+  1.2a    PASS    the accepted spawn reports ok (ok)
+  1.2b    PASS    an ACCEPTED spawn publishes no `failed` list (data.failed)
+  1.2c    PASS    …and no `placed_is_floor` (data.placed_is_floor)
+  1.2d    PASS    the accepted spawn journaled (data.dev.journal_seq)
+  1.2e    PASS    its journal row exists at that seq
+  1.2f    PASS    and the ROW carries no `failed` either — WhyNoSpawn returned null and nothing dressed that up as a cause (payload.failed)
+  1.2g    PASS    …and no `placed_is_floor` (payload.placed_is_floor)
+  1.2h    PASS    …and the row's label does not say REFUSED
+  1.3     OK      precondition: the second item on that cell is refused
+  1.3a    PASS    a spawn that placed NOTHING still answers ok:true (ok)
+  1.3b    PASS    …and reports placed:0 (data.placed)
+  1.3c    PASS    `dev:spawn-thing` publishes data.failed
+  1.3d    PASS    `dev:spawn-thing` publishes data.placed_is_floor
+  1.3e    PASS    placed is a FLOOR once anything failed (data.placed_is_floor)
+  1.3f    PASS    `dev:spawn-thing` publishes data.failed.0.at
+  1.3g    PASS    `dev:spawn-thing` publishes data.failed.0.reason
+  1.3h    PASS    `dev:spawn-thing` publishes data.failed.0.blocker
+  1.3i    PASS    the reason names the verb that refused
+  1.3j    PASS    WhyNoSpawn returned NULL, so the reason says the target cell would have taken it
+  1.3k    PASS    …and does NOT invent a per-cell cause
+  1.3l    PASS    Blockers.At found the ITEM holding the cell (GetFirstBuilding returned null here, which was M1 finding A) (data.failed.0.blocker.def)
+  1.3m    PASS    `dev:spawn-thing` publishes data.failed.0.blocker.label
+  1.3n    PASS    …classified as clearable by nothing (not a building, not mineable) (data.failed.0.blocker.removal)
+  1.3o    PASS    `dev:spawn-thing` publishes data.failed.0.blocker.at
+  1.3p    PASS    …and `refused` carries WHY THE CELL refused, not how the thing clears (data.failed.0.blocker.refused)
+  1.3q    PASS    `dev:spawn-thing` publishes data.failed.0.blocker.reason
+  1.3r    PASS    …while `reason` stays Classify's answer (null for a plain item: not mineable, not a building, so the game has no sentence to give) (data.failed.0.blocker.reason)
+  1.3s    PASS    `dev:spawn-thing` publishes data.failed.0.cell
+  1.3t    PASS    with no branch to name, the refusing cell IS the target (data.failed.0.cell)
+  1.3u    PASS    …and cell_role says so instead of naming a tier (data.failed.0.cell_role)
+  1.4     PASS    the refusal journaled at all (data.dev.journal_seq)
+  1.4a    PASS    the row exists at that seq
+  1.4b    PASS    it is a `dev` row (type)
+  1.4c    PASS    for this verb (payload.verb)
+  1.4d    PASS    and this step (payload.step)
+  1.4e    PASS    carrying placed:0 (payload.placed)
+  1.4f    PASS    `the journal row` publishes payload.failed
+  1.4g    PASS    the ROW's `placed_is_floor` says the count is a floor (payload.placed_is_floor)
+  1.4h    PASS    the ROW's failure carries the same reason the response did (payload.failed.0.reason)
+  1.4i    PASS    `the journal row` publishes payload.failed.0.blocker
+  1.4j    PASS    …including the blocker the response named (payload.failed.0.blocker.def)
+  1.4k    PASS    and the row's own LABEL says REFUSED, so a human scanning JOURNAL.md cannot read it as a success
+  1.4l    PASS    `the journal row` publishes payload.args
+  1.4m    PASS    the row echoes the def that was asked for (payload.args.def)
+  1.5     NOTE    the research bench PLACED on that cell (direct mode wipes with WipeMode.VanishOrMoveAside), so the CanSpawnAt branch was not exercised here — 1.6 is the branch M1 took. Cleaning it up.
+  1.6     NOTE    no --near-cell given, so the mode:"near" arm is NOT exercised. It shares its code with 1.3/1.4 (the else branch covers near for every def AND direct for non-buildings), but the near WORDING is only proved here. Find a cell >= 13 cells inside solid rock or deep water (`rwa map-view --rect ...`) and pass --near-cell x,z.
+  1.8a    PASS    an unknown cell-argument name is refused, not defaulted (ok)
+  1.8b    PASS    …as bad-args (error.code)
+  1.8c    PASS    the refusal names the key that was not read
+  1.8d    PASS    …and suggests the one that would have been
+  1.8e    PASS    a refused call publishes no data block (data)
+  1.9a    PASS    `dev:spawn-thing` publishes data.pos_source
+  1.9b    PASS    a cell that came from the argument says so (data.pos_source)
+  1.9c    PASS    and the ROW carries it, because the row is the durable record (payload.args.pos_source)
+  1.9d    PASS    …and a cell that came from the colony anchor says THAT (data.pos_source)
+  1.7     PASS    zero red errors across the spawn-refusal phase (data.count)
+
+==============================================================================
+PHASE 2 — J: `bench_ok` is a BENCH, not a gate
+==============================================================================
+  2.1     OK      precondition: the bench-project's prerequisite chain is finished
+  2.2     PASS    no research bench of any kind is on the map
+  2.2a    OK      precondition: the map really has no research bench left
+  2.3     OK      precondition: at least one startable project that needs no bench
+  2.3a    PASS    a project needing no bench is accepted with no bench on the map (data.ok)
+  2.3b    PASS    …and it really became the current project (data.current)
+  2.3c    PASS    `research-set` publishes data.bench_required
+  2.3d    PASS    `research-set` publishes data.bench_ok
+  2.3e    PASS    bench_required is NULL — vanilla demands no particular bench (data.bench_required)
+  2.3f    PASS    bench_ok is FALSE — there is no bench that can research it. THIS IS M1 FINDING J: the old expression short-circuited to true here (data.bench_ok)
+  2.3g    PASS    …and the note says the project will make no progress
+  2.4a    PASS    `research` publishes data.current.bench_required
+  2.4b    PASS    `research` publishes data.current.bench_ok
+  2.4c    PASS    the observer agrees: no bench required (data.current.bench_required)
+  2.4d    PASS    the observer agrees: no bench available (data.current.bench_ok)
+  2.5a    PASS    a bench-requiring project is REFUSED when no bench exists (data.ok)
+  2.5b    PASS    …naming the clause (data.blocked_by)
+  2.5c    PASS    …in the game's own terms
+  2.5c2   PASS    …and BlockedReason names the demanded def, which is the only place a caller can read it on this path
+  2.5d1   PASS    `research-set` publishes data.action.journal_seq
+  2.5d    PASS    nothing was journaled for a refusal (data.action.journal_seq)
+  2.5e    PASS    the refusal envelope carries no `bench_ok` (the pair lives on the success envelope and on `research.current`) (data.bench_ok)
+  2.5f    PASS    …and no `bench_required` (data.bench_required)
+  2.6     OK      precondition: somewhere to put a HiTechResearchBench
+  2.6a    OK      precondition: a HiTechResearchBench was spawned
+  2.6b    PASS    the bench-requiring project is now accepted (data.ok)
+  2.6c    PASS    `research-set` publishes data.bench_required
+  2.6d    PASS    bench_required names the demanded def — NOT null, which is the whole distinction M1 finding J restored
+  2.6d2   PASS    …and for MoisturePump that def is HiTechResearchBench
+  2.6e    PASS    bench_ok is TRUE — a bench that can research THIS project exists (data.bench_ok)
+  2.7a    PASS    bench_required is still null for that project (data.bench_required)
+  2.7b    PASS    …but bench_ok is now TRUE, because a bench exists. The field tracks benches, not the gate (data.bench_ok)
+  2.8     PASS    no research bench of any kind is on the map
+  2.8a    PASS    the destroyed bench is VISIBLE on the observer: bench_ok false (data.current.bench_ok)
+  2.8b    PASS    …while bench_required still names what the project demands (data.current.bench_required)
+  2.8c    PASS    …and the project is still selected (a lost bench does not deselect it) (data.current.def)
+  2.9     PASS    zero red errors across the research phase (data.count)
+
+==============================================================================
+PHASE 3 — K: the overshoot bound is the FASTEST speed's frame
+==============================================================================
+  3.1a    PASS    the advance ran to its tick budget (data.reason)
+  3.1b    PASS    …at the speed asked for (data.speed)
+  3.1c    PASS    the bound names the speed it came from (data.overshoot_bound_speed)
+  3.1d    PASS    …and equals TimeDriver.MaxTicksPerFrame for it (data.overshoot_bound)
+  3.1e    PASS    the measured overshoot is inside the published bound
+  3.1f    PASS    ticks_elapsed <= ticks + overshoot_bound
+  3.1g    PASS    …and no single frame ran more ticks than the bound
+  3.2a    PASS    the clock is running at Fast before the advance is armed (data.speed)
+  3.2c    PASS    the advance ran at Normal (data.speed)
+  3.2d    PASS    the PRE-ARM Fast is excluded from the high-water mark (data.overshoot_bound_speed)
+  3.2e    PASS    …so the bound is Normal's frame, not Fast's (data.overshoot_bound)
+  3.2f    PASS    and the overshoot is inside it
+  3.3a    PASS    the until-advance ended for a reason it names
+  3.3b    PASS    `advance` publishes data.overshoot_bound
+  3.3c    PASS    ticks_elapsed <= timeout_ticks + overshoot_bound (4.2's key)
+  3.3d    PASS    an until-advance publishes no `overshoot` (Target < 0), which is why 4.2 reads the BOUND (data.overshoot)
+  3.4     NOTE    skipped: --speed-change not given. This is THE finding-K check. Run `--phase 3 --speed-change`; the driver arms a long Ultrafast advance and prints a countdown — press 3 (Superfast) in the bench window while it runs. Nothing else on the bench can change the speed mid-advance: DrainCommands answers `busy` to every main-thread verb except `pause`.
+  3.5     PASS    zero red errors across the time phase (data.count)
+
+==============================================================================
+PHASE 4 — I1: `digest.site` says where the colony IS
+==============================================================================
+  4.1a    PASS    biome is a non-empty defName
+  4.1b    PASS    biome_label is a non-empty human label
+  4.1c    PASS    the label is not just the defName echoed
+  4.1d    PASS    tile is a world tile id (data.site.tile)
+  4.1e    PASS    avg_temp_c is a plausible annual average (-80..80 C)
+  4.1f    PASS    rainfall is non-negative
+  4.1g    PASS    elevation is a number
+  4.1h    PASS    hilliness is one of Verse.Hilliness's names
+  4.1i    PASS    swampiness is a 0..1 unit
+  4.1j    PASS    pollution is a 0..1 unit
+  4.1k    PASS    map_size is [x, z], both a real map dimension
+  4.1l    PASS    pocket_map is a bool
+  4.2a    PASS    site is byte-identical on a second read (it is field reads, not a computation)
+  4.2b    PASS    …with the same exact key set (data.site)
+  4.2c    PASS    no skipped lazy getter reappeared on the second read
+
+==============================================================================
+PHASE 5 — D: `threat-pardon`, the recorded decision not to fight
+==============================================================================
+  5.1     SKIP    precondition NOT MET: at least one counted hostile to pardon
+          `threat-pardon {}` lists no candidates: this map has no spawned, undowned, hostile pawn. Load the M1 colony (a dormant insect cluster) or stage one with `dev:incident {def:"RaidEnemy"}` and re-run. A raid will fight back; the insect cluster is the fixture the finding came from.
+          This is a FIXTURE gap, not a session-13 failure. Stage it and re-run.
