@@ -191,10 +191,16 @@ BLEEDOUT_KEYS = ["ticks", "blood_loss_severity", "outcome", "deathless_gene",
 # WorkCoverage.Section's FINE row: three fields, and the claim "a row that is
 # FINE costs three fields" is only worth anything if it is checked as a set.
 FINE_ROW_KEYS = ["work", "floor", "have"]
-# …and the UNDER row's full diagnosis. `enabled_but_incapable` is NOT in this
-# list: it is present only when the row has an impaired pawn, which is phase 4.
+# …and the UNDER row's full diagnosis. `enabled_but_incapable` IS in this list
+# as of the session-21 fix: it used to be emitted only when the row had an
+# impaired pawn, so an absent key meant both "nobody here is impaired" and
+# "this build does not publish that key" — the conflation 61794cd already ruled
+# against for `ticks_until_bleedout`. It is now an always-present, possibly
+# empty list, like its `available_pawns` and `candidates` siblings. 3.3p asserts
+# the EMPTY case, which is the half that proves the emission is unconditional.
 UNDER_ROW_KEYS = ["work", "floor", "floor_on", "floor_by", "have", "short_by",
-                  "capable", "enabled", "available", "available_pawns", "candidates"]
+                  "capable", "enabled", "available", "available_pawns", "candidates",
+                  "enabled_but_incapable"]
 
 # PawnSerializer.HediffCap. Phase 9 re-parses it from the source.
 HEDIFF_CAP = 20
@@ -1250,7 +1256,7 @@ def phase3():
     di = rows.index(dr) if dr in rows else 0
     base = "data.work_coverage.rows.%d" % di
     keys = sorted(set(UNDER_ROW_KEYS))
-    got = sorted(set(dr) - {"enabled_but_incapable"})
+    got = sorted(set(dr))
     check("3.3a", "an UNDER row carries the whole diagnosis",
           ARGS.dry_run or got == keys, "exactly %s" % keys, got)
     eq("3.3b", "Doctor's floor is 2", e, base + ".floor", DOCTOR_FLOOR)
@@ -1283,6 +1289,19 @@ def phase3():
                       "(Pawn_WorkSettings.EnableAndInitialize sorts by "
                       "AverageOfRelevantSkillsFor descending)",
               skills == sorted(skills, reverse=True), "skill descending", skills)
+
+    # THE EMPTY CASE, WHICH IS THE ONE THAT PROVES THE KEY IS UNCONDITIONAL.
+    # 3.0b left exactly one colonist with Doctor enabled and 3.3e says that one
+    # is AVAILABLE, so `Impaired` is arithmetically empty here (enabled 1 =
+    # available 1 + impaired + non-responders). Before the session-21 fix the
+    # key was simply absent in this state, and `shape()` at 4.5a only ever saw
+    # the populated case — which is how the same omission survived into
+    # `work-cover` and failed acceptance 7.2h there instead.
+    shape("3.3p", "digest", e, base + ".enabled_but_incapable", list)
+    eq_val("3.3q", "…and it is EMPTY rather than absent when nobody enabled is "
+                   "missing a capacity — an absent key would mean both 'nobody "
+                   "is impaired' and 'this build does not publish it'",
+           dr.get("enabled_but_incapable"), [])
 
     # ---- a FINE row: three fields and no more -------------------------------
     fine = [(i, r) for i, r in enumerate(rows)
@@ -1441,13 +1460,19 @@ def phase4():
                     "asks for.")
 
     finding("4.7", "`enabled_but_incapable` is unreachable on a COVERED row: "
-                   "WorkCoverage.Section builds the diagnosis inside the "
+                   "WorkCoverage.Section builds the whole diagnosis inside the "
                    "`if (r.Under)` branch, so a colony with two available doctors "
                    "and a handless third is told nothing about the third. The "
                    "block is a diagnosis and there is arguably no problem to "
                    "diagnose — but 'you have a doctor who cannot tend' is the "
                    "kind of thing the M1 post-mortem exists about. Filed on "
-                   "40ed42f, not asserted either way.")
+                   "40ed42f, not asserted either way. NARROWER THAN IT WAS: the "
+                   "INNER guard `if (r.Impaired.Count > 0)` was a separate "
+                   "defect and is fixed — the list is now always present and "
+                   "empty when nobody is impaired (3.3q, 7.2h, 9.8d, 9.11a). "
+                   "What is left is whether a FINE row should stop costing three "
+                   "fields, which is the digest's byte budget and a design "
+                   "decision rather than a shape bug.")
 
 
 # ------------------------------------------------------------------- phase 5 --
@@ -2006,7 +2031,24 @@ def phase7():
            "data.still_under.0.floor", DOCTOR_FLOOR)
         eq("7.2g", "…and the promotion it COULD make was still made", e,
            "data.still_under.0.enabled_this_call", 1)
-        shape("7.2h", "work-cover", e, "data.still_under.0.enabled_but_incapable")
+        # THE ELEVENTH KEY, AND THE ONE THAT WAS CONDITIONAL. `work-cover`'s own
+        # note tells a caller to branch on this list — "`enabled` short means
+        # promote, `capable` short means recruit, a non-empty
+        # `enabled_but_incapable` list means the fix is surgery" — and until the
+        # session-21 fix it was emitted only `if (r.Impaired.Count > 0)`. This
+        # fixture has Doctor OFF across the whole roster (`set_doctor(ids, 0)`
+        # above), so nobody is enabled-but-incapable and the OLD build published
+        # nothing at all here. That is why this is the check that caught it: an
+        # absent key is indistinguishable from a wrong dig path.
+        shape("7.2h", "work-cover", e, "data.still_under.0.enabled_but_incapable",
+              list)
+        imp = as_list(dig(e, "data.still_under.0.enabled_but_incapable"))
+        en = dig(e, "data.still_under.0.enabled")
+        check("7.2i", "…and the impaired are a SUBSET of the enabled, which is "
+                      "what the field means: WorkCoverage.Compute only reaches "
+                      "`Impaired` for a pawn already in `Enabled`",
+              ARGS.dry_run or (num(en) and len(imp) <= en),
+              "len(enabled_but_incapable) <= enabled", (len(imp), en))
 
     # ---- (d) `no-candidate` -------------------------------------------------
     # Now the one promotable pawn is enabled, so there is nobody left at all.
@@ -2461,6 +2503,24 @@ def phase9():
         keys = re.findall(r'\["(\w+)"\]\s*=', m.group(0)) if m else []
         eq_val("9.8c", "…and the FINE row's field list matches FINE_ROW_KEYS",
                keys, FINE_ROW_KEYS)
+        # THE SESSION-21 SHAPE FIX, RE-DERIVED. `enabled_but_incapable` used to
+        # be emitted only `if (r.Impaired.Count > 0)`, which made an absent key
+        # mean both "nobody is impaired" and "this build does not publish it".
+        # 3.3q asserts the empty case live; this asserts that the SOURCE cannot
+        # quietly go back to conditional, which is the half a live suite cannot
+        # see (a fixture with an impaired pawn passes either way — that is
+        # exactly how the same omission survived into `work-cover`).
+        # The guard is looked for as CODE — a line that STARTS with the `if`,
+        # not the string anywhere — because the source comment that records the
+        # fix quotes the old guard verbatim, and a substring search would read
+        # its own changelog as a regression.
+        guard = re.search(r"^\s*if \(r\.Impaired\.Count > 0\)", src, re.M)
+        check("9.8d", "WorkCoverage.Section publishes `enabled_but_incapable` "
+                      "UNCONDITIONALLY on an under-covered row",
+              'd["enabled_but_incapable"] = imp;' in src and not guard,
+              "the assignment present and not guarded by "
+              "`if (r.Impaired.Count > 0)`",
+              "guard still present" if guard else "assignment missing")
 
     src = _src("TriageVerbs.cs")
     if src is None:
@@ -2490,6 +2550,42 @@ def phase9():
         check("9.10a", "`work_coverage` is registered as a predicate section, "
                        "which is what phase 7b arms against",
               "work_coverage" in secs, "work_coverage among %s" % (secs,), secs)
+
+    src = _src("PawnManageVerbs.cs")
+    if src is None:
+        note("9.11", "Source/AutoRimmer/PawnManageVerbs.cs is not in this "
+                     "checkout; work-cover's refusal shape could not be "
+                     "re-derived.")
+    else:
+        # The same fix in its second home — and the one acceptance 7.2h caught.
+        guard = re.search(r"^\s*if \(r\.Impaired\.Count > 0\)", src, re.M)
+        check("9.11a", "`work-cover`'s `still_under` row publishes "
+                       "`enabled_but_incapable` UNCONDITIONALLY",
+              'why["enabled_but_incapable"] = imp;' in src and not guard,
+              "the assignment present and not guarded by "
+              "`if (r.Impaired.Count > 0)`",
+              "guard still present" if guard else "assignment missing")
+
+    src = _src("JournalHooks.cs")
+    if src is None:
+        note("9.12", "Source/AutoRimmer/JournalHooks.cs is not in this checkout; "
+                     "the transition ruling could not be re-derived.")
+    else:
+        # THE 2026-09-01 RULING, RE-DERIVED FROM THE SOURCE. 7.5a asserts on a
+        # bench that an advance across an ALREADY-downed colonist completes; it
+        # only stays true while the casualty journal rows come from POSTFIXES ON
+        # THE TRANSITION. A prefix, a poll, or a hook moved onto `Pawn.Downed`
+        # would turn the halt into a state halt and wedge a ten-day run on the
+        # first casualty nobody can rescue — and 7.5a would then fail, correctly,
+        # but only on a bench. This is the same claim, checkable offline.
+        check("9.12a", "the casualty journal rows are POSTFIXES on the "
+                       "TRANSITIONS `MakeDowned` and `SetDead` — the whole basis "
+                       "of the transition-not-state ruling (722c951 #2, DESIGN "
+                       "2026-09-01)",
+              'nameof(Pawn_HealthTracker.SetDead)' in src
+              and 'HarmonyPatch(typeof(Pawn_HealthTracker), "MakeDowned")' in src
+              and src.count("public static void Postfix") >= 2,
+              "both transitions patched, both as Postfix", None)
 
 
 # ---------------------------------------------------------------------- main --
