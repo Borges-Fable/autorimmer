@@ -1159,3 +1159,50 @@ queue by default (an agent flailing mid-experiment must not page triage).
   succeed and a warning scrolls past inside two minutes of boot log. That
   refusal is what stops a future session recreating the collision by tidying the
   save directory.
+- 2026-09-01 (session 13) — **Siting is a survey of 2–3x the footprint, the
+  survey is structured, the ASCII crop rides with it, and the PNG stays
+  CLI-side.** Live bench `20260901T121508`: `find-rect {w:3,h:2}` approved a
+  box that the game then refused for granite on the interaction cell one row
+  south of it — `SpatialVerbs.CheckRect` walks only the box's own cells and
+  knows no def, while `GenConstruct.InteractionCellStandable` (run by both
+  `GenSpawn.CanSpawnAt` and `GenConstruct.CanPlaceBlueprintAt`) refuses any
+  non-Standable thing on the cell `ThingUtility.InteractionCellsWhenAt` names.
+  Evan's requirement, verbatim: "the agent looks at an area 2-3x bigger than
+  whatever they're building." So the read is `site-survey` (`c718e4a`), three
+  tiers — footprint (the game's gate), interaction cell (standable, exclusive
+  against other interaction cells per `PlaceWorker_PreventInteractionSpotOverlap`,
+  tolerates a chair), margin (computed facts, not a gate, over the footprint
+  expanded by `max(3, max(w,h))` per side). The picture question — structured,
+  ASCII, or the 2.5 PNG — was a false choice: the structured survey is the
+  CONTRACT (verbs act on it, suites prove it by shape); the ASCII crop is
+  embedded in the same result because the agent reads it mid-loop with no
+  round trip and in `map-view`'s alphabet; the PNG keeps 2.5's invariant ("no
+  game-side image rendering; a pure function of dump + catalog") and gains a
+  CLI-side overlay input that is the survey's tiers. One source of truth,
+  three renderings, no image code in the mod. Two conventions pinned by the
+  same finding: `find-rect`'s `at` is a rect CORNER while placement is about
+  `GenAdj.OccupiedRect`'s CENTRE, and for even sizes `CellRect.CenterCell`
+  (`min + size/2`) and `OccupiedRect` (`center - (size-1)/2`) disagree by one
+  cell — so every siting read publishes the game's `pos`, computed the game's
+  way, and a caller never derives it. And the shared gate routine is ONE
+  routine: `CanPlaceBlueprintAt(godMode:false)` plus `Designator_Build.Visible`'s
+  clauses through `WorldSafe.Finished`, consumed by `site-survey`,
+  `find-rect {def}`, `dev:spawn-thing {buildable:true}`, `site-audit` and
+  3.3's `build`/`place-layout` — the acceptance asserts the survey's verdict
+  and the build verb's refusal are the same sentence.
+- 2026-09-01 (session 13) — **Dev staging keeps the god-hand by default;
+  `buildable:true` is opt-in, and a staged base proves itself with
+  `site-audit`.** `GenSpawn.CanSpawnAt` runs no PlaceWorker — those live only
+  in `CanPlaceBlueprintAt`'s closing loop — and `dev:spawn-thing` passes
+  `canWipeEdifices:true` then spawns `WipeMode.VanishOrMoveAside`, whose
+  `WipeExistingThings` destroys walls, rock and buildings in the footprint
+  with `DestroyMode.Vanish` and no journal line. So every dev-staged building
+  is an untested claim about what 3.3's blueprint path could produce, and M1's
+  fixture was one. Evan chose opt-in over flipping the default (2026-09-01):
+  the god-hand is what `dev:*` is FOR and the existing suites stage with it;
+  what changes is that (a) `buildable:true` runs the real gate and refuses
+  with the game's sentence, (b) the god-hand path reports `wiped[]` so an
+  erased wall is never silent even when intended, and (c) `site-audit`
+  re-runs the validator over every player building in a rect, which is how
+  "instant ≡ built-blueprint" on 3.3 becomes a provable bullet instead of an
+  undefined diff. `3a5ff6c`.
