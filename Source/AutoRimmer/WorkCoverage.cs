@@ -23,10 +23,13 @@ namespace AutoRimmer
     //    RimWorld's own "somebody must be able to do this", consumed by
     //    `Verse/StartingPawnUtility.WorkTypeRequirementsSatisfied` and
     //    `RequiredWorkTypesDisabledForEveryone`, which refuse to start a colony
-    //    where a flagged work type is disabled for every starting pawn. Twelve
+    //    where a flagged work type is disabled for every starting pawn. NINE
     //    vanilla types carry it (Firefighter, Warden, Construction, Growing,
-    //    Mining, PlantCutting, Crafting, Hauling, Cleaning, plus Childcare from
-    //    Biotech). Their floor here is 1, and it is a floor on CAPABILITY,
+    //    Mining, PlantCutting, Crafting, Hauling, Cleaning), plus Childcare
+    //    from Biotech, making TEN. This comment said "twelve" while listing ten
+    //    until session 21 counted them in WorkTypes.xml; twelve is what a bench
+    //    REPORTS, since Doctor below is an eleventh row and a modded Diplomat a
+    //    twelfth, which is why the wrong number read as confirmed. Their floor here is 1, and it is a floor on CAPABILITY,
     //    because that is what the game checks. A modded work type that sets the
     //    flag is picked up for free.
     //

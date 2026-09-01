@@ -2039,9 +2039,14 @@ queue by default (an agent flailing mid-experiment must not page triage).
   .requireCapableColonist` is RimWorld's own "somebody must be able to do this",
   consumed by `Verse/StartingPawnUtility.WorkTypeRequirementsSatisfied`, which
   refuses to start a colony where a flagged type is disabled for every starting
-  pawn. Twelve vanilla types carry it — Firefighter, Warden, Construction,
-  Growing, Mining, PlantCutting, Crafting, Hauling, Cleaning, plus Childcare
-  from Biotech. Their floor is 1 and it is a floor on CAPABILITY, because that
+  pawn. NINE vanilla types carry it — Firefighter, Warden, Construction,
+  Growing, Mining, PlantCutting, Crafting, Hauling, Cleaning — plus Childcare
+  from Biotech, making TEN. (This said "twelve" while enumerating ten from
+  2026-09-01 until session 21 counted them in
+  `Data/Core/Defs/WorkTypeDefs/WorkTypes.xml`. Twelve is what a bench with
+  Biotech and a modded `Diplomat` actually REPORTS, because our own Doctor
+  deviation is an eleventh row and `Diplomat` a twelfth — which is exactly why
+  the wrong number looked confirmed by every read.) Their floor is 1 and it is a floor on CAPABILITY, because that
   is what the game checks; a modded type that sets the flag is picked up free.
   Note what that check is not: it runs ONCE, at world-gen, against the STARTING
   pawns, and never again — a colony that loses its only miner on day 40 is never
