@@ -2090,3 +2090,213 @@ queue by default (an agent flailing mid-experiment must not page triage).
   finding is that `rescue` was shipped, forces the job, interrupts `LayDown` —
   and was called zero times in 195 ops while the response tried was a
   work-priority flip. `40ed42f`, `61794cd`.
+- 2026-09-01 (session 21) — **An unknown argument name is OBSERVED, not
+  declared: `VerbArgs` keeps a read log, `supplied − queried` is the
+  unknown-argument set, and it is REPORTED for every verb and REFUSED only
+  where a default mutates.** Session 15's rejection of the per-verb whitelist
+  stands and is not re-litigated — 120 verbs, 22 handlers that read nothing at
+  their own call site, 88 `(verb, key)` pairs the suites send through shared
+  helpers, five suite call sites that build their dict at runtime. But every
+  one of those is an objection to a SECOND SOURCE OF TRUTH, and none of them is
+  an objection to watching what the verb actually read. `VerbArgs` is one
+  sealed class over one `Dictionary<string, object>`, and every accessor —
+  `Has`, `Raw`, `Str`, `StrReq`, `Bool`, `Num`, `NumReq`, `Int`, `IntReq`,
+  `Long`, `StrList`, `NearMiss` — now funnels through one private `Look(key)`
+  that marks the key. **The 22-forwarder case is not a special case at all**,
+  because the log follows the OBJECT: `TimeDriver.Start(ctx.Command, ctx.Args)`
+  hands over the same `VerbArgs`, so its reads land on the parent's log.
+  Runtime-built caller dicts are likewise a non-issue, because nothing is
+  compared against a list. `trade-set` is the proof by construction: it reads
+  its singular sugar as `foreach (var k in new[]{"thing","index","count","buy",
+  "sell"}) if (ctx.Args.Has(k))` — a key that no static scan can see and that
+  the read log gets right for free. Nothing here needs updating when a verb
+  gains an argument, which is what worker B's `advance {unread_ok,
+  through_casualties}` and worker C's `posture` land into this round.
+  **THE FORWARDING AUDIT, because a linked child log would have been a bug.**
+  Nine `new VerbArgs(...)` exist. One is the dispatch root. Seven are NESTED
+  SUB-OBJECT parses over a value the parent already read through `Raw(key)` —
+  `until.event` (`TimeDriver`), `until.condition` (`StateWatch.Parse`),
+  `filter` (`DesignateEngine.FromFilter`), `set` (`SpatialVerbs.Landmark`),
+  `drugs[i]` (`PolicyVerbs`), `set[i]` (`PawnManageVerbs`), `elements[i]`
+  (`LayoutVerbs`) — and they must NOT union into the parent, or an inner key
+  would be counted as a top-level read. The ninth is `StarterKit.Sub`, the only
+  real forward, and it needs no link either: it hands the child a dict the
+  parent CONSTRUCTED, and to construct it the parent had to read its own args
+  through accessors that already marked them. **A nested object's own unknown
+  keys are therefore still unchecked** — `until.condition {pth: …}` is silent
+  except where `NearMiss` already covers it — and that is the acknowledged
+  remaining gap.
+  **WHY IT REPORTS RATHER THAN REFUSES, measured.** The read log is only
+  complete after the handler returns, and 729 accessor call sites were swept:
+  ~290 are conditional, and **73 keys across 26 verbs are read only on SOME
+  paths while the verb still returns success.** Four named shapes make a
+  blanket refusal unshippable. (1) `dry_run` skips the block that reads the
+  keys: `ZoneVerbs.Add` calls `Shape()` — the only reader of `label`,
+  `priority`, `filter`, `plant`, `allow_sow`, `allow_cut` — under `if
+  (!dryRun)`, so `zone {op:"add", plant, label, dry_run:true}`, the exact
+  preflight an agent should run, would be refused. (2) A fallback unread on the
+  happy path: `dev:spawn-thing` reads `pos` only when `stockpile` is absent or
+  storage refused, which is the documented "store it, else drop it here" call.
+  (3) `queue` sits after the per-pawn gates in twelve verbs (`attack`, `equip`,
+  `wear`, `drop`, `consume`, `extinguish`, `beat-fire`, `tend`, `repair`,
+  `man-turret`, `rest-until-healed`, `TakeToBed`), so `wear {pawn, thing,
+  queue:true}` refused by its gate is a success envelope with `queue` unread —
+  and `accept/4087644-order-honesty.py` is a suite about exactly those
+  refusals. (4) Whole-verb refusals return BEFORE the config block: `bill-add`
+  answers `NotAWorkTable` before `ValidateBillArgs` reads its twenty levers, so
+  refusing would replace an informative refusal with "unknown args". So
+  `Result` gains `IgnoredArgs`, the poller writes it as a top-level
+  **`ignored_args {keys, read, detail, journal_seq_from?, journal_seq_to?}`**
+  present ONLY when a key went unread, and `Log.Warning` — captured by
+  `JournalHooks`' patch on `Log.Warning` — puts the same finding in the journal
+  as a durable `warning` row so a ten-day run can be audited for dropped
+  arguments afterwards. The log half is main-thread only; a `MainThread=false`
+  handler runs on the poller thread and may not touch Verse. `advance` is the
+  one verb with no envelope of ours (it returns `DeferredResult` and
+  `TimeDriver` writes its own result), so the journal row is its only channel.
+  The suggestion in `detail` is Levenshtein against the keys THIS CALL READ —
+  derived, so it works for arguments added after it was written — while
+  `NearMiss`'s call-site alias list still covers `at` -> `pos`, an edit
+  distance of 3 that no conservative distance rule would ever find.
+  **WHERE IT DOES REFUSE, and why that is safe.** git-bug 7382bdd comment #7
+  named the shape: "a defaulted list argument whose default is non-empty and
+  whose steps mutate". The tree has exactly three — `journal-selftest` (default
+  `letter, message, error, downed, break`, of which `downed` is
+  `HealthUtility.DamageUntilDowned` and `break` starts a Berserk),
+  `pawn-fixture` (`wound, sadden, tatter`) and `world-fixture` (`bench, bill,
+  stockpiles, growing, research, letter`). All three now call
+  `VerbArgs.RefuseStray(op, ownArgs, …)` BEFORE the first step, unconditionally
+  rather than only when the default fires, so a typo is refused with nothing
+  mutated. `ownArgs` is the verb's full argument list written beside the code
+  that reads it, and it is a MESSAGE-ONLY list: the detection is the read log,
+  which consults it not at all, so its drift mode is a worse sentence and never
+  a refused legitimate call — which is precisely the asymmetry that made a
+  120-verb registry unacceptable and makes a three-site one fine. It is also
+  what makes refusing safe there despite the conditional-read finding above:
+  `journal-selftest`'s step-gated `save_name`, `power_lamps` and `error_text`
+  are in the list, so they are accepted whether or not their step ran.
+  `accept/s13-mod-surface.py` phase 9 re-derives all three lists from the
+  source and fails on drift (9.10a-c), and re-derives that every accessor
+  reaches the backing dictionary only through `Look()` (9.9a-b) — because an
+  accessor added later that read `raw` directly would make a legitimate key
+  look unread, which is the rejected declaration's failure mode sneaking back
+  in through the mechanism that replaced it.
+  **BULLET 1 AS LITERALLY WRITTEN IS STILL NOT MET, and this says so in those
+  words.** "A verb call carrying an unrecognised argument key is REFUSED with
+  `bad-args` naming the key" is true for the three fixture verbs and for the
+  `NearMiss` aliases, and false everywhere else, where the call succeeds and
+  publishes `ignored_args`. What IS met for all 120 verbs is the defect in the
+  issue's title — an unknown argument name is no longer SILENT — and the
+  destructive instance comment #7 filed is refused before it can act.
+  `7382bdd`.
+- 2026-09-01 (session 21) — **`hostility_response` is decided ABOVE seek, not
+  beneath it, so `posture` is one verb and `Attack` is its load-bearing
+  setting.** `b1b3060` and `[[seek-off-is-a-decision-to-flee]]` both held that
+  SeekAndKill's `ThinkTreeInjector` puts its node above
+  `ThinkNode_ConditionalColonist` and therefore makes the vanilla flee node
+  unreachable, so the echoed field "describes a node nothing consults".
+  **Refuted.** `RimWorld/JobGiver_ConfigurableHostilityResponse` — the only
+  producer of `JobDefOf.FleeAndCower` for a sane colonist — is not in the
+  `Humanlike` tree at all; it sits in **`HumanlikeConstant`** under
+  `ThinkNode_ConditionalCanDoConstantThinkTreeJobNow`. `SeekAndKill/
+  ThinkTreeInjector.Inject` skips any tree whose ROOT holds none of its four
+  anchors, and `HumanlikeConstant`'s root holds only
+  `ThinkNode_Subtree(Despawned)`, that conditional, and
+  `ThinkNode_ConditionalCanDoLordJobNow` — so seek is never injected there. And
+  `Verse.AI/Pawn_JobTracker.DetermineNextJob` runs
+  `DetermineNextConstantThinkTreeJob()` FIRST and returns without touching
+  `MainThinkNodeRoot`, while `JobTrackerTickInterval` re-runs the constant tree
+  every 30 ticks (`RimWorld/AITuning.ConstantThinkTreeJobCheckIntervalTicks`)
+  and starts its job with `JobCondition.InterruptForced`. A second consumer says
+  the same one level down: `JobGiver_ReactToCloseMeleeThreat` is at index 6 of
+  the `Humanlike` root — above the index-11 insertion point — and returns null
+  unless `hostilityResponse == Attack`. **The M1 evidence the issue cited as
+  proof is the refutation**: op 109 had seek ON, hostility `Flee`, and Captain
+  in `JobDriver_FleeAndCower`, which is impossible if the flee node is
+  unreachable. So `Flee` BEATS seek, and seek ON with `Flee` is the worst
+  combination available. **The flee branch has two halves and this entry
+  conflated them with the ATTACK branch's numbers until the orchestrator caught
+  it on 2026-09-01** — recorded rather than quietly corrected, because a
+  citation that names the wrong method is worse than none. The TRIGGER is
+  `SelfDefenseUtility.ShouldStartFleeing`, which `TryGetFleeJob` opens with, and
+  it is the only place distance and sight are tested: `ShouldFleeFrom` with
+  `checkDistance:true, checkLOS:false` over `ThingRequestGroup.AlwaysFlee` and
+  `checkDistance:true, checkLOS:true` over `ThingRequestGroup.AttackTarget` in a
+  9-region `BreadthFirstTraverse`, where `checkDistance:true` is
+  `InHorDistOf(pawn.Position, 8f)`. The DESTINATION is a different question:
+  `TryGetFleeJob` re-gathers threats with `checkDistance:false, checkLOS:false`
+  at all three of its own call sites and passes the lot to
+  `CellFinderLoose.GetFleeDest`, so the pawn runs from EVERY hostile the caches
+  hold — which is how one crow inside 8 cells produced Captain's 150-cell run.
+  The `maxDist = 8f` / `Clamp(EffectiveRange * 0.66, 2, 20)` pair and the
+  `NeedLOSToAll` scan flag belong to `TryGetAttackNearbyEnemyJob` and are cited
+  only there. `TryGiveJob` also bails to null before the switch on
+  `PlayerForcedJobNowOrSoon`, `pawn.Downed` and an Anomaly
+  `LordJob_PsychicRitual`, which is why the `downed` and `player-controlled`
+  verdicts cite the constant tree as well as the seek side. That is M1 day 1 and
+  M1 day 4 in one state. **`on_contact` is therefore
+  computable and is published**, per pawn and as a rollup, as the resolved
+  decision order rather than a field echo: downed / mental-break /
+  player-controlled / flee / attack-then-seek / attack-nearby / seek-only /
+  ignore, each carrying the member that decides it. What it deliberately does
+  not model is said rather than implied — asleep (`ThinkNode_
+  ConditionalLyingDown` at root index 0; the constant gate needs
+  `pawn.Awake()`) and mid-forced-job (`PawnUtility.PlayerForcedJobNowOrSoon`)
+  are transient, and a field that flickers with the day/night cycle is not a
+  posture. `b1b3060`.
+- 2026-09-01 (session 21) — **`posture` REFUSES an absent area rather than
+  creating one, and refuses a zero-cell one; and no lever at all is a pure
+  read.** `posture {area, pawns?, seek?, hostility?, dry_run?}` sets the three
+  settings that must agree and reports per pawn what it applied and what it
+  refused, with each lever's widget gate cited
+  (`PawnColumnWorker_AllowedArea.DoCell` + `Area.AssignableAsAllowed` via
+  `assign`'s own `AreaGate`, CALLED not copied;
+  `PawnColumnWorker_HostilityResponse.DoCell` plus
+  `HostilityResponseModeUtility.DrawResponseButton_GenerateMenu`, whose menu
+  omits `Attack` for a pawn with `WorkTags.Violent` disabled;
+  `SeekAndKill/Patch_PawnGetGizmos.ShowsSeekGizmo`, called for the same reason
+  `seek-at-will` calls it). **Creating the area on demand is refused because the
+  fix would manufacture the bug**: a fresh `Area_Allowed` is EMPTY and
+  `RimWorld/ForbidUtility.InAllowedArea` short-circuits on `TrueCount > 0`, so
+  an auto-created area binds nothing while the verb reports every pawn bound —
+  the exact false report the issue exists to remove. Two lesser reasons hold the
+  same way: `new Area_Allowed(...)` rolls `Rand.Value` twice (determinism class
+  R), and `area allowed create` / `area allowed add` already ship. The same
+  short-circuit makes a NAMED zero-cell area a bad-args refusal unless
+  `allow_empty_area:true`, and makes `digest.posture.area_bound` count a pawn as
+  bound only when its EFFECTIVE area has cells. Passing any one lever requires
+  `area`, because a posture with two of three settings is the defect; passing
+  none is a read, the same contract `seek-at-will` already has. **`n/m` ships as
+  a string AND as integers** — the issue asks for `n/m`, which is the glance,
+  but `advance {until:{condition}}` refuses `<` on a string rather than coercing
+  it (session 19), so `will_seek` is `"2/3"` and `will_seek_n`/`will_seek_of`
+  are the numbers. Denominators differ on purpose and are published in words:
+  `will_seek` and `attack` over violence-capable free colonists, `area_bound`
+  over those whose `SupportsAllowedAreas` is true. Registered as a predicate
+  section on session 19's axis — no `Room.Role`, no `GetStatValueAbstract`, no
+  pathfind; `Pawn.CombinedDisabledWorkTags` and
+  `Pawn_StoryTracker.DisabledWorkTagsBackstoryTraitsAndGenes` both recompute and
+  write no cache, which is why the violence test is the TAG one rather than
+  `GetDisabledWorkTypes`, whose getter fills `cachedDisabledWorkTypes`.
+  `b1b3060`.
+- 2026-09-01 (session 21) — **All three posture settings survive a save/load
+  round trip, and the digest is what proves it rather than this sentence.**
+  Read rather than assumed. `RimWorld/Pawn_PlayerSettings.ExposeData` scribes
+  `hostilityResponse` (`Scribe_Values`, default `Flee` — which is also the field
+  initialiser, so a fresh colony is a colony of fleers) and `allowedAreas`
+  (`Scribe_Collections`, `LookMode.Reference` on both key and value, with a
+  save-time prune of null entries and a PostLoadInit clear for Roamers). The
+  third is a third party's and was the one in doubt:
+  `SeekAndKill/SeekAndKillGameComponent.ExposeData` scribes the toggle set as
+  `SK_SeekPawns` — but ONLY when `PSInterop.PsToggleShared` is false, because
+  with Perspective Shift present PS's `seekAtWillPawns` is the single source of
+  truth and S&K writes nothing. PS is OUT of the bench modlist, so on this bench
+  the set is S&K's own and it persists. `LoadedGame` then runs `PruneStaleIds`,
+  which drops ids absent from `PawnsFinder.AllMapsWorldAndTemporary_Alive` and
+  bails entirely when `Find.Maps.Count == 0`, so a living colonist is never
+  pruned. The posture therefore survives — and `digest.posture` is built so that
+  when it does NOT, the read says so on its own: `will_seek`, `area_bound` and
+  `attack` are counted from live state at every glance, `seek_mod` and
+  `seek_mod_missing` name a mod that stopped answering, and `flee_risk` names
+  every violence-capable pawn whose response has fallen back to `Flee`.
+  `b1b3060`.

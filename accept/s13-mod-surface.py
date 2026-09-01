@@ -913,6 +913,112 @@ def phase1():
     if ids:
         send("dev:destroy", {"things": ids})
 
+    # 1.10 THE GENERAL CASE — an unknown argument NAME on any verb, which is
+    #      this issue's bullet 1 and which the near-miss detector above does
+    #      NOT satisfy. The 2026-09-01 bench pass measured the hole and said
+    #      so: `dev:spawn-thing --def WoodLog --pos … --mode direct --wibble 3`
+    #      returned ok:true and placed the log, and `things`, `find-rect`,
+    #      `site-survey`, `map-view`, `nearest`, `reachable`, `pawns` and
+    #      `digest` all took `--wibble 3` in silence.
+    #
+    #      What closes the SILENCE is VerbArgs' READ LOG, not a declaration:
+    #      every accessor marks the key it was asked for, so after the handler
+    #      returns, `supplied − queried` is the unknown-argument set — derived
+    #      from the code that does the reading, covering all 120 verbs, needing
+    #      no update when a verb gains an argument.
+    #
+    #      IT REPORTS, IT DOES NOT REFUSE, and that is measured: 73 keys across
+    #      26 verbs are read only on some paths while the verb still succeeds
+    #      (`zone {op:"add", plant, dry_run:true}`, `wear {queue:true}` when the
+    #      gate refuses, every `bill-add` refusal that returns before its twenty
+    #      levers are read). Refusing those would refuse legitimate calls
+    #      mid-run. The colony-ending case is caught instead by the
+    #      PRE-mutation guard in 1.11.
+    e = send("digest", {"wibble": 3})
+    eq("1.10a", "a junk key does not stop the verb — it is reported, not refused",
+       e, "ok", True)
+    shape("1.10b", "digest", e, "ignored_args.keys", list)
+    eq_val("1.10c", "…and the key it names is the one that was never read",
+           dig(e, "ignored_args.keys"), ["wibble"])
+    contains("1.10d", "…with a sentence saying it was dropped",
+             str(dig(e, "ignored_args.detail", "")), "'wibble'")
+
+    # THE CONTROL, and it is the one that matters for every other suite: a
+    # correct call carries no such field at all, so nothing that reads these
+    # envelopes sees a new key until it makes this mistake.
+    e = send("digest", {})
+    absent("1.10e", "a clean call publishes NO ignored_args", e, "ignored_args")
+    e = send("pawns", {"filter": "colonist", "cap": 5, "order": "id"})
+    absent("1.10f", "…and neither does a fully-specified one", e, "ignored_args")
+    eq("1.10g", "…which still succeeds", e, "ok", True)
+
+    # The report names the keys the call DID read — the caller's route to the
+    # right spelling, and available for every verb without a declaration.
+    e = send("pawns", {"filter": "colonist", "wibble": 3})
+    eq("1.10h", "a junk key ALONGSIDE valid args is reported too — the earlier "
+                "sweep that missed this was confounded by the missing-arg error "
+                "firing first",
+       e, "ok", True)
+    shape("1.10i", "pawns", e, "ignored_args.read", list)
+    contains("1.10j", "…and lists the keys the verb actually read",
+             str(dig(e, "ignored_args.read")), "filter")
+
+    # The suggestion is derived from those same read keys — no alias table, so
+    # it keeps working for arguments added after this check was written.
+    e = send("pawns", {"filte": "colonist"})
+    contains("1.10k", "a one-edit typo is suggested from the keys the verb read",
+             str(dig(e, "ignored_args.detail", "")), "Did you mean 'filter'")
+
+    # THE MUTATING CASE, which is why the report carries journal seqs: the verb
+    # ran, so "what did that dropped argument cost me" has to be answerable
+    # from the envelope. This is comment #6's exact bench call.
+    e = send("dev:spawn-thing", {"def": "WoodLog", "count": 1, "pos": cell,
+                                 "mode": "direct", "wibble": 3})
+    eq("1.10l", "the bench-measured silent case now reports", e, "ok", True)
+    eq_val("1.10m", "…naming the key", dig(e, "ignored_args.keys"), ["wibble"])
+    shape("1.10n", "dev:spawn-thing", e, "ignored_args.journal_seq_from")
+    shape("1.10o", "dev:spawn-thing", e, "ignored_args.journal_seq_to")
+    ids = [d.get("id") for d in as_list(dig(e, "data.spawned")) if isinstance(d, dict)]
+    if ids:
+        send("dev:destroy", {"things": ids})
+
+    # 1.11 THE DESTRUCTIVE INSTANCE (git-bug 7382bdd comment #7). `kind` is not
+    #      a parameter of `journal-selftest`; on 2026-09-01 it was dropped
+    #      without a word, the verb fell through to its default step list
+    #      (letter, message, error, DOWNED, BREAK) and downed all three
+    #      colonists and started a berserk while returning ok:true. Four calls
+    #      went by before it was noticed.
+    #
+    #      Post-dispatch refusal is not enough here — it would refuse AFTER the
+    #      colonists were on the ground. `VerbArgs.RefuseStray` runs before the
+    #      first step, so this is the pre-mutation case and 1.11g is the part
+    #      that proves it.
+    e = send("journal", {"limit": 1})
+    seq_before = dig(e, "data.last_seq", 0)
+    e = send("journal-selftest", {"kind": "save"})
+    eq("1.11a", "an unknown argument name on a MUTATING verb is refused",
+       e, "ok", False)
+    eq("1.11b", "…as bad-args", e, "error.code", "bad-args")
+    detail = str(dig(e, "error.detail", ""))
+    contains("1.11c", "…naming the unknown key", detail, "'kind'")
+    contains("1.11d", "…and naming the arguments it DOES accept", detail, "'steps'")
+    contains("1.11e", "…and saying plainly that nothing ran", detail,
+             "nothing was mutated")
+    absent("1.11f", "a refused call publishes no data block", e, "data")
+    # The whole point: not one step executed. `dev` is the fixture's own
+    # provenance row, `downed` and `mental_break` are what the default list did
+    # to the colony last time.
+    e = send("journal", {"since_seq": seq_before, "limit": 50,
+                         "types": ["dev", "downed", "mental_break"]})
+    eq("1.11g", "NOTHING WAS MUTATED — no dev, downed or mental_break row was "
+                "written between the call and its refusal",
+       e, "data.count", 0)
+
+    # THE CONTROL for the guard, on the same verb: a legitimate explicit step
+    # list still runs. `message` is the one step that mutates nothing.
+    e = send("journal-selftest", {"steps": ["message"]})
+    eq("1.11h", "…while a legitimate journal-selftest call still runs", e, "ok", True)
+
     # 1.7 tidy: the staged log is left where it is (it is one wood log), but the
     #     run must not have raised a red error doing any of this.
     no_red_errors("1.7", "zero red errors across the spawn-refusal phase")
@@ -1804,6 +1910,69 @@ def phase9():
         keys = re.findall(r'\["(\w+)"\] = ', m.group(1)) if m else []
         eq_val("9.8", "this file's SITE_KEYS matches WorldSafe.Site's dictionary",
                keys, SITE_KEYS)
+
+    # 9.9 THE READ LOG'S ONE LOAD-BEARING INVARIANT (git-bug 7382bdd). The
+    #     unknown-argument check is `supplied − queried`, and `queried` is
+    #     marked by VerbArgs.Look(). An accessor added later that reads the
+    #     backing dictionary DIRECTLY would not mark, so its key would look
+    #     unread and a LEGITIMATE call would start being refused — the exact
+    #     failure mode that made a 120-verb declaration unacceptable, sneaking
+    #     back in through the mechanism that replaced it. It is checkable
+    #     statically, so it is checked here rather than trusted.
+    src = os.path.join(REPO, "Source", "AutoRimmer", "VerbRegistry.cs")
+    if not os.path.exists(src):
+        note("9.9", "Source/AutoRimmer/VerbRegistry.cs not in this checkout — the "
+                    "read log's marking invariant could not be re-derived.")
+    else:
+        with open(src, encoding="utf-8") as fh:
+            text = fh.read()
+        m = re.search(r"public sealed class VerbArgs\b(.*?)\n    public static class VerbRegistry",
+                      text, re.S)
+        body = m.group(1) if m else ""
+        # Two touches of the backing dict are legitimate and they are matched
+        # WITH THEIR ARGUMENTS, not merely by member name: TryGetValue is the
+        # one inside Look() itself, and ContainsKey is NearMiss probing an
+        # ALIAS — which must NOT be marked, or a stray key would be masked by
+        # the very check that names it. A third touch, or either of these with
+        # a different argument, means an accessor is reading around Look().
+        direct = re.findall(r"\braw\.\w+\([^)]*\)", body)
+        eq_val("9.9a", "every VerbArgs accessor reaches the backing dict only via "
+                       "Look(), so every read is marked",
+               direct, ["raw.TryGetValue(key, out v)", "raw.ContainsKey(aliases[i])"])
+        check("9.9b", "…and Look() is what marks it",
+              re.search(r"private bool Look\(string key, out object v\)\s*\{[^}]*queried\.Add\(key\)",
+                        body) is not None,
+              "queried.Add inside Look()", "not found")
+
+    # 9.10 THE THREE PER-SITE ARG LISTS, re-derived. `RefuseStray` names the
+    #      arguments a verb accepts so the refusal can print them, and those
+    #      three lists are the only hand-written argument declarations in the
+    #      tree. A list that drifts costs a WORSE MESSAGE and never a refused
+    #      legitimate call — the detection is the read log, which consults
+    #      none of them — but "it only degrades the message" is a claim worth
+    #      keeping true rather than asserting once.
+    for num, fname, listname, verbmark in (
+            ("9.10a", "JournalVerbs.cs", "SelftestArgs", '[Verb("journal-selftest")]'),
+            ("9.10b", "PawnFixtureVerbs.cs", "FixtureArgs", None),
+            ("9.10c", "WorldFixtureVerbs.cs", "FixtureArgs", None)):
+        src = os.path.join(REPO, "Source", "AutoRimmer", fname)
+        if not os.path.exists(src):
+            note(num, "Source/AutoRimmer/%s not in this checkout." % fname)
+            continue
+        with open(src, encoding="utf-8") as fh:
+            text = fh.read()
+        m = re.search(r"string\[\]\s+" + listname + r"\s*=\s*\{(.*?)\};", text, re.S)
+        declared = sorted(set(re.findall(r'"(\w+)"', m.group(1)))) if m else []
+        # The keys the verb actually reads. JournalVerbs holds a second verb
+        # (`journal`) ahead of the fixture, so scan from its marker down.
+        scope = text
+        if verbmark:
+            scope = text[text.index(verbmark):] if verbmark in text else text
+        read = sorted(set(re.findall(
+            r"\.(?:Has|Raw|Str|StrReq|Bool|Num|NumReq|Int|IntReq|Long|StrList)"
+            r'\("(\w+)"', scope)))
+        eq_val(num, "%s's %s matches every argument the verb reads"
+               % (fname, listname), declared, read)
 
 
 # ---------------------------------------------------------------------- main --

@@ -28,6 +28,11 @@ namespace AutoRimmer
     // discharged. It is NOT an observer and nothing in it belongs on a hot path.
     public static class PawnFixtureVerbs
     {
+        // Message-only; see JournalVerbs.SelftestArgs for why a per-site list
+        // is not the per-verb registry session 15 rejected.
+        private static readonly string[] FixtureArgs =
+        { "steps", "pawn_id", "wound_amount", "wound_hits", "sad_stacks", "tatter_frac" };
+
         [Verb("pawn-fixture")]
         public static object Fixture(VerbContext ctx)
         {
@@ -36,6 +41,13 @@ namespace AutoRimmer
             var map = Find.CurrentMap ?? throw new VerbArgsException("pawn-fixture needs a current map");
 
             var steps = ctx.Args.StrList("steps");
+            // Same shape as `journal-selftest`, same guard (git-bug 7382bdd
+            // comment #7): a defaulted, non-empty step list whose every step
+            // mutates — `wound` damages a pawn, `sadden` stacks thoughts,
+            // `tatter` destroys apparel durability. Refused before the first
+            // step rather than after the last.
+            ctx.Args.RefuseStray("pawn-fixture", FixtureArgs,
+                "Refused BEFORE any step ran, so nothing was mutated.");
             if (steps.Count == 0) steps = new List<string> { "wound", "sadden", "tatter" };
 
             var executed = new List<object>();

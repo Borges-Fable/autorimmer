@@ -244,6 +244,20 @@ namespace AutoRimmer
         //       (null string, Verse object, a ToString() that throws, a cyclic
         //       tree, NaN) so 1.5 defect 4's acceptance has something to fail
         //       on. It must still produce exactly one result file.
+        // Every argument `journal-selftest` reads, for the refusal message only
+        // — the DETECTION is VerbArgs' read log and does not consult this. A
+        // name missing here costs a worse message on a call that is refused
+        // anyway (post-dispatch), never a refused legitimate call, which is why
+        // three of these are acceptable where 120 were not.
+        private static readonly string[] SelftestArgs =
+        {
+            "steps", "letter_delay_ticks", "save_name", "alert_count",
+            "alert_critical_last", "colonist_target", "power_lamps", "power_fuel",
+            "power_stored", "power_generator", "timeout_ticks_letter", "letter_tag",
+            "drop_fixture_letters", "error_delay_ticks", "error_repeats",
+            "error_text", "main_menu_delay_ticks",
+        };
+
         [Verb("journal-selftest")]
         public static object Selftest(VerbContext ctx)
         {
@@ -251,6 +265,24 @@ namespace AutoRimmer
                 throw new VerbArgsException("journal-selftest requires devMode=True (it mutates game state)");
 
             var steps = ctx.Args.StrList("steps");
+            // THE PRE-MUTATION GUARD (git-bug 7382bdd comment #7). This verb is
+            // the worked instance of the shape that comment names — "a
+            // defaulted list argument whose default is non-empty and whose
+            // steps mutate". `journal-selftest {kind:"save"}` dropped `kind`
+            // without a word, fell through to the default list below, and
+            // `downed` + `break` put all three colonists on the ground and one
+            // of them into a berserk while the result said ok:true. Four calls
+            // went by before it was noticed; in a ten-day unattended run that
+            // is a colony-ender caused by a typo.
+            //
+            // Execute's post-dispatch check would catch it, but only after the
+            // damage. This runs BEFORE the first step, so the call is refused
+            // with nothing mutated — which is the acceptance bullet that
+            // comment asked for, verbatim. Unconditional rather than inside the
+            // `steps.Count == 0` branch: every step here mutates, so an
+            // explicit step list carrying a typo deserves the same refusal.
+            ctx.Args.RefuseStray("journal-selftest", SelftestArgs,
+                "Refused BEFORE any step ran, so nothing was mutated.");
             if (steps.Count == 0)
                 steps = new List<string> { "letter", "message", "error", "downed", "break" };
 

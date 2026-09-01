@@ -326,6 +326,15 @@ namespace AutoRimmer
                   .Append(",\"detail\":").Append(MiniJson.J(r.ErrorDetail))
                   .Append('}');
             }
+            // git-bug 7382bdd. Present only when the caller supplied a key the
+            // verb never read; absent on every correct command, so no existing
+            // consumer sees a new field until it makes the mistake this exists
+            // to name.
+            if (r.IgnoredArgs != null)
+            {
+                sb.Append(",\"ignored_args\":");
+                MiniJson.Write(sb, r.IgnoredArgs);
+            }
             bool loaded = GameLoaded() && snap.gameLoaded;
             sb.Append(",\"state\":{\"gameLoaded\":").Append(loaded ? "true" : "false")
               .Append(",\"tick\":").Append(snap.tick)

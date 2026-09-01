@@ -54,16 +54,33 @@ namespace AutoRimmer
 
         private readonly Dictionary<string, object> raw;
 
+        // THE READ LOG — the general half of git-bug 7382bdd. Every accessor
+        // on this class funnels through Look(), so the set of keys a handler
+        // actually QUERIED is observed rather than declared. See the read-log
+        // block at the bottom of the class for why that is not the per-verb
+        // declaration session 15 measured and rejected.
+        private readonly HashSet<string> queried = new HashSet<string>(StringComparer.Ordinal);
+
         public VerbArgs(Dictionary<string, object> raw) { this.raw = raw ?? Empty; }
 
-        public bool Has(string key) => raw.ContainsKey(key);
+        // The one gate every accessor goes through. Marking happens on the
+        // LOOKUP, not on a successful hit: a verb that asks for an optional
+        // key and gets nothing has still read it, and a caller who then
+        // supplies it must not be refused.
+        private bool Look(string key, out object v)
+        {
+            if (key != null) queried.Add(key);
+            return raw.TryGetValue(key, out v);
+        }
+
+        public bool Has(string key) => Look(key, out _);
 
         // The parsed value as-is (object/array args validated by the caller).
-        public object Raw(string key) => raw.TryGetValue(key, out var v) ? v : null;
+        public object Raw(string key) => Look(key, out var v) ? v : null;
 
         public string Str(string key, string fallback = null)
         {
-            if (!raw.TryGetValue(key, out var v)) return fallback;
+            if (!Look(key, out var v)) return fallback;
             if (v is string s) return s;
             throw new VerbArgsException($"arg '{key}' must be a string");
         }
@@ -73,21 +90,21 @@ namespace AutoRimmer
 
         public bool Bool(string key, bool fallback)
         {
-            if (!raw.TryGetValue(key, out var v)) return fallback;
+            if (!Look(key, out var v)) return fallback;
             if (v is bool b) return b;
             throw new VerbArgsException($"arg '{key}' must be a bool");
         }
 
         public double Num(string key, double fallback)
         {
-            if (!raw.TryGetValue(key, out var v)) return fallback;
+            if (!Look(key, out var v)) return fallback;
             if (v is double d) return d;
             throw new VerbArgsException($"arg '{key}' must be a number");
         }
 
         public double NumReq(string key)
         {
-            if (!raw.TryGetValue(key, out var v)) throw new VerbArgsException($"missing required arg '{key}' (number)");
+            if (!Look(key, out var v)) throw new VerbArgsException($"missing required arg '{key}' (number)");
             if (v is double d) return d;
             throw new VerbArgsException($"arg '{key}' must be a number");
         }
@@ -150,7 +167,7 @@ namespace AutoRimmer
         // a correct call, which is a worse bug than the one being fixed.
         public void NearMiss(string key, params string[] aliases)
         {
-            if (aliases == null || raw.ContainsKey(key)) return;
+            if (aliases == null || Look(key, out _)) return;
             for (int i = 0; i < aliases.Length; i++)
                 if (raw.ContainsKey(aliases[i]))
                     throw new VerbArgsException(
@@ -162,7 +179,7 @@ namespace AutoRimmer
         public List<string> StrList(string key)
         {
             var result = new List<string>();
-            if (!raw.TryGetValue(key, out var v)) return result;
+            if (!Look(key, out var v)) return result;
             if (!(v is List<object> list)) throw new VerbArgsException($"arg '{key}' must be an array of strings");
             foreach (var item in list)
             {
@@ -170,6 +187,202 @@ namespace AutoRimmer
                 else throw new VerbArgsException($"arg '{key}' must be an array of strings");
             }
             return result;
+        }
+
+        // ------------------------------------------------- the read log ----
+        // THE GENERAL HALF OF git-bug 7382bdd, and the reason it is not the
+        // per-verb declaration session 15 measured and rejected.
+        //
+        // That measurement stands and is not re-litigated: 120 verbs, 22 of
+        // whose handlers read no argument at their own call site, 88 (verb,
+        // key) pairs the suites send that are read through shared helpers, and
+        // five suite call sites that build their argument dict at runtime. Its
+        // conclusion — a hand-written arg set could be neither derived from the
+        // code nor checked against it — is a conclusion about a SECOND SOURCE
+        // OF TRUTH. None of it is an objection to observing what the verb
+        // actually read.
+        //
+        // So: `queried` is marked by Look(), every accessor funnels through
+        // Look(), and `supplied − queried` is the unknown-argument set. It is
+        // derived from the code that does the reading; it covers all 120 verbs
+        // at once; it needs no update when a verb gains an argument; and the
+        // 22-forwarder case is not a special case at all, because the log
+        // follows the VerbArgs OBJECT and `TimeDriver.Start(ctx.Command,
+        // ctx.Args)` hands over that same object. A runtime-built caller dict
+        // is likewise a non-issue: nothing is validated against a list.
+        //
+        // THE ONE THING IT CANNOT DO is fire before the verb runs, and that is
+        // why what ships is a REPORT and not a refusal. Measured over the tree:
+        // 729 accessor call sites, ~290 of them conditional, and 73 keys across
+        // 26 verbs are read only on SOME paths while the verb still returns
+        // success. Refusing on those would refuse legitimate shipped calls —
+        // `zone {op:"add", plant, label, dry_run:true}` (the preflight skips
+        // the block that reads `plant`), `dev:spawn-thing {stockpile, pos}`
+        // (`pos` is the fallback and goes unread when storage accepts),
+        // `wear {pawn, thing, queue:true}` when the gate refuses, and every
+        // `bill-add` refusal that returns before ValidateBillArgs reads its
+        // twenty levers. So: Execute PUBLISHES `ignored_args` and refuses
+        // nothing, and RefuseStray() below is the pre-mutation refusal that the
+        // three verbs whose default is dangerous adopt explicitly.
+        // DESIGN's 2026-09-01 entry carries the numbers.
+        public List<string> Queried()
+        {
+            var list = new List<string>(queried);
+            list.Sort(StringComparer.Ordinal);
+            return list;
+        }
+
+        // Supplied but never looked at. `alsoAccepted` is for a call site that
+        // must run the check EARLY, before the keys it reads later in the
+        // handler have been queried; it is a local statement about one method,
+        // not a registry.
+        public List<string> StrayKeys(string[] alsoAccepted = null)
+        {
+            List<string> stray = null;
+            foreach (var kv in raw)
+            {
+                if (queried.Contains(kv.Key)) continue;
+                if (alsoAccepted != null && Array.IndexOf(alsoAccepted, kv.Key) >= 0) continue;
+                (stray ?? (stray = new List<string>())).Add(kv.Key);
+            }
+            if (stray == null) return EmptyKeys;
+            stray.Sort(StringComparer.Ordinal);
+            return stray;
+        }
+
+        private static readonly List<string> EmptyKeys = new List<string>();
+
+        // THE PRE-MUTATION GUARD, and the ONE place an unknown argument is
+        // REFUSED rather than reported. A verb whose default is dangerous
+        // calls this before its first step, so a stray key is refused with
+        // NOTHING MUTATED — which is the whole of what git-bug 7382bdd
+        // comment #7 asked for on `journal-selftest {kind:"save"}`.
+        //
+        // It is safe to refuse here precisely because `accepted` is the
+        // enclosing verb's FULL argument list: the conditional-read problem
+        // that keeps Execute in report-only mode — `journal-selftest`'s own
+        // step-gated `save_name`, `power_lamps`, `error_text` and the rest —
+        // is answered by naming them, at the one site that reads them, in the
+        // same file.
+        //
+        // `accepted` is the enclosing verb's own argument names, written beside
+        // the code that reads them. It exists so the refusal can NAME what the
+        // verb takes, per that comment's suggested acceptance bullet; the
+        // detection does not depend on it, because a key missing from that list
+        // is still caught post-dispatch by the general check. Its drift mode is
+        // therefore a worse MESSAGE, never a refused legitimate call — which is
+        // exactly the asymmetry that made a 120-verb registry unacceptable and
+        // makes a three-site one fine.
+        public void RefuseStray(string op, string[] accepted, string safety)
+        {
+            var stray = StrayKeys(accepted);
+            if (stray.Count == 0) return;
+            var sb = new System.Text.StringBuilder();
+            sb.Append(Plural(stray)).Append(Join(stray)).Append(" — ").Append(op)
+              .Append(" accepts ").Append(Join(accepted)).Append('.');
+            string near = Suggest(stray, accepted);
+            if (near != null) sb.Append(' ').Append(near);
+            if (safety != null) sb.Append(' ').Append(safety);
+            throw new VerbArgsException(sb.ToString());
+        }
+
+        // The `ignored_args` report. It names the stray key, the keys this call
+        // ACTUALLY read — which is the caller's fastest route to the right
+        // spelling, available for every verb without a declaration — and, when
+        // the verb mutated, the journal seqs it wrote, so "what did that
+        // dropped argument cost me" is answerable from the envelope alone.
+        // That last part is the whole complaint in git-bug 7382bdd comment #7:
+        // the destructive call returned a truthful echo nobody read.
+        public Dictionary<string, object> StrayReport(
+            string op, List<string> stray, long seqBefore, long seqAfter)
+        {
+            var read = Queried();
+            var sb = new System.Text.StringBuilder();
+            sb.Append(Plural(stray)).Append(Join(stray)).Append(" — ").Append(op)
+              .Append(read.Count == 0
+                  ? " read no arguments at all on this call"
+                  : " read " + Join(read) + " on this call")
+              .Append('.');
+            string near = Suggest(stray, read.ToArray());
+            if (near != null) sb.Append(' ').Append(near);
+            sb.Append(stray.Count == 1 ? " It was" : " They were")
+              .Append(" DROPPED and the verb RAN ANYWAY, so this result may have come "
+                    + "from a default rather than from what you asked for.");
+            if (seqAfter > seqBefore)
+                sb.Append($" It wrote journal seq {seqBefore + 1}..{seqAfter}; read those "
+                        + "rows to see what it actually did.");
+            var report = new Dictionary<string, object>
+            {
+                ["keys"] = new List<object>(stray.ToArray()),
+                ["read"] = new List<object>(read.ToArray()),
+                ["detail"] = sb.ToString(),
+            };
+            if (seqAfter > seqBefore)
+            {
+                report["journal_seq_from"] = seqBefore + 1;
+                report["journal_seq_to"] = seqAfter;
+            }
+            return report;
+        }
+
+        private static string Plural(List<string> stray)
+            => stray.Count == 1 ? "unknown arg " : "unknown args ";
+
+        private static string Join(IList<string> keys)
+        {
+            if (keys == null || keys.Count == 0) return "{}";
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < keys.Count; i++)
+            {
+                if (i > 0) sb.Append(i == keys.Count - 1 ? " and " : ", ");
+                sb.Append('\'').Append(keys[i]).Append('\'');
+            }
+            return sb.ToString();
+        }
+
+        // A suggestion is DERIVED, not guessed from a global alias table: the
+        // candidates are the keys this very call read (or, early, the enclosing
+        // verb's own list). NearMiss above still covers `at` -> `pos`, which is
+        // an edit distance of 3 and which no distance rule this conservative
+        // would ever find — that is why both exist.
+        private static string Suggest(List<string> stray, string[] candidates)
+        {
+            if (candidates == null) return null;
+            string bestStray = null, best = null;
+            int bestD = int.MaxValue;
+            foreach (var s in stray)
+                foreach (var c in candidates)
+                {
+                    int d = Distance(s, c);
+                    if (d < bestD) { bestD = d; best = c; bestStray = s; }
+                }
+            if (best == null) return null;
+            int limit = Math.Min(bestStray.Length, best.Length) >= 5 ? 2 : 1;
+            return bestD <= limit ? $"Did you mean '{best}' rather than '{bestStray}'?" : null;
+        }
+
+        // Levenshtein, two rows. Keys are short; this runs once per refusal.
+        private static int Distance(string a, string b)
+        {
+            if (a == null || b == null) return int.MaxValue;
+            int n = a.Length, m = b.Length;
+            if (n == 0) return m;
+            if (m == 0) return n;
+            var prev = new int[m + 1];
+            var cur = new int[m + 1];
+            for (int j = 0; j <= m; j++) prev[j] = j;
+            for (int i = 1; i <= n; i++)
+            {
+                cur[0] = i;
+                for (int j = 1; j <= m; j++)
+                {
+                    int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                    int del = prev[j] + 1, ins = cur[j - 1] + 1, sub = prev[j - 1] + cost;
+                    cur[j] = Math.Min(Math.Min(del, ins), sub);
+                }
+                var t = prev; prev = cur; cur = t;
+            }
+            return prev[m];
         }
     }
 
@@ -222,12 +435,59 @@ namespace AutoRimmer
 
         // Runs a verb and always yields exactly one Result: handler exceptions
         // become code=exception with the stack in detail, arg failures bad-args.
+        //
+        // AND, since git-bug 7382bdd, the UNKNOWN-ARGUMENT REPORT. The handler
+        // has just run, so VerbArgs' read log is complete: every key the verb
+        // asked for is marked, and anything the caller supplied that is not
+        // marked was dropped on the floor. That is the defect in this issue's
+        // title — `journal-selftest {kind:"save"}` returned ok:true after
+        // downing three colonists, `dev:spawn-thing {at:…}` returned
+        // ok:true, placed:1 three times at the wrong cell.
+        //
+        // IT REPORTS AND DOES NOT REFUSE, and that is a measurement, not
+        // timidity: 73 keys across 26 verbs are read only on some paths while
+        // the verb still succeeds, so a blanket refusal would refuse
+        // legitimate calls mid-run (see VerbArgs' read-log header for the
+        // named cases). The verbs whose DEFAULT is dangerous take the
+        // pre-mutation guard instead — VerbArgs.RefuseStray, adopted by
+        // `journal-selftest`, `pawn-fixture` and `world-fixture` — so the
+        // colony-ending case is refused before it acts.
+        //
+        // Two channels, deliberately. `ignored_args` rides the envelope, which
+        // is what the caller reads; Log.Warning is picked up by JournalHooks'
+        // patch on Log.Warning, so the same finding lands as a `warning` row
+        // in the run's durable record and a ten-day run can be audited for
+        // dropped arguments afterwards. The log half is main-thread only,
+        // because a MainThread=false handler runs on the poller thread and its
+        // contract is no Verse access at all.
         public static Result Execute(PendingCommand cmd)
         {
+            var ctx = new VerbContext { Id = cmd.Id, Op = cmd.Op, Args = new VerbArgs(cmd.Args), Command = cmd };
+            long seqBefore = Journal.CurrentSeq;
             try
             {
-                var ctx = new VerbContext { Id = cmd.Id, Op = cmd.Op, Args = new VerbArgs(cmd.Args), Command = cmd };
-                return Result.Success(cmd.Id, cmd.Op, cmd.Verb.Handler(ctx));
+                object data = cmd.Verb.Handler(ctx);
+                var stray = ctx.Args.StrayKeys();
+                if (stray.Count == 0) return Result.Success(cmd.Id, cmd.Op, data);
+
+                var report = ctx.Args.StrayReport(cmd.Op, stray, seqBefore, Journal.CurrentSeq);
+                // Guarded: this is a REPORT, and a report must never be able to
+                // turn a command that worked into code=exception. A throw from
+                // Log (or from another mod's patch on it) would otherwise be
+                // caught below and answered as a failure the verb never had.
+                if (cmd.Verb.MainThread)
+                    try { Log.Warning("[AutoRimmer] " + cmd.Op + ": " + report["detail"]); }
+                    catch { }
+
+                // A deferred verb's single result belongs to its own writer
+                // (TimeDriver), so there is no envelope of ours to attach the
+                // report to; the journal row above is the only channel it has.
+                // `advance` is the one such verb.
+                if (data is DeferredResult) return Result.Success(cmd.Id, cmd.Op, data);
+
+                var ok = Result.Success(cmd.Id, cmd.Op, data);
+                ok.IgnoredArgs = report;
+                return ok;
             }
             catch (VerbArgsException e)
             {

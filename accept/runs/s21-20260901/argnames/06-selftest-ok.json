@@ -1,0 +1,1 @@
+{"id": "journalselft-172822-0443", "op": "journal-selftest", "ok": true, "data": {"executed": ["message", "letter"]}, "state": {"gameLoaded": true, "tick": 3885, "paused": false}, "sid": "20260901T212651", "ts": "2026-09-01T21:28:23.1782360Z"}
