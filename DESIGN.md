@@ -2981,3 +2981,125 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `TimeDriver.Start` named the open question — "what ELSE should wake the agent"
   — and now names `280fb78` as its answer. **Neither should be reverted without
   the other.** `280fb78`, `1113019`.
+- 2026-09-01 (M1 re-plan, planner session for `664e9b9`) — **The M1 gate is
+  ZERO colonists lost, and a loss does not stop the run.** The old floor
+  (">=2 of 3 alive at day 10") tolerated a death; the rewrite does not, for
+  three reasons. Every cause of the two M1 deaths is now a mod feature rather
+  than a habit — the casualty halt and unread refusal (`722c951`), the bleed
+  clock and `triage` (`61794cd`, `40ed42f`), the posture verb (`b1b3060`), the
+  wake halts (`280fb78`) — so a death is no longer bad luck the platform could
+  not have shown; "thrive" has no meaning with a corpse in it; and a death is
+  by this repo's own rule a post-mortem event. The read is two-sided on
+  purpose: a journal `death` row with `player:true` catches the kill, and the
+  game's `FreeColonists` recorder never dipping below its post-staging value
+  catches the losses that write no death row — a colonist who gave up and
+  walked off the map, or was kidnapped by raiders. The run PLAYS ON after a
+  loss to day 20 and is graded FAILED at the end, because M1 stopped on day 6
+  and the four days of evidence it did not collect are what the rest of the
+  contract is for.
+- 2026-09-01 (M1 re-plan) — **Three verdicts — FAILED, SURVIVED, THRIVED —
+  because Evan's "see what you can come up with" is the right instruction to
+  the agent and a wrong acceptance bullet.** One pass/fail line would have to
+  either make every thrive row a hard floor, which turns "come up with
+  something" into a checklist grind, or make them decoration nobody grades. So
+  the gate rows are the floor, the thrive rows are each graded, and the summary
+  says which of the three the run earned. A post-mortem that cannot say whether
+  the colony grew is a failure of the contract, not of the run; each thrive row
+  therefore names a read and a direction, never prose.
+- 2026-09-01 (M1 re-plan) — **"Thrive" is graded off the game's own recorders
+  and the mod's sampler over the WHOLE window, read at day 20 from `history`
+  and the durable `samples/` file — never the live ring.** `2d9a1da` shipped
+  eleven `HistoryAutoRecorder` series; the M1 post-mortem had to hex-dump them
+  out of an autosave. Wealth: `Wealth_Total` `slope_per_day > 0` and
+  `Wealth_Buildings` last > first is "the colony built and grew", the two
+  series the storyteller itself prices raids from. Mood: the mean of the last
+  four `ColonistMood` samples (two in-game days at the 30,000-tick cadence, the
+  same window the sampler defaults to) at or above 50 — the series stores
+  `CurLevel * 100`, and 50 sits fifteen points above the minor-break line,
+  `MentalBreakThreshold`'s `defaultBaseValue 0.35`
+  (`Data/Core/Defs/Stats/Stats_Pawns_General.xml`; major is x0.5714 and extreme
+  x1/7 of it, `Verse/MentalBreaker.BreakThresholdMajor`/`Extreme`) — plus no
+  player-faction `mental_break` in the final five days, because a break is the
+  game's own verdict on mood and a mean can hide one pawn at 20%. The ring is
+  refused as a source because a load moves `TicksGame` backward and clears it
+  (`2d9a1da`); a 20-day run crosses relaunches, so the file is the record.
+- 2026-09-01 (M1 re-plan) — **A "real food cycle" is grow -> harvest -> cook
+  -> eat inside the window, and the window was checked against the growing
+  period rather than assumed.** `Root_Play.SetupForQuickTestPlay` never sets
+  `GameInitData.startingSeason`, so `GenTicks.ConfiguredTicksAbsAtGameStart`
+  takes `TwelfthUtility.FindStartingWarmTwelfth` — the first twelfth whose
+  average is at least 12 C — which on a temperate tile is Spring day 1 (M1
+  read "Spring 1", year 5500). Twenty days end on Summer day 5
+  (`GenDate.DaysPerQuadrum 15`), so `PlantUtility.GrowthSeasonNow` (cell
+  temperature above `minGrowthTemperature`, default 0) holds throughout.
+  Growth accrues only outside `Plant.Resting` — `DayPercent` 0.25 to 0.8,
+  55% of the day — and at reduced rate below `minOptimalGrowthTemperature`
+  (`Plant.DefaultMinOptimalGrowthTemperature` 6), so a def's `growDays`
+  understates the sow-to-harvest time by 1.8x or more: rice 3 -> about 5.5
+  days, potato 5.8 -> about 10.5, corn 11.3 -> about 20.5 and does not fit
+  (`Plants_Cultivated_Farm.xml`). Two rice cycles fit; one potato cycle fits.
+  **So staging stages NO food beyond the scenario's own 44 survival meals** —
+  about eight colonist-days at the ~1.6 nutrition a colonist eats per day —
+  which makes production load-bearing by day 8 instead of optional until
+  day 21, which is the only way the row can fail. The proof is three
+  inferential reads (zone growth, the raw crop in `things` with no trade row,
+  a meal def rising beside a live bill) because no observer reads
+  `Pawn_RecordsTracker`; `ae78ecc` is filed for the direct one.
+- 2026-09-01 (M1 re-plan) — **Rooms are graded by `room.role` as the game
+  scores it, and the scoring constants are what make "design a rec room" a
+  test rather than a claim.** `RoomRoleWorker_RecRoom` scores 7 per building
+  named by any `JoyGiverDef` (all count by default — `JoyGiverDef
+  .countsForRecRoom = true` — so HorseshoesPin, HoopstoneRing, BilliardsTable,
+  GameOfUrBoard, ChessTable, PokerTable, the three televisions, Telescope),
+  while `RoomRoleWorker_DiningRoom` scores 12 per eat surface: a table in the
+  rec room needs two joy buildings beside it or the room is a dining room.
+  `RoomRoleWorker_Workshop` scores 27 per bench whose def carries
+  `workTableRoomRole Workshop` (the `BenchBase` default in
+  `Buildings_Production.xml`: tailoring, smithy, stonecutter, machining,
+  sculpting, butcher and more), while `RoomRoleWorker_Laboratory` scores 60
+  per research bench and `RoomRoleWorker_Kitchen` 28 per bench with a
+  human-edible product — a research bench or a lone butcher table in the
+  workshop flips its role. `RoomRoleWorker_Barracks` is 100100 per humanlike
+  bed once `RoomRoleWorker_Bedroom.IsBedroom` is false, which it is from two
+  owned beds by non-partners up — three colonists' beds in one room read
+  `Barracks`, and `owners_total == roster` is "for all of their pawns".
+  "Colonist-built" is placement ids in `action` rows plus `construction`
+  `completed` rows after the staging watermark, and because a room id dies at
+  the next region rebuild (`d16a463`) the graded rooms are identified by an
+  interior cell, not an id carried across days.
+- 2026-09-01 (M1 re-plan) — **Militia: armed and postured are gated, armoured
+  is narrative, and the raid comes from the storyteller's own schedule rather
+  than a `dev:incident`.** Armed is `pawn {sections:["equipment"]}` `primary`
+  per violence-capable colonist (the denominators `digest.posture` already
+  publishes); postured is `digest.posture.ok` at every daily snapshot.
+  Armoured has no read — `PawnSerializer.Apparel` publishes no armor rating —
+  so it is reported by def name and `47547ca` is filed; a def-name list is not
+  written into the contract because it would call a devilstrand duster
+  unarmoured. The raid: `StorytellerComp_ClassicIntro` fires `RaidEnemy` at
+  `IntervalsPassed == 324` — tick 324,000, day 6 — at 40 points with
+  `raidForceOneDowned`, whenever `Difficulty.allowIntroThreats` holds (default
+  true; only `Peaceful` sets it false), and Cassandra's ThreatBig
+  `StorytellerCompProperties_OnOffCycle` opens at `minDaysPassed 11` with
+  `onDays 4.6`, `numIncidentsRange 1~2` and `forceRaidEnemyBeforeDaysPassed
+  20`. Two raids are therefore expected in twenty days — M1 stopped at tick
+  322,314, 1,686 ticks short of the scripted one, which is why it "never saw a
+  raid". If the schedule somehow fails, the row reads "not exercised"; a
+  `dev:incident` after staging would break G2 to rescue G5, and M1's original
+  "schedule it during staging" is not spellable — `dev:incident` has no delay
+  argument.
+- 2026-09-01 (M1 re-plan) — **Research, weapons crafted and armour are
+  REPORTED, not graded, and "prison" is out of scope by measurement.** No
+  floor for research or crafting survives the skill roll of three random
+  crash-landers, and a floor would push the agent to grind research instead of
+  Evan's "whatever they can". Prison is excluded because `grep -rn ForPrisoners
+  Source/AutoRimmer/` is three reads and no write (`e1c072e` comment #2), so
+  the capture chain breaks in the middle and recruitment is unreachable;
+  caravans, DLC management and animal training are DESIGN non-goals or
+  deferred; burial has no verb and is reported, never failed.
+- 2026-09-01 (M1 re-plan) — **Escapes and mutes are counted with their
+  reasons and NOT capped.** `722c951`'s own ruling stands: a per-run budget
+  needs a threshold, no number is defensible before a real run supplies one,
+  and a guessed threshold is what this project keeps deleting. This run is the
+  one that supplies the numbers; the contract requires every `unread_ok`,
+  `through_casualties`, `through_news` and `alert-mute` to appear in the
+  summary with its reason, which is the measurement the wall waits for.
