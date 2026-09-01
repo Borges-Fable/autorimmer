@@ -180,20 +180,45 @@ def read_journal(since=0, **extra):
     return send("journal", a)
 
 
-# The lead a `time.tick` target must have to survive the protocol. `now_tick()`
-# is one round trip and arming the advance is a second; `rwa/README.md` puts the
-# floor on each at 0.25-1 s (500 ms poller, inbox files younger than 250 ms
-# ignored), so at ~30 tps the clock can move ~60-120 ticks between reading it
-# and arming against it. A lead inside that window LOSES A RACE: the predicate
-# is false when computed and true when armed, no false->true edge remains, and
-# under session 19's edge rule the halt can never fire.
+# WHY THESE WAITS ARE TICK COUNTS, which the house rule says must be justified.
 #
-# That is git-bug 1113019, found by this suite on 2026-09-01 — check 0.9 armed
-# `time.tick >= 949` at tick 949 and the advance ran 187,541 ticks, stopped only
-# by 722c951's own casualty halt. Two belts here, because either alone is thin:
-# a lead wider than the window, and a hard `timeout_ticks` on every `until`.
-TICK_LEAD = 600
+# The rule (round brief, and DESIGN's session-19 entry from Evan's "focus on
+# time not ticks") is that a WAIT must be a predicate, because `advance
+# {ticks:N}` overshoots by up to MaxTicksPerFrame per call, nothing re-anchors,
+# and an agent reasoning "20,000 ticks passed so it must be morning" is wrong by
+# an amount it never sees. That reasoning is about using a tick count to infer
+# the CLOCK, and it is correct.
+#
+# These waits infer nothing. What every one of them wants is "let an advance
+# run so the refusal or the halt can be observed" — the subject under test is
+# the advance itself, not any state the game reaches. There is no state
+# predicate for "some time has passed", and the clock-shaped substitute
+# `time.tick >= now + N` is the SAME tick count computed one protocol round trip
+# earlier, which is strictly worse in two ways:
+#
+#   * IT LOSES A RACE. now_tick() is one round trip and arming is a second;
+#     rwa/README puts the floor on each at 0.25-1 s (500 ms poller, inbox files
+#     younger than 250 ms ignored), so at ~30 tps the clock moves 60-120 ticks
+#     in between. A lead inside that window is false when computed and true when
+#     armed, leaving no false->true edge for session 19's edge rule to fire on.
+#   * AND THEN IT NEVER STOPS. That is git-bug 1113019, found by this suite on
+#     2026-09-01: check 0.9 armed `time.tick >= 949` at tick 949 and the advance
+#     ran 187,541 ticks — three in-game days — stopped only by 722c951's own
+#     casualty halt, which had shipped hours earlier.
+#
+# So `{"ticks": N}` is the honest form here: one round trip, no race, bounded by
+# construction. Where this suite waits for a real STATE it uses a predicate, and
+# `accept/fc287ba-until-state.py` is where the `until` machinery itself is under
+# test. `until_tick` is kept for that one deliberate use below.
+PASS_TICKS = 600
 UNTIL_TIMEOUT_TICKS = 5000
+
+
+def pass_time(n=PASS_TICKS):
+    """Let `n` ticks of game time run. See the note above for why this is a tick
+    count and not a predicate: the subject under test is the advance, not a
+    state the game reaches."""
+    return {"ticks": n}
 
 
 def until_tick(target):
@@ -437,7 +462,7 @@ def phase0():
                  ARGS.dry_run or isinstance(t, int),
                  "every advance in this suite is bounded by a `time.tick` "
                  "predicate; without that field there is no non-guessed bound.")
-    a = advance({"until": until_tick((t or 0) + TICK_LEAD)}, timeout=180)
+    a = advance(pass_time(), timeout=180)
     eq("0.9", "a bounded advance runs", a, "ok", True)
     shape("0.10", "advance", a, "data.journal_read_watermark", int)
     shape("0.11", "advance", a, "data.journal_unread", int)
@@ -533,7 +558,7 @@ def phase1():
        j, "data.read_watermark", seq[1] if len(seq) == 2 else 1)
 
     t = now_tick()
-    a4 = advance({"until": until_tick((t or 0) + TICK_LEAD)}, timeout=180)
+    a4 = advance(pass_time(), timeout=180)
     eq("1.16", "AFTER the read, the same advance PROCEEDS", a4, "ok", True)
     eq("1.17", "…on its own predicate, not on anything else",
        a4, "data.reason", "condition")
@@ -554,17 +579,17 @@ def phase2():
 
     # -- a reason is REQUIRED and must be a non-empty string ---------------
     t = now_tick()
-    bad = advance({"until": until_tick((t or 0) + TICK_LEAD), "unread_ok": ""}, timeout=120)
+    bad = advance({"ticks": PASS_TICKS, "unread_ok": ""}, timeout=120)
     refused("2.2", "an EMPTY reason is bad-args", bad, "bad-args", "non-empty")
-    bad = advance({"until": until_tick((t or 0) + TICK_LEAD), "unread_ok": 5}, timeout=120)
+    bad = advance({"ticks": PASS_TICKS, "unread_ok": 5}, timeout=120)
     refused("2.3", "a NON-STRING reason is bad-args", bad, "bad-args", "must be a string")
-    bad = advance({"until": until_tick((t or 0) + TICK_LEAD), "through_casualties": "   "},
+    bad = advance({"ticks": PASS_TICKS, "through_casualties": "   "},
                   timeout=120)
     refused("2.4", "a WHITESPACE reason is bad-args too", bad, "bad-args", "non-empty")
 
     # -- the escape proceeds, and says so ----------------------------------
     t = now_tick()
-    a2 = advance_escaping({"until": until_tick((t or 0) + TICK_LEAD)}, casualties=False,
+    a2 = advance_escaping(pass_time(), casualties=False,
                           timeout=180)
     eq("2.5", "`unread_ok` proceeds", a2, "ok", True)
     eq("2.6", "…and the envelope ECHOES the reason", a2, "data.unread_ok", WHY)
@@ -599,15 +624,15 @@ def phase2():
     jf = read_journal(wm1 if isinstance(wm1, int) else 0, types=["red_error"], limit=2000)
     eq("2.14", "a types-filtered read is MARKED filtered", jf, "data.filtered", True)
     ge("2.15", "…and leaves the rest unread", jf, "data.unread_after", 1)
-    a4 = advance({"until": until_tick((now_tick() or 0) + TICK_LEAD)}, timeout=120)
+    a4 = advance(pass_time(), timeout=120)
     refused("2.16", "…so the advance is still refused", a4, "unread-journal")
 
     # -- THE ESCAPE IS PER-CALL AND NOT A MODE ----------------------------
     t = now_tick()
-    a5 = advance_escaping({"until": until_tick((t or 0) + TICK_LEAD)}, casualties=False,
+    a5 = advance_escaping(pass_time(), casualties=False,
                           timeout=180)
     eq("2.17", "the escape gets past it once", a5, "ok", True)
-    a6 = advance({"until": until_tick((now_tick() or 0) + TICK_LEAD)}, timeout=120)
+    a6 = advance(pass_time(), timeout=120)
     refused("2.18", "…and the NEXT advance is refused again — no mode was set",
             a6, "unread-journal")
     clear_journal()
@@ -673,7 +698,7 @@ def phase3():
 
     # The delta the halt itself created must now block the next advance —
     # the two halves of this issue meeting.
-    a2 = advance({"until": until_tick((now_tick() or 0) + TICK_LEAD)}, timeout=120)
+    a2 = advance(pass_time(), timeout=120)
     refused("3.17", "the casualty's own journal row now blocks the next advance",
             a2, "unread-journal")
     contains("3.18", "…and the refusal names it by type",
@@ -859,7 +884,7 @@ def phase6():
     # suite if the verdict is anything but `too-slow`.
     clock = dig(row, "clock.ticks")
     margin = row.get("margin_ticks") if isinstance(row, dict) else None
-    a = advance({"until": until_tick((now_tick() or 0) + 600)}, timeout=180)
+    a = advance(pass_time(), timeout=180)
     refused("6.2", "the advance is REFUSED on the deadline", a, "bleedout-deadline")
     # The negative half of the same rule, and it is the one that keeps a
     # ten-day run alive: a casualty NOBODY can reach is not a casualty nobody
@@ -887,7 +912,7 @@ def phase6():
 
     # The escape covers this refusal too — one flag for "I am deciding to let
     # this happen", not two.
-    a2 = advance_escaping({"until": until_tick((now_tick() or 0) + TICK_LEAD)},
+    a2 = advance_escaping(pass_time(),
                           unread=True, timeout=180)
     eq("6.9", "`through_casualties` also overrides the deadline refusal", a2, "ok", True)
     shape("6.10", "advance", a2, "data.escaped.bleedout_deadline", dict)
