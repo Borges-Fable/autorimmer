@@ -97,6 +97,21 @@ The loop (4.2) appends one NDJSON line per evaluation to
 - 4.4's "when did this last fire" is then `grep <item-id> RUNS/*/checklist.ndjson`
   — a computation, not bookkeeping.
 
+**The id space is closed, and that is why there is no incident class.** Every
+`item` a run logs must be a `### <id>` in one of these three files, or
+`colony-start-<n>` inside the colony-start step count:
+`accept/4.2-play-loop.py`'s `item-ids-known` check enforces exactly that, and
+its verdict enum is the four above and nothing else. M1 (`m1-20260831`)
+invented three ids mid-run for real observations that had nowhere to go —
+`barracks-heat`, `postmortem-trigger`, `time-control-drift` — and the run
+FAILS `item-ids-known` on all three. Ruled 2026-09-01: **a run-level incident
+does not get a new class; it gets the moment class it actually has.** Room
+heat is slow, event-less drift → `daily.md`. A death and a lost time control
+are events → `triggered.md`. A schema with a fifth verdict or a parallel
+incident file would have bought a second, unaudited ledger; what session 12
+actually lacked was the promotion pass below, without which any id invented
+mid-run reads as a schema gap for as long as nobody lands it.
+
 **Retirement pressure is not the same for every moment class** (recorded here
 so 4.4 builds on it): a daily item costs its query every day whether or not it
 fires, so silence accrues pressure against it. A turn trip-wire costs nothing
@@ -108,7 +123,7 @@ pass should weigh recurring cost × silence, not silence alone.
 
 **The hard cap binds `daily.md` only** — it is the one file with
 unconditional recurring cost. Cap: **7 items** *(proposed — 4.4 ratifies; what
-fits in one attentive read)*. Current count: 4. Adding an item past the cap
+fits in one attentive read)*. Current count: 5. Adding an item past the cap
 forces a recorded merge-or-retire in the same commit, and the file names what
 was displaced — the digest's own budget rule ("an uncapped section is the
 defect"), applied to attention. `turn.md` is capped by the digest byte budget

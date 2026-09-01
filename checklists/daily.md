@@ -7,8 +7,10 @@ without ever emitting anything. These are the only checks with unconditional
 recurring cost, so this is the one file 4.4's hard cap binds.
 
 **Cap: 7 items** *(proposed — ratified or changed by 4.4, `d32eadd`)*.
-**Current: 4.** Adding past the cap forces a recorded merge-or-retire in the
-same commit, named in this file. Run at the first read after
+**Current: 5** (`barracks-heat` promoted 2026-09-01 from M1's ledger — under
+cap, so no merge-or-retire was owed; `checklists/README.md` §promotion).
+Adding past the cap forces a recorded merge-or-retire in the same commit,
+named in this file. Run at the first read after
 `digest.time.day_of_season` changes; log every item, every day, to the run
 ledger (`checklists/README.md`).
 
@@ -88,6 +90,36 @@ ledger (`checklists/README.md`).
   forecasts (turn.md's trust table).
 - retire-when: sampling carries worst-apparel-HP, or an outfit policy plus
   tailoring bill makes replacement automatic (template/policy rung).
+
+### barracks-heat
+- when: daily
+- applies-when: an indoor room with a heat source and occupants exists (else
+  `n/a`)
+- read: `rooms` → `temp_c` per row where `indoors` is true and
+  `uses_outdoor_temp` is false (one call for every room; `Room.Temperature`
+  is a plain field read of `RoomTempTracker.temperatureInt`, and
+  `uses_outdoor_temp` is what says when the figure means nothing)
+- flag: `temp_c > 26` in a room colonists sleep or work in *(proposed —
+  a human's `ComfyTemperatureMax`, where the mood penalty lands)*; `> 36`
+  is the health line, not the warning
+- act: cheapest first — deconstruct or `flick` off a heat source (a torch
+  lamp is the usual culprit), or open the room. Coolers are wealth
+  ([[wealth-buys-bigger-raids]]) and the build verb waits on 3.3 anyway
+- why: vanilla's signal here IS the harm. `Toils_LayDown` grants
+  `SleptInHeat` the moment `AmbientTemperature > ComfyTemperatureMax`;
+  heatstroke accrues only above `SafeTemperatureRange().max`, which is
+  comfy max **+ 10** (`Verse/GenTemperature.SafeTemperatureRange`,
+  `HediffGiver_Heat.OnIntervalPassed`); and `Alert_Heatstroke` fires only
+  once a pawn already carries a visible Heatstroke hediff
+  (`GetFirstHediffOfDef(HediffDefOf.Heatstroke, mustBeVisible: true)`) —
+  the alert is the injury made visible, `Alert_TatteredApparel`'s pattern.
+  Those 10°C are the entire warning and nothing publishes them. Observed:
+  M1 `m1-20260831` day 3, room 57 at 28.2°C against 8°C outdoors — campfire
+  plus two torch lamps sealed in a 49-cell barracks, Captain carrying
+  SleptInHeat −4.
+- retire-when: sampling (2d9a1da) carries per-room temperature, or 1.6
+  watches `temp_c` as a condition — the same exit as `freezer-below-zero`,
+  which reads the same field from the other end.
 
 ## Blocked on sampling — do not fake these
 
