@@ -35,9 +35,20 @@ deleting it breaks a check.
 |---|---|---|
 | `map-dump-20260831T230213-006.json` | bench `20260831T230213`, call 006 | `2a7c064-label-centre.py` phase 6 — 51x51, 213 labels, sizes 1x1/1x2/2x1/2x2/3x2, rotations East/South/West |
 | `map-view-m1-20260831-124.json` | run `m1-20260831`, call 124 | `e6faa51-channel-alphabet.py` — the `channel` block |
+| `history-autoRecorderGroups-m1-Autosave-1.xml` | the M1 colony's own `Autosave-1.rws`, the `<autoRecorderGroups>` element verbatim (indentation trimmed, nothing else) | `2d9a1da-colony-rates.py --selftest` — all eleven Core recorders, the wealth identity, the 30,000/60,000-tick cadence ratio |
 
-Both are verbatim, unedited response envelopes. `map-dump-*` also supplies the
-`channel` block `e6faa51`'s suite compares against `map-view`'s.
+The first two are verbatim, unedited response envelopes. `map-dump-*` also
+supplies the `channel` block `e6faa51`'s suite compares against `map-view`'s.
+
+`history-autoRecorderGroups-*` is not an envelope — it is a slice of a SAVE
+FILE, and it is here because of what it cost to get the first time. Session 13
+answered "did wealth cause the M1 raids?" by decoding `HistoryAutoRecorder` out
+of `Autosave-5.rws` BY HAND, because no verb could ask; `2d9a1da` shipped the
+verb, and this block is the same data the hand decode produced, kept so the
+suite can grade its reader against real recorded numbers with no bench running.
+The records are base64 — `<records>` raw, `<recordsDeflate>` raw-deflate — which
+is `Verse/DataExposeUtility.LookByteArray`'s own two formats; the suite's
+`parse_history_block()` handles both, and a real save contains both.
 
 Do not hand-edit these. A suite that needs a case these do not cover wants
 another banked envelope beside them, not a doctored one — the whole value is

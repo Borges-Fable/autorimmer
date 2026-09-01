@@ -1,0 +1,88 @@
+<autoRecorderGroups>
+<li>
+	<def>Wealth</def>
+	<recorders>
+		<li>
+			<def>Wealth_Total</def>
+			<records>
+uOKURrjilEaZd5JGmeOPRpn1hEY=
+</records>
+		</li>
+		<li>
+			<def>Wealth_Items</def>
+			<recordsDeflate>
+Wxss4LYWiAsMBSH4ooAbAA==
+</recordsDeflate>
+		</li>
+		<li>
+			<def>Wealth_Buildings</def>
+			<recordsDeflate>
+a1l81rUFDQMA
+</recordsDeflate>
+		</li>
+		<li>
+			<def>Wealth_Pawns</def>
+			<recordsDeflate>
+Y2jwcmUA4Q3GrgwC8q4MDpNcAA==
+</recordsDeflate>
+		</li>
+	</recorders>
+</li>
+<li>
+	<def>Population</def>
+	<recorders>
+		<li>
+			<def>FreeColonists</def>
+			<recordsDeflate>
+Y2BwcGBAwwA=
+</recordsDeflate>
+		</li>
+		<li>
+			<def>Prisoners</def>
+			<recordsDeflate>
+Y2DABAA=
+</recordsDeflate>
+		</li>
+	</recorders>
+</li>
+<li>
+	<def>ColonistMood</def>
+	<recorders>
+		<li>
+			<def>ColonistMood</def>
+			<records>
+AABIQquqfkIAAExCpw0CQsZNm0E=
+</records>
+		</li>
+	</recorders>
+</li>
+<li>
+	<def>Debug</def>
+	<recorders>
+		<li>
+			<def>Adaptation</def>
+			<recordsDeflate>
+Y2BAAAA=
+</recordsDeflate>
+		</li>
+		<li>
+			<def>ThreatPoints</def>
+			<recordsDeflate>
+e8ud5PAWiBkYEuAYAA==
+</recordsDeflate>
+		</li>
+		<li>
+			<def>PopAdaptation</def>
+			<recordsDeflate>
+Y2AAgQZ7IOEAAA==
+</recordsDeflate>
+		</li>
+		<li>
+			<def>PopIntent</def>
+			<records>
+AAAAAFRV1T9UVVVA
+</records>
+		</li>
+	</recorders>
+</li>
+			</autoRecorderGroups>
