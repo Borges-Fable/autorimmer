@@ -258,6 +258,17 @@ transcripts/<sid>/
   002-advance/…
 ```
 
+`cmd.json` is written **before** the command is dispatched; `result.json` is
+written when the result comes back. So a step directory holding a `cmd.json`
+and no `result.json` is a command that was in flight when the client stopped —
+killed, disconnected, or still running — and it names exactly what was asked
+for. (It used to be the other way round: both files were written after the
+result returned, so a dead client left an empty numbered directory and no
+record at all. `136-advance` and `187-advance` in run `m1-20260831` are that
+hole — about 60,000 ticks, a full in-game day, with nothing on disk saying
+what had been sent.) Consumers already tolerate the half-written step:
+`accept/4.2-play-loop.py` warns past it and carries on.
+
 The run directory is named for the **game session id** by default, because
 `sid` is already the join key for `journal/<sid>.ndjson` and for every result
 envelope — one game session, one transcript, one journal, no correlation table.

@@ -692,8 +692,23 @@ class Transcript:
                 n += 1
         raise RuntimeError("transcript run is full (1000 steps)")
 
-    def record(self, step_dir, cmd_text, result_text, entry):
+    def request(self, step_dir, cmd_text):
+        """cmd.json, written BEFORE the command is dispatched.
+
+        The result is still recorded after the round trip — it does not exist
+        until then — but the request must not be, because a client that dies
+        mid-call used to leave an EMPTY step directory and nothing else: the
+        one artefact naming what was in flight was the one artefact that never
+        got written. `136-advance` and `187-advance` in run m1-20260831 are
+        that hole — ~60k ticks with no record of the command that ran them.
+        Layout and file names are unchanged, and consumers already tolerate a
+        step with no result.json (accept/4.2-play-loop.py WARNs past it).
+        """
         (step_dir / "cmd.json").write_text(cmd_text.rstrip("\n") + "\n")
+
+    def record(self, step_dir, cmd_text, result_text, entry):
+        if cmd_text is not None and not (step_dir / "cmd.json").exists():
+            self.request(step_dir, cmd_text)   # belt; request() ran already
         if result_text is not None:
             (step_dir / "result.json").write_text(result_text.rstrip("\n") + "\n")
         self.note(dict(entry, step=step_dir.name))
@@ -788,6 +803,8 @@ def send(root, op, args, opts, h, transcript=None):
     # 250ms minimum-age heuristic, but that is its belt, not our braces.)
     tmp = inbox / f".rwa-{cid}.tmp"
     step_dir = transcript.step(op) if transcript else None
+    if step_dir:
+        transcript.request(step_dir, text)   # before the inbox write, not after
     started = time.time()
     try:
         tmp.write_text(text)
