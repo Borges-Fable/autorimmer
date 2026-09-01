@@ -2686,9 +2686,82 @@ resolutions; the scope split) · `bac4eba` (templates correction, the north pin,
 its ownership) · `2a7c064` (the z axis, the rotation shift, the formula) ·
 `7382bdd` (the pre-authorization).
 
+### Then the two findings were worked, rather than handed back
+
+They had been written up as "worth your eye" — which was the wrong disposition,
+as Dorian pointed out. Neither needed a worker, a branch or a bench.
+
+**`2a7c064` — three defects, not one, and the two extra ones are the lesson.**
+The filed defect was the x axis: `cx = x + (sw*scale)//2` adds half the width to
+a position that is already central, so an odd-width building's code lands one
+cell east. The z axis was wrong too — `- ((sh-1)*scale)//2` is a correction that
+is not owed, putting an odd-HEIGHT label one cell NORTH — and it survived
+because **the specimen the issue was filed against is a 3x1 stove, height 1**,
+so the bad term was multiplied by zero. At most one of the two axes could ever
+have been right. Third, the rect itself was wrong for even sizes under rotation:
+the renderer reproduced the axis swap from `GenAdj.AdjustForRotation` and
+dropped its per-axis even-size centre shift, and no label arithmetic corrects a
+wrong rect. Fixed by porting `OccupiedRect` whole and centring in the rect it
+returns, which needs no parity special-case; the even-width answer the
+acceptance asked to have stated falls out of it rather than needing a rule.
+
+**A fourth defect, found only because the third could not be fixed without it.**
+`map-dump` published `labels[].rot` through `Rot4.ToStringHuman()` — which is
+`"North".Translate()`, a LOCALIZED string — while `render.py` compares it
+against the literals `"East"`/`"West"`. On any non-English install the swap
+silently never happened. Now `ToStringWord()`. Same class as `00a1be7`; no
+change in English, which is exactly why it could sit there.
+
+`accept/2a7c064-label-centre.py`: 20 checks, 20 PASS, and **no bench, no game,
+no protocol** — pure geometry, runnable anywhere python is. `baseviz/` had no
+tests before it. Phase 1 pins the port against `c718e4a`'s own worked example
+(one centre, three rects, for a 5x2 bench) so a drifting port fails loudly
+instead of silently re-measuring; phase 3 asserts the PRE-FIX formula fails
+every phase-2 case 5/5, because a check that cannot fail against its own bug
+proves nothing — and this issue's specimen is the proof, having passed the z
+axis by accident since it was filed.
+
+**The north pin, and what pinning was actually worth.** `INDEX.md` had carried
+"Row 0 = north is PROPOSED — 3.3 pins it" since session 10 and 3.3 never
+reached it. Pinned, and moved off 3.3 on purpose: it is a `templates/` and
+`baseviz/` decision, no C#, while 3.3's session is serialized behind the site
+routine. North-up was already the convention in `render.py`, `CropRenderer` and
+`map-dump`'s `north_up: true`; only `ir.py` was silent.
+
+The orientation was the cheap half. **The corpus was then checked AGAINST the
+pin instead of assumed to agree with it, and one template did not.**
+`freezer-kitchen` carried `FueledStove_South`; `FueledStove` is
+`interactionCellOffset (0,0,-1)`, so `Rot4.South` rotates the cook's cell 180°
+to the NORTH of the stove — row 0, a wall. The stove was unusable as drawn, and
+the answer is the same whether the IR token is read as a corner or a centre, so
+it did not wait on pin 1. Now `FueledStove_North`.
+
+The cause was the DIALECT, not the template. The suffix was documented as "the
+direction the def FACES", which means opposite things for a cooler (vents
+toward its rotation — `Cooler_North` was right) and a workbench (used from the
+side opposite it — so a stove a cook stands south of is `Rot4.North`). One
+gloss, two conventions, and the corpus contained one of each. Pin 2 is now the
+`Rot4` value verbatim, as `map-dump` publishes it. The audit is complete rather
+than sampled: `FueledStove` is the only interaction-cell-bearing rotated token
+in the corpus.
+
+Three findings in one day resolved to the same rule — `ToStringWord` over
+`ToStringHuman`, the rotation suffix over a facing description, and `00a1be7`
+before both: **read by field, never through a description.**
+
+`2a7c064` stays OPEN on one bullet: nobody has rendered a real dump and graded
+2.5's fixture question 4 against it. That is bench work, it belongs to the
+orchestrator, and it is noted on `f7b6207` so it is not re-derived.
+
 ### State at handover
 
-`main` clean, one worktree, no build debt — `git diff -U0 11ef46c..HEAD -- '*.cs'`
-filtered for non-comment change is empty, and `Assemblies/AutoRimmer.dll`'s pdb
-path names this worktree under `obj/Release/`. Nothing has been built, launched
-or branched. The three sessions are ready to cut.
+`main` clean, one worktree, no build debt. The assembly was rebuilt for the
+`rot` fix and verified per the workspace rules before committing: pdb path names
+THIS worktree under `obj/Release/`, AssemblyConfiguration Release with the Debug
+blob absent, `InformationalVersion` naming `f947917` (i.e. its own HEAD), and
+231,267 differing bytes at identical file size against the previous blob — far
+above the ~200-byte metadata floor, so a real IL change rather than a no-op
+verification rebuild.
+
+Nothing has been launched and nothing has been branched. The three sessions are
+ready to cut.
