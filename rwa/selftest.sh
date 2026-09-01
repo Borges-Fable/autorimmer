@@ -431,6 +431,142 @@ run 0 "--layers restricts what is drawn, so the bytes differ" -- \
 has "DIFFERENT"
 
 
+section "13. place-layout: the IR expansion (spec 3.3), offline"
+# EVERYTHING HERE IS THE CLIENT HALF AND NOTHING ELSE, deliberately.
+# `--print-payload` resolves an IR against an origin with no bench in the loop,
+# so these are the only place-layout claims a machine with no RimWorld can
+# settle: the coordinate map, the token split, the stuff-map merge and the
+# argument refusals. Whether the game ACCEPTS any of it is the orchestrator's
+# bench pass, and no check here should be read as evidence about that.
+#
+# The assertions dig out VALUES, never absences — a check that only asserts a
+# key is missing passes just as happily when the dig path is wrong.
+LAYOUT="$TMP/layout.json"
+# `eval` here is safe and is the point: every expression it runs is a literal
+# written a few lines below in this file, never anything from the payload, the
+# environment or a caller. It exists because RUNLOG's standing lesson is that a
+# WRONG DIG PATH PRINTS A CONFIDENT ZERO — `things --def X` reports under
+# `rollups`, `site-audit` under `hits`, and a one-liner looking for `list` said
+# "0" both times. A real expression over the parsed object fails loudly on a bad
+# path instead of quietly returning nothing.
+dig() { python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(eval(sys.argv[2],{'d':d}))" "$LAYOUT" "$1"; }
+
+run 0 "bedroom expands offline, with no bench asked anything" -- \
+    sh -c '"$RWA" place-layout templates/bedroom.ir.json --origin 120,130 --print-payload > "$1" && echo WROTE' _ "$LAYOUT"
+has "WROTE"
+run 0 "…22 tokens in the 5x7 grid become 22 elements" -- dig "len(d['elements'])"
+has "22"
+run 0 "…and the IR's own defName rides along as the layout name" -- dig "d['name']"
+has "AR_Bedroom_5x7"
+
+# ROW 0 IS NORTH (ir.py's pinned docstring, INDEX.md pin 0) and --origin is the
+# SOUTH-WEST corner. Both at once: the origin cell itself must be occupied by
+# the SOUTH wall (grid row 6), and the north wall must sit at oz + h - 1.
+run 0 "row 0 is NORTH: the north wall lands at oz + h - 1" -- \
+    dig "sorted({e['at'][1] for e in d['elements'] if e['def']=='Wall'})[-1]"
+has "136"
+run 0 "--origin is the SOUTH-WEST corner: the origin cell is the south wall" -- \
+    dig "[e['label'] for e in d['elements'] if e['at']==[120,130]]"
+has "layer:0[6,0]"
+run 0 "…and the layout occupies exactly x 120..124" -- \
+    dig "(min(e['at'][0] for e in d['elements']), max(e['at'][0] for e in d['elements']))"
+has "(120, 124)"
+
+# PIN 2: a rotation suffix is the Rot4 value verbatim, and it is SPLIT OFF the
+# def name. `Bed_South` is a bed at Rot4.South, not a def called Bed_South —
+# getting this wrong is what shipped FueledStove_South with its interaction cell
+# inside a wall.
+run 0 "Bed_South splits into def Bed + rot South" -- \
+    dig "[(e['def'], e.get('rot')) for e in d['elements'] if 'Bed' in e['label']]"
+has "('Bed', 'South')"
+run 0 "an unrotated token carries NO rot key at all, so the mod uses defaultPlacingRot" -- \
+    dig "[e.get('rot','ABSENT') for e in d['elements'] if e['def']=='Door']"
+has "ABSENT"
+
+# A MATERIAL SUFFIX IS NOT SPLIT. ir.py's docstring offers `Wall_WoodLog` as an
+# example token because KCSG exports encode material in the name; telling that
+# apart from a def name needs the def database, which is on the other side of
+# the bridge. So it goes over verbatim and the MOD refuses it by name.
+cat > "$TMP/stuffy.ir.json" <<'JSON'
+{"defName":"AR_Stuffy","size":[2,1],"spawnConduits":false,
+ "layers":[[["Wall_WoodLog","Wall_North"]]],"terrain":[],"roof":[],
+ "modRequirements":[],"extension":null,"animalCells":[]}
+JSON
+run 0 "a MATERIAL suffix is not split — only the four Rot4 words are" -- \
+    sh -c '"$RWA" place-layout "$1" --origin 10,10 --print-payload > "$2" && echo WROTE' _ "$TMP/stuffy.ir.json" "$LAYOUT"
+run 0 "…Wall_WoodLog stays one def name; Wall_North becomes Wall + North" -- \
+    dig "[(e['def'], e.get('rot')) for e in d['elements']]"
+has "('Wall_WoodLog', None)"
+has "('Wall', 'North')"
+
+# THE STUFF-MAP. `*` is the default for every MadeFromStuff def the map does not
+# name; --stuff-map is merged first and --stuff wins over it, so a caller can
+# take a saved map and override one def on the command line.
+run 0 "--stuff builds a stuff_map, and --stuff overrides --stuff-map" -- \
+    sh -c '"$RWA" place-layout templates/bedroom.ir.json --origin 120,130 --print-payload \
+        --stuff-map "{\"Wall\":\"Granite\",\"Door\":\"Steel\"}" --stuff "Wall=WoodLog" --stuff "*=WoodLog" > "$1" && echo WROTE' _ "$LAYOUT"
+run 0 "…Wall came from --stuff, Door survived from --stuff-map, * is the default" -- \
+    dig "(d['stuff_map']['Wall'], d['stuff_map']['Door'], d['stuff_map']['*'])"
+has "('WoodLog', 'Steel', 'WoodLog')"
+run 0 "no stuff argument means no stuff_map at all — the mod then defaults and SAYS so" -- \
+    sh -c '"$RWA" place-layout templates/bedroom.ir.json --origin 1,1 --print-payload > "$1" && python3 -c "import json;print(\"stuff_map\" in json.load(open(\"$1\")))"' _ "$LAYOUT"
+has "False"
+
+# LAYERS. power-room's layer 1 is the conduit spine; selecting it alone must
+# yield the three conduits and nothing else, which is what makes a two-pass
+# placement (structure, then wiring) expressible at all.
+run 0 "--layer 1 selects power-room's conduit spine alone" -- \
+    sh -c '"$RWA" place-layout templates/power-room.ir.json --origin 200,200 --layer 1 --print-payload > "$1" && echo WROTE' _ "$LAYOUT"
+run 0 "…three conduits, no walls" -- dig "sorted(e['def'] for e in d['elements'])"
+has "['HiddenConduit', 'HiddenConduit', 'PowerConduit']"
+
+# TERRAIN is expanded as ordinary elements — Siting.cs resolves a BuildableDef
+# as ThingDef then TerrainDef, so a floor is not a special case — and
+# --no-terrain drops it for a caller that wants structure only.
+cat > "$TMP/floored.ir.json" <<'JSON'
+{"defName":"AR_Floored","size":[2,1],"spawnConduits":false,
+ "layers":[[["Wall","."]]],"terrain":[["WoodPlankFloor","WoodPlankFloor"]],
+ "roof":[[1,1]],"modRequirements":[],"extension":null,"animalCells":[]}
+JSON
+run 0 "the terrain grid becomes elements like anything else" -- \
+    sh -c '"$RWA" place-layout "$1" --origin 5,5 --print-payload > "$2" && echo WROTE' _ "$TMP/floored.ir.json" "$LAYOUT"
+run 0 "…one wall plus two floors" -- dig "sorted(e['def'] for e in d['elements'])"
+has "['Wall', 'WoodPlankFloor', 'WoodPlankFloor']"
+run 0 "--no-terrain drops them" -- \
+    sh -c '"$RWA" place-layout "$1" --origin 5,5 --no-terrain --print-payload > "$2" && echo WROTE' _ "$TMP/floored.ir.json" "$LAYOUT"
+run 0 "…leaving the wall alone" -- dig "[e['def'] for e in d['elements']]"
+has "['Wall']"
+
+# THE REFUSALS. Every one of these would otherwise place a room somewhere the
+# caller did not mean, which is the failure this whole coordinate discipline
+# exists to prevent — so they refuse rather than guess.
+run 2 "no --origin is refused, and the message says WHICH corner" -- \
+    "$RWA" place-layout templates/bedroom.ir.json --print-payload
+has "SOUTH-WEST corner"
+run 2 "a malformed origin is refused, not guessed at" -- \
+    "$RWA" place-layout templates/bedroom.ir.json --origin 120 --print-payload
+has "two integers"
+run 2 "an unknown --mode is refused" -- \
+    "$RWA" place-layout templates/bedroom.ir.json --origin 1,1 --mode fast --print-payload
+has "blueprint or instant"
+run 2 "two layout files is a mistake, not a batch" -- \
+    "$RWA" place-layout templates/bedroom.ir.json templates/power-room.ir.json --origin 1,1 --print-payload
+has "takes one layout file"
+run 2 "--stuff without a = is refused" -- \
+    "$RWA" place-layout templates/bedroom.ir.json --origin 1,1 --stuff WoodLog --print-payload
+has "DEF=STUFF"
+run 1 "a layout file that is not there fails as I/O, with the path in it" -- \
+    "$RWA" place-layout "$TMP/nope.ir.json" --origin 1,1 --print-payload
+has "cannot read layout"
+
+# --save-payload banks the same JSON a suite can replay through
+# `rwa send place-layout --args-json @file`, which is how an acceptance check
+# builds a deliberately colliding layout without hand-writing 22 elements.
+run 0 "--save-payload writes the payload for a suite to replay" -- \
+    sh -c '"$RWA" place-layout templates/bedroom.ir.json --origin 120,130 --save-payload "$1" --print-payload >/dev/null && python3 -c "import json;d=json.load(open(\"$1\"));print(len(d[\"elements\"]), d[\"mode\"])"' _ "$TMP/saved.json"
+has "22 blueprint"
+
+
 section "results"
 printf '\n  %d passed, %d failed\n\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
