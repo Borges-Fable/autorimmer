@@ -255,7 +255,17 @@ namespace AutoRimmer
             if (p.Length == 0)
                 throw new VerbArgsException("until.condition.path is empty");
             var parts = p.Split('.');
-            section = parts[0];
+            // The SECTION segment can carry a bracket too, and it must not end
+            // up inside the section NAME: the issue's own example is
+            // `colonists[*].mood_pct`, and taking `colonists[*]` as a section
+            // name would refuse it with "not a digest section" — technically a
+            // refusal, but naming the wrong problem. Split the head the same
+            // way every other segment is split, then let `[*]` fail against the
+            // section dict with the message that is actually true: no digest
+            // section is list-valued at the top level, so the addressable
+            // spelling is `colonists.list[*].mood_pct`.
+            int headBracket = parts[0].IndexOf('[');
+            section = headBracket < 0 ? parts[0] : parts[0].Substring(0, headBracket);
             if (!DigestVerb.IsPredicateSection(section))
                 throw new VerbArgsException(
                     $"'{section}' is not a digest section a predicate can address. The sections "
@@ -265,6 +275,11 @@ namespace AutoRimmer
                     + "be asking a question about the past.) A path may be written with or "
                     + "without a leading `digest.`.");
             keys = new List<string>();
+            // The head contributes only its bracket: its NAME is the section
+            // and is already consumed, so `colonists[*]` leaves a bare `[*]`
+            // that Walk applies to the section dictionary and refuses with the
+            // sentence that is actually true — "colonists is not a list".
+            if (headBracket >= 0) AddIndex(parts[0].Substring(headBracket), p);
             for (int i = 1; i < parts.Length; i++)
             {
                 string seg = parts[i];
@@ -273,21 +288,33 @@ namespace AutoRimmer
                 // `list[*]` and `list[3]` split into the key and the index.
                 int br = seg.IndexOf('[');
                 if (br < 0) { keys.Add(seg); continue; }
-                if (!seg.EndsWith("]", StringComparison.Ordinal) || br == 0)
+                if (br == 0)
                     throw new VerbArgsException(
                         $"until.condition.path segment '{seg}' is malformed — write `list[*]` for "
                         + "every element or `list[0]` for one");
                 keys.Add(seg.Substring(0, br));
-                string inside = seg.Substring(br + 1, seg.Length - br - 2);
-                if (inside == "*") keys.Add(Star);
-                else if (int.TryParse(inside, NumberStyles.Integer, CultureInfo.InvariantCulture,
-                                      out int idx) && idx >= 0)
-                    keys.Add("#" + idx);
-                else
-                    throw new VerbArgsException(
-                        $"until.condition.path index '[{inside}]' must be `*` or a non-negative "
-                        + "whole number");
+                AddIndex(seg.Substring(br), p);
             }
+        }
+
+        // `[*]` or `[N]`, verbatim including the brackets.
+        private void AddIndex(string bracketed, string whole)
+        {
+            if (!bracketed.EndsWith("]", StringComparison.Ordinal))
+                throw new VerbArgsException(
+                    $"until.condition.path '{whole}' has an unclosed `[` — write `list[*]` for "
+                    + "every element or `list[0]` for one");
+            string inside = bracketed.Substring(1, bracketed.Length - 2);
+            if (inside == "*") { keys.Add(Star); return; }
+            if (int.TryParse(inside, NumberStyles.Integer, CultureInfo.InvariantCulture,
+                             out int idx) && idx >= 0)
+            {
+                keys.Add("#" + idx);
+                return;
+            }
+            throw new VerbArgsException(
+                $"until.condition.path index '[{inside}]' must be `*` or a non-negative whole "
+                + "number");
         }
 
         // Called once at arm time. Refuses a path that does not resolve, which
@@ -468,14 +495,15 @@ namespace AutoRimmer
 
         private string PathTo(int depth)
         {
-            var s = new System.Text.StringBuilder(section);
+            var sb = new System.Text.StringBuilder(section);
             for (int i = 0; i < depth; i++)
             {
-                if (keys[i] == Star) s.Append("[*]");
-                else if (keys[i].Length > 1 && keys[i][0] == '#') s.Append("[").Append(keys[i].Substring(1)).Append("]");
-                else s.Append('.').Append(keys[i]);
+                if (keys[i] == Star) sb.Append("[*]");
+                else if (keys[i].Length > 1 && keys[i][0] == '#')
+                    sb.Append("[").Append(keys[i].Substring(1)).Append("]");
+                else sb.Append('.').Append(keys[i]);
             }
-            return s.ToString();
+            return sb.ToString();
         }
 
         private static string KeyList(Dictionary<string, object> obj)
