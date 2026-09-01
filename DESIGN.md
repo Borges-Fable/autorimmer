@@ -1268,3 +1268,22 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `Cooler`, `TorchLamp`, `WoodFiredGenerator`, `FirefoamPopper` all leave
   `hasInteractionCell` unset), so that audit is complete rather than a sample.
   `bac4eba`, `1adc737`.
+- 2026-09-01 (session 15) — **A refusal names the cell that refused, and
+  `GenSpawn.CanSpawnAt` has SEVEN branches, not six.** `DevVerbs.WhyNoSpawn`
+  returned a bare sentence, and its caller then asked `Blockers.At` about the
+  cell it had ASKED for — different cells whenever the refusal is off-footprint,
+  which is the whole of `8b4839f`. It now returns `{tier, cell, thing, reason}`
+  and every failure row carries `cell` (the refusing cell) and `cell_role` (the
+  tier) beside the unchanged `at` (the caller's own argument echoed back).
+  Re-walking `Verse/GenSpawn.CanSpawnAt` member by member to write the tiers
+  turned up a branch the mod never reproduced:
+  **`GenConstruct.NotBlockingAnyInteractionCells`** runs there as well as inside
+  `CanPlaceBlueprintAt`, so a placement refused for covering a NEIGHBOUR's
+  interaction cell was reported as `ThingDef.CanSpawnAt refused` — the wrong
+  branch, and no cell at all. That is the same defect as `8b4839f` one level up:
+  a refusal describing something other than what refused. Seven tiers rather
+  than the four the issue named, because the two extra ones are different
+  REMEDIES: `blocks-interaction` is cleared by moving our own building and never
+  by clearing the cell it names, `def` names no cell, and `place-search` is the
+  honest answer when `CanSpawnAt` accepted the target and `GenPlace` still found
+  nowhere. `8b4839f`.

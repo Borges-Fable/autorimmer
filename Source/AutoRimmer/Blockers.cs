@@ -132,15 +132,26 @@ namespace AutoRimmer
         // knowledge — and is published as `refused` so it never overwrites
         // Classify's `reason`, which is how the THING clears.
         //
+        // `known` is the thing the CALLER's own re-walk of the game's gate
+        // already identified, and it beats the cell scan when there is one
+        // (git-bug 8b4839f). The scan answers "what is on this cell", which is
+        // not always "what the game objected to": GenConstruct's
+        // InteractionCellStandable refuses on `passability != Standable` and on
+        // an unstandable `entityDefToBuild`, so the offender can be a blueprint
+        // sitting under an edifice the scan would name instead. Note that
+        // Describe's `at` is then the THING's own PositionHeld, which for a
+        // multi-cell occupant is its centre and not this cell — callers publish
+        // the refusing cell themselves rather than reading it back out of here.
+        //
         // OBSERVER DISCIPLINE: GetEdifice is a grid index and GetThingList
         // returns Map.thingGrid's stored list; neither is lazy and neither
         // rebuilds on read.
-        public static Dictionary<string, object> At(Map map, IntVec3 c, string reason)
+        public static Dictionary<string, object> At(Map map, IntVec3 c, string reason, Thing known = null)
         {
-            Thing t = null;
+            Thing t = known;
             try
             {
-                if (map != null && c.InBounds(map))
+                if (t == null && map != null && c.InBounds(map))
                 {
                     t = c.GetEdifice(map);
                     if (t == null)

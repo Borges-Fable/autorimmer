@@ -682,6 +682,17 @@ def phase1():
     eq("1.3r", "…while `reason` stays Classify's answer (null for a plain item: not "
                "mineable, not a building, so the game has no sentence to give)",
        e, "data.failed.0.blocker.reason", None)
+    # 1.3s-u THE 8b4839f KEYS on the branch where the refusing cell really IS
+    #        the target. `at` echoes the caller's argument and always did;
+    #        `cell` is the cell that refused and `cell_role` is which tier of
+    #        the gate refused it. Here WhyNoSpawn named no branch at all —
+    #        CanSpawnAt accepted this cell and GenPlace still found nowhere —
+    #        so the pair must say exactly that rather than pointing at a tier.
+    shape("1.3s", "dev:spawn-thing", e, "data.failed.0.cell", list)
+    eq("1.3t", "with no branch to name, the refusing cell IS the target",
+       e, "data.failed.0.cell", dig(e, "data.failed.0.at"))
+    eq("1.3u", "…and cell_role says so instead of naming a tier",
+       e, "data.failed.0.cell_role", "place-search")
 
     # 1.4 THE FINDING PROPER: the same facts in the JOURNAL ROW.
     seq = dig(e, "data.dev.journal_seq")
@@ -731,6 +742,28 @@ def phase1():
         one_of("1.5g", "the blocker says HOW it clears (Blockers.Classify)",
                dig(e, "data.failed.0.blocker.removal"),
                ["mine", "deconstruct", "attack", "none"])
+        # 1.5h-j THE DEFECT 8b4839f WAS FILED FOR. Bench 20260901T121508 refused
+        #        a HiTechResearchBench for granite on the interaction cell one
+        #        row SOUTH of the footprint, and then described a WoodLog on the
+        #        target cell with removal:"none" — the opposite of the truth,
+        #        since the granite clears by mining. The tier is what makes that
+        #        readable without arithmetic.
+        shape("1.5h", "dev:spawn-thing", e, "data.failed.0.cell", list)
+        one_of("1.5i", "cell_role names which tier of the gate refused",
+               dig(e, "data.failed.0.cell_role"),
+               ["bounds", "footprint", "terrain", "interaction",
+                "blocks-interaction", "def"])
+        if dig(e, "data.failed.0.cell_role") == "interaction":
+            check("1.5j", "the interaction tier reports the REFUSING cell, which is "
+                          "OFF the footprint — the whole of 8b4839f",
+                  dig(e, "data.failed.0.cell") != dig(e, "data.failed.0.at"),
+                  "failed[0].cell != failed[0].at",
+                  {"cell": dig(e, "data.failed.0.cell"), "at": dig(e, "data.failed.0.at")})
+        else:
+            note("1.5", "cell_role is %s, not 'interaction', so the off-footprint case "
+                        "is not exercised on this cell. Stage rock one cell south of a "
+                        "research bench's footprint to hit it."
+                        % show(dig(e, "data.failed.0.cell_role")))
     else:
         note("1.5", "the research bench PLACED on that cell (direct mode wipes with "
                     "WipeMode.VanishOrMoveAside), so the CanSpawnAt branch was not "
@@ -791,6 +824,10 @@ def phase1():
         shape("1.6j", "the journal row", row, "payload.failed.0.blocker", dict)
         eq("1.6k", "the row carries the near-arm reason too", row,
            "payload.failed.0.reason", r)
+        # The ROW is the durable record, so the 8b4839f keys have to be in it
+        # too — a response-only field is a field that is gone by the next run.
+        shape("1.6l", "the journal row", row, "payload.failed.0.cell", list)
+        shape("1.6m", "the journal row", row, "payload.failed.0.cell_role")
 
     # 1.7 tidy: the staged log is left where it is (it is one wood log), but the
     #     run must not have raised a red error doing any of this.
