@@ -130,36 +130,26 @@ finished.
 
 ---
 
-# SESSION C — geometry. Runs in PARALLEL with A. Touches no C#.
+# SESSION C — CUT FROM THIS ROUND
 
-Branch `spec/module-grid`. **This brief is much smaller than the round plan
-assumed** — three of its four items are already done, so read this before
-picking up the original list:
+`bac4eba` (the 7x7 module grid) was in the original round plan as a parallel
+session. It is **held until after M2** — Evan, 2026-09-01, and it is the first
+thing after.
 
-- The north pin: DONE (session 14). Row 0 is north; `ir.py` declares it.
-- `2a7c064`: CLOSED, 25-check suite, and it caught a fourth defect in
-  `map-dump`.
-- `e6faa51`: CLOSED, 12-check suite.
-- Template IR "is it a format or one example": all three templates carry both
-  halves in an identical nine-key dialect. It is a format.
+The parallel slot was a RESOURCE argument (it touches no C#, so it does not
+contend for the one DLL) and that is not a sequencing argument. `bac4eba`
+comment #1 is Evan's own ruling from session 11 and already said so: *"3.3 goes
+first, as already specced; this issue is the follow-on. Prove `place-layout`
+can put ONE room down correctly at all; then make rooms tile."*
 
-**What is left is `bac4eba` alone**, and it is real work:
+Its acceptance settles it independently — three of its five bullets are
+unsatisfiable before `place-layout` exists: the off-phase origin refusal, two
+adjacent modules sharing a wall built once and billed once, and the 2x2
+rehearsal reading as a connected base. Only "record the module in DESIGN" and
+"re-cut the templates" are reachable now, and re-cutting the corpus to a module
+nobody has placed is the thing worth not doing.
 
-- The 7x7 module recorded in DESIGN with its reasoning.
-- A layout declares its module footprint; subdivision vocabulary (quarter,
-  half, corner) expressed as IR, not prose.
-- Shared-wall semantics: who owns an interior wall, and how the material bill
-  avoids counting it twice.
-- The three templates re-cut to the module or explicitly marked non-modular in
-  `INDEX.md`. `power-room` is already 7x7.
+The other three items the round plan had put in this session are already done
+(session 14): the north pin, `2a7c064` and `e6faa51`.
 
-Two things NOT yours this round: the off-phase refusal (it is `place-layout`,
-next round) and 3.3's 5x7 rehearsal size (decide and record whether it becomes
-7x7 or deliberately exercises the non-modular path — that is a note on
-`1adc737`, not a change to it).
-
-One hazard, from `bac4eba`'s own body: on a grid a one-cell placement slide is
-CUMULATIVE and silently de-phases every module after it. `acee526` (1.9,
-exact-or-refuse) is therefore load-bearing for the grid even though it does not
-block the first room. Say so where you record the module, and do not assume it
-is fixed.
+**So this round is A then B. Two sessions.**
