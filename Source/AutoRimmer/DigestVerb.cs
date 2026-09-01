@@ -256,10 +256,14 @@ namespace AutoRimmer
                 int c = ((int)b.Priority).CompareTo((int)a.Priority);
                 return c != 0 ? c : a.Order.CompareTo(b.Order);
             });
+            var store = AlertMuteComponent.Current;
             var list = new List<object>();
             var droppedByPriority = new Dictionary<string, object>();
+            int mutedLive = 0;
             for (int i = 0; i < live.Count; i++)
             {
+                bool muted = store != null && store.Has(live[i].Id);
+                if (muted) mutedLive++;
                 if (i < AlertCap)
                 {
                     list.Add(new Dictionary<string, object>
@@ -267,13 +271,18 @@ namespace AutoRimmer
                         ["id"] = live[i].Id,
                         ["label"] = live[i].Label,
                         ["priority"] = live[i].Priority.ToString(),
+                        // git-bug 280fb78. Beside the thing it modifies, the
+                        // way `threat-pardon` puts `pardoned` on the candidate
+                        // row: a reader looking at this alert is told, here,
+                        // that it has been decided not to wake for it.
+                        ["muted"] = muted,
                     });
                     continue;
                 }
                 string key = live[i].Priority.ToString();
                 droppedByPriority[key] = droppedByPriority.TryGetValue(key, out var n) ? (int)n + 1 : 1;
             }
-            return new Dictionary<string, object>
+            var data = new Dictionary<string, object>
             {
                 ["active"] = list,
                 ["total"] = live.Count,
@@ -282,6 +291,47 @@ namespace AutoRimmer
                 // question about whether something important was hidden.
                 ["more_by_priority"] = droppedByPriority,
             };
+            // ============================================== git-bug 280fb78 ==
+            // THE STANDING DECISION, IN THE GLANCE. `alert_on` now halts an
+            // advance unconditionally and `alert-mute` is how an agent stops a
+            // chronic one waking it — which makes the mute list exactly the
+            // shape of failure `b1b3060` shipped `digest.posture` to close
+            // ([[seek-off-is-a-decision-to-flee]]): a standing decision the
+            // agent cannot see is one it will forget it made and then be
+            // baffled by.
+            //
+            // A SEPARATE LIST AND NOT ONLY THE PER-ROW FLAG, because the two
+            // answer different questions and only one of them survives the day.
+            // `active[*].muted` says "this alert is up and you have decided to
+            // ignore it"; `muted` says "here is every decision of that kind you
+            // are holding", INCLUDING the ones whose alert is not currently up
+            // — which is the day-8 case the issue names. It is also outside the
+            // `AlertCap` truncation on purpose: the cap drops LIVE rows by
+            // priority, and a mute that fell off the bottom of a busy readout
+            // would be a standing decision hidden by a display budget.
+            //
+            // Uncapped is safe on the axis that matters: this list is bounded
+            // by what the AGENT muted, one act at a time with a required
+            // reason, not by anything the colony can generate.
+            var muteList = new List<object>();
+            if (store != null)
+            {
+                var liveIds = new HashSet<string>(StringComparer.Ordinal);
+                for (int i = 0; i < live.Count; i++) liveIds.Add(live[i].Id);
+                var ids = new List<string>(store.All.Keys);
+                ids.Sort(StringComparer.Ordinal);
+                foreach (var id in ids)
+                    muteList.Add(new Dictionary<string, object>
+                    {
+                        ["id"] = id,
+                        ["reason"] = store.Reason(id),
+                        ["live"] = liveIds.Contains(id),
+                    });
+            }
+            data["muted"] = muteList;
+            data["muted_count"] = muteList.Count;
+            data["muted_live"] = mutedLive;
+            return data;
         }
 
         // 2.6 blocker 3: this was the only section without a cap, on a verb
