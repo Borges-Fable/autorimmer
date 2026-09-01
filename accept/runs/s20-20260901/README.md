@@ -88,3 +88,23 @@ distance to the trader) · `dev:spawn-thing CommsConsole` + `SolarGenerator`
 within 6 cells (`PowerConnectionMaker.ConnectMaxDist = 6`) and one advance so
 the power net forms · `dev:incident GiveQuest_Random` a few times until
 `quests.counts.available >= 1` · run in daylight.
+
+## 1.2c, the half the script cannot run — discharged by the orchestrator
+
+`save` → `quest {id}` for all 9 ids → `quests` → `save`, with
+`journal-selftest {steps:["save"]}` as the save route.
+
+- `<quests>` region: **168,043 bytes, identical**.
+- **The entire 15,401,531-byte save is byte-identical**, `sha256
+  b5a2f9d4adceaa007fedae9b812da8713397ec29aa81c06a86421ff9d6087e11` both times.
+
+Nothing anywhere in the serialized world moved across ten quest reads, three of
+them on quests with an unresolved `QuestPart_Choice`. Recorded on `548ef48`.
+
+**Method warning, paid for the hard way.** `journal-selftest`'s step list is
+`steps`, not `kind`. `{kind:"save"}` is silently dropped and the verb runs its
+DEFAULT list — `["letter","message","error","downed","break"]` — which downs a
+colonist, sends another berserk and logs a red error, while returning
+`ok:true`. Four calls before it was noticed; repaired with `dev:heal` and
+`dev:mental-state {stop:true}`. Filed as measured evidence on `7382bdd`, whose
+silent-argument-fallback class this is.
