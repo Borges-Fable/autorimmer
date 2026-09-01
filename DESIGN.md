@@ -2425,3 +2425,77 @@ queue by default (an agent flailing mid-experiment must not page triage).
   a standing bleeder and a bedded bleeder outside this refusal, correctly: a
   patient in bed whose DOCTOR cannot arrive in time is a different comparison
   (tend travel, not rescue travel) and is not claimed. `722c951`, `40ed42f`.
+
+- 2026-09-01 (session 21) — **The casualty halt is on the TRANSITION, not on the
+  STATE: an advance made while an own-faction colonist is ALREADY down runs
+  normally, and that is the mod being right.** Raised as a genuine ambiguity by
+  acceptance check 7.6a of `accept/61794cd-bleed-triage.py`, which staged four
+  already-downed colonists and asserted that an un-escaped `advance` could not
+  complete. On the s21 bench it completed — `ok:true reason:"ticks" ticks:300` —
+  and the suite, not the mod, was wrong. `722c951`'s own text pulls both ways in
+  one place only: its Acceptance bullet says "an advance **spanning** an
+  own-faction downing stops at it", which a reader can take as a condition.
+  Everywhere the issue is SPECIFIC it is a transition: the scope extension says
+  "stop early when an own-faction pawn goes down or dies **during the advance**,
+  returning what happened **and the tick it happened at**" — a state has no such
+  tick; the sibling bullet says "an advance spanning a HOSTILE downing does NOT
+  stop — prove the filter is on faction, **not on the event**" — a downing is
+  named as an event; and the replay bullet says "an advance **across tick
+  214,599** stops there". The implementation matches: `JournalHooks.Patch_MakeDowned`
+  and `Patch_SetDead` are POSTFIXES on `Pawn_HealthTracker.MakeDowned` / `SetDead`,
+  so a pawn already down emits nothing.
+  **The design argument decides it independently of the wording.** A state halt
+  wedges a ten-day unattended run: on a bedless map every casualty's verdict is
+  `no-rescuer` (`TakeToBedGate` refuses everybody), there is no act that clears
+  the condition, and every subsequent advance would halt at zero ticks on the
+  same pawn forever. That is the identical reasoning that already made the
+  `bleedout-deadline` refusal fire on `too-slow` and on nothing else, in the
+  entry above. And the escape does not rescue a state halt: `through_casualties`
+  is per-call and deliberately not a mode (`722c951` checks 2.17–2.18), so a
+  state halt would force the escape onto every advance for the rest of the run
+  and train the agent to pass it unread — the guard switched off by fatigue,
+  which is worse than the guard absent. The casualty is not lost meanwhile: it is
+  in every `digest`, in `triage`'s rows with the gate that refused each
+  candidate, and in `pawn.health.ticks_until_bleedout`.
+  The suite now asserts BOTH halves — 7.5a that the state does not halt (the
+  anti-wedge property, previously only an accident), 7.6 that a downing armed
+  INSIDE the advance does, via `722c951`'s own `journal-selftest --steps down-at`
+  fixture — and 9.12a re-derives the transition claim from `JournalHooks.cs` so a
+  hook moved onto `Pawn.Downed` fails offline rather than on a bench. `722c951`,
+  `61794cd`.
+
+- 2026-09-01 (session 21) — **`enabled_but_incapable` is published
+  UNCONDITIONALLY on every diagnosed row — empty list, never absent.** It was
+  emitted only when the impaired list was non-empty, in BOTH homes
+  (`WorkCoverage.Section`'s under-row and `work-cover`'s `still_under` row), so
+  an absent key meant both "nobody enabled here is missing a capacity" and "this
+  build does not publish that key". That is the exact conflation `61794cd`
+  already ruled against for `ticks_until_bleedout` (`null`, never omitted, never
+  `int.MaxValue`) and that `PawnActs.NoStamp()` exists for, and every sibling in
+  the same dictionary — `available_pawns`, `candidates` — is already an
+  always-present, possibly empty list. It cost acceptance check 7.2h, which asked
+  for the key on a refusal whose fixture happened to have Doctor switched off
+  across the roster: nobody was enabled-but-incapable, the key was absent, and
+  the check could not tell that from a wrong dig path. `work-cover`'s `note` now
+  says a **non-empty** list means surgery, and `checklists/triggered.md` item 7
+  says to branch on whether the list has entries rather than on whether it is
+  there. **Not fixed, and deliberately:** the outer `if (r.Under)` that keeps a
+  FINE row to three fields stays — that is the digest's stated byte budget,
+  asserted by 3.4a, and whether a COVERED row should carry the diagnosis at all
+  is a separate question filed as finding 4.7 on `40ed42f`. `40ed42f`.
+
+- 2026-09-01 (session 21) — **`no-bed` is only reachable for a DOWNED patient;
+  a standing one is refused `cannot-rescue` first, and the two are different
+  answers to "why is nobody coming".** `TakeToBedGate("rescue", …)` opens on
+  `HealthAIUtility.CanRescueNow` -> `WantsToBeRescued`, whose FIRST clause is
+  `!pawn.Downed`, and the `RestUtility.FindBedFor` lookup is its LAST. So on a
+  bedless map a downed casualty's candidates all read `no-bed` (banked at
+  `accept/runs/s21-20260901/18-triage-downed.json`) while a STANDING bleeder's
+  all read `cannot-rescue`, and no fixture can make the second produce the first.
+  The entry two above says "`no-bed` for every colonist" on a bedless map; that
+  is true only of the downed patient it was measured on, and this corrects it —
+  the verdict is `no-rescuer` either way, which is what that entry's argument
+  actually rests on. Acceptance checks 6.4c/6.4d were reading the gate off
+  `casualties[0]`, which this suite's fixture makes the standing bleeder; they
+  now select the row by `downed` and 6.4b2 asserts the standing half by name.
+  `40ed42f`.

@@ -60,6 +60,23 @@ the module-level `advance()` wrapper injects `unread_ok` and
 `through_casualties` with a reason naming this file. `raw_advance()` is the
 un-escaped form and phase 7b is its only caller.
 
+**And the halt is on the TRANSITION, not on the state — ruled 2026-09-01 and
+recorded in DESIGN.** Phase 7b originally read `722c951`'s "an advance
+**spanning** an own-faction downing stops at it" as a condition, staged four
+already-downed colonists, and asserted at 7.6a that an un-escaped advance could
+not complete. It completed (`ok:true reason:"ticks" ticks:300`, s21 bench) and
+the mod was right: `JournalHooks.Patch_MakeDowned`/`Patch_SetDead` are postfixes
+on `Pawn_HealthTracker.MakeDowned`/`SetDead`, so a pawn already down emits
+nothing. A state halt would wedge a ten-day run — on a bedless map every
+casualty is `no-rescuer`, no act clears it, and `through_casualties` is per-call
+and not a mode, so the escape would have to ride on every advance forever. Phase
+7b now asserts both halves: **7.5a** that the already-down STATE does not halt
+(the anti-wedge property), **7.6** that a downing armed *inside* the advance
+does, using `722c951`'s own `journal-selftest --steps down-at` fixture, and
+**7.7** the same span with the escape on — same fixture, same bound, the escape
+the only variable. **9.12a** re-derives the transition claim out of
+`JournalHooks.cs` so a hook moved onto `Pawn.Downed` fails offline.
+
 ---
 
 ## The fixture, in the order the driver builds it
@@ -80,6 +97,7 @@ Everything below is done BY THE DRIVER. Nothing here is a manual step except
 | the union | 6 | `dev:add-hediff {def:"Anesthetic", severity:1}` on the patient; `{def:"Flu", severity:0.4}` on the sick one | see "the union" below |
 | the bed | 6 | `dev:spawn-thing {def:"Bed", stuff:"WoodLog", pos:"pawn:<bleeder>", mode:"direct"}` | see "the bed" below |
 | the M1 end-state | 7 | `dev:damage {mode:"until-downed", allow_bleeding:false}` on everyone but two | the only arrangement in which `work-cover` can refuse |
+| a downing INSIDE an advance | 7b | `journal-selftest {steps:["down-at"], down_delay_ticks:400, down_pawn:<id>}`, twice | the ONLY way to drive the casualty halt from outside the game: it arms from the command drain and FIRES from `GameComponentTick`, i.e. inside `DoSingleTick`, inside the advance. A `dev:damage` sent over the protocol lands while the game is PAUSED and proves nothing about an advance halting. Once un-escaped (7.6), once escaped (7.7) — same span, the escape the only variable |
 
 ### `--quicktest` map vs a real colony
 
@@ -87,7 +105,7 @@ Everything below is done BY THE DRIVER. Nothing here is a manual step except
 |---|---|
 | 0, 1, 2, 3, 4, 5 | **either.** A bare `--quicktest` map is fine; the driver spawns its own colonists |
 | 6 | **either, but the no-bed half only fires on a bedless map.** On a `--quicktest` map checks 6.4a–6.4f assert the `no-bed` refusal live; on a colony that already has beds they degrade to a NOTE and phase 9 asserts the banked version instead |
-| 7 | **either** |
+| 7 | **either**, but phase 7b needs `journal-selftest --steps down-at` (dev-gated, `722c951`'s fixture) and two colonists still standing when phase 7 has finished downing the rest. Without it 7.5a still runs and 7.6/7.7 degrade to a NOTE |
 | 9 | **no bench at all** |
 
 A `--quicktest` map is the better bench for this suite, precisely because it has

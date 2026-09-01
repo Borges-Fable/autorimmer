@@ -2181,11 +2181,39 @@ def phase7():
     # not ask for the escape actually receives — and, symmetrically, that the
     # escape every other advance in this file leans on really does something.
     #
-    # The assertion is deliberately on the INVARIANT rather than on a spelling:
-    # `722c951`'s exact refusal code and reason string are its own to define and
-    # are being written in a parallel worktree. What cannot be up for grabs is
-    # that an advance across this suite's own downed colonists does NOT come
-    # back looking like an ordinary completed advance.
+    # ============ THE RULING THIS PHASE RESTS ON (2026-09-01) ================
+    # THE CASUALTY HALT IS ON THE TRANSITION, NOT ON THE STATE. This phase used
+    # to read `722c951`'s "an advance SPANNING an own-faction downing stops at
+    # it" as "an advance made while a colonist is down is refused", staged four
+    # already-downed colonists, and asserted that an unescaped advance across
+    # them could not complete. On the s21 bench it completed — `ok:true
+    # reason:"ticks" ticks:300` — and the mod was right.
+    #
+    # `JournalHooks.Patch_MakeDowned` and `Patch_SetDead` are POSTFIXES ON THE
+    # TRANSITION (`Pawn_HealthTracker.MakeDowned` / `SetDead`), so a pawn
+    # already down when the advance starts emits nothing and the halt does not
+    # fire. That is deliberate and 722c951 #2 says so in as many words: "the
+    # hooks are on the transition, so this cannot re-fire for the same pawn and
+    # cannot wedge." A state halt would mean that once a colonist is down and
+    # cannot be rescued — which on a bedless map is EVERY casualty, verdict
+    # `no-rescuer`, see 6.4a — every subsequent advance refuses forever with no
+    # act that clears it. That is the same argument `40ed42f` part 3 already
+    # used to make the bleedout deadline refuse on `too-slow` and on nothing
+    # else, and the escape does not save it: `through_casualties` is per-call
+    # and not a mode (722c951's 2.17/2.18), so a state halt would force the
+    # escape onto every advance for the rest of the run and train the agent to
+    # pass it blind — which is precisely the guard being switched off.
+    #
+    # 722c951's own words carry the transition reading everywhere they are
+    # specific: "stop early when an own-faction pawn goes down or dies DURING
+    # the advance, returning what happened AND THE TICK IT HAPPENED AT" (a state
+    # has no such tick); "an advance spanning a HOSTILE downing does NOT stop —
+    # prove the filter is on faction, NOT ON THE EVENT" (a downing is an event);
+    # "replay the M1 shape: an advance ACROSS TICK 214,599 stops there".
+    #
+    # Recorded in DESIGN's decisions log and on 722c951. This phase now asserts
+    # BOTH halves of it: 7.5a that the state does not halt (so a run cannot
+    # wedge), 7.6 that the transition does.
     precondition("7.5", "there is a downed own-faction colonist to advance past",
                  ARGS.dry_run or len(S.get("downed") or []) > 0,
                  "phase 7 downed nobody, so the seam cannot be tested")
@@ -2195,49 +2223,160 @@ def phase7():
     if not ARGS.dry_run:
         journal_since(max(0, watermark() - 1), limit=5)
 
+    # ---- (f1) THE STATE DOES NOT HALT — the anti-wedge half -----------------
+    # A bare `{"ticks": 300}` and not a predicate, for `722c951`'s own reason
+    # (`pass_time()`'s note): the subject under test is the advance itself, not
+    # a state the game reaches, and there is no predicate spelling for "some
+    # time passed". 300 is short on purpose — the only bleeder left is phase 2's
+    # subject, whose clock read ~12,500 ticks at 2.4, so nothing NEW can go down
+    # or die inside this window and the completion cannot be luck.
     e = raw_advance({"ticks": 300, "speed": "normal"}, timeout=240)
-    S["unescaped"] = e
-    ok = dig(e, "ok")
-    reason = dig(e, "data.reason")
-    ticks = dig(e, "data.ticks_elapsed")
-    print("  %sunescaped advance: ok=%s reason=%s ticks=%s error=%s%s"
-          % (DIM, ok, reason, ticks, show(dig(e, "error")), OFF))
-    innocuous = (ok is True and reason == "ticks" and num(ticks) and ticks >= 300)
-    check("7.6a", "an advance across an own-faction DOWNED colonist does not come "
-                  "back as an ordinary completed advance — it is refused, or it "
-                  "halts (722c951)",
-          ARGS.dry_run or not innocuous,
-          "ok:false, or a reason that is not a plain `ticks` completion",
-          {"ok": ok, "reason": reason, "ticks_elapsed": ticks,
-           "error": dig(e, "error")})
-    if not ARGS.dry_run:
-        blob = json.dumps(e).lower()
-        check("7.6b", "…and it SAYS why, naming the casualty or the escape",
-              any(w in blob for w in ("casualt", "downed", "through_casualties",
-                                      "unread", "unread_ok")),
-              "a refusal or halt that names the reason",
-              (dig(e, "error.detail") or "")[:300] or show(dig(e, "data.halted_on")))
-    eq("7.6c", "…and whatever happened, the game is left PAUSED",
-       send("digest"), "data.time.paused", True)
+    S["state_advance"] = e
+    print("  %sunescaped advance across %d ALREADY-downed colonist(s): "
+          "ok=%s reason=%s ticks=%s%s"
+          % (DIM, len(S.get("downed") or []), dig(e, "ok"), dig(e, "data.reason"),
+             dig(e, "data.ticks_elapsed"), OFF))
+    eq("7.5a", "an UNESCAPED advance made while own-faction colonists are "
+               "ALREADY down COMPLETES — the halt is on the transition, so a "
+               "colony that cannot rescue its casualty is not wedged", e,
+       "data.reason", "ticks")
+    ge("7.5b", "…and it really ran the ticks it was asked for", e,
+       "data.ticks_elapsed", 300)
 
-    e = advance({"ticks": 300, "speed": "normal"}, timeout=240)
-    S["escaped"] = e
-    eq("7.7a", "…and with `through_casualties` given a reason it proceeds", e,
-       "ok", True)
+    # ---- (f2) THE TRANSITION DOES HALT, unescaped ---------------------------
+    # `journal-selftest --steps down-at` is 722c951's fixture and the ONLY way
+    # to drive this from outside the game: it arms from the command drain and
+    # FIRES from GameComponentTick, i.e. inside DoSingleTick, inside the
+    # advance. A `dev:damage` sent over the protocol lands while the game is
+    # paused and would prove nothing about an advance halting.
+    standing = []
     if not ARGS.dry_run:
-        one_of("7.7b", "…to a normal completion", e, "data.reason",
-               ["ticks", "timeout"])
-        ge("7.7c", "…having actually run", e, "data.ticks_elapsed", 1)
-    eq("7.7d", "…and it still leaves the game paused", send("digest"),
-       "data.time.paused", True)
+        r = send("pawns", {"filter": "colonist", "cap": 200, "order": "id"})
+        for row in as_list(dig(r, "data.list")):
+            if not isinstance(row, dict) or row.get("id") is None:
+                continue
+            if "downed" in as_list(row.get("flags")):
+                continue
+            standing.append(row["id"])
+    print("  %sstanding colonists for the two arms: %s%s" % (DIM, standing, OFF))
+    have_fixture = ARGS.dry_run or len(standing) >= 2
+    precondition("7.5c", "two standing own-faction colonists — one per arm of "
+                         "the escaped/unescaped experiment",
+                 have_fixture,
+                 "found %s standing; 7.6 downs one INSIDE an unescaped advance "
+                 "and 7.7 downs the other inside an escaped one, and the pair "
+                 "is the whole point: same fixture, same span, the escape the "
+                 "only variable" % len(standing))
 
-    note("7.8", "7.6 asserts an INVARIANT, not a spelling: 722c951 owns the "
-                "refusal code and the halt reason and is being written in "
-                "parallel. If 7.6a passes because the advance was REFUSED and "
-                "7.7a because the escape let it through, the seam is proved "
-                "whichever words 722c951 chose. If 722c951 has not merged yet, "
-                "7.6a is the check that fails, and that failure is honest: the "
-                "guard does not exist yet.")
+    DOWN_DELAY = 400          # ticks into the advance the downing fires
+    SPAN = 3000               # the advance's OWN bound, well past it
+
+    if have_fixture:
+        victim_a = standing[0] if standing else 0
+        e = send("journal-selftest", {"steps": ["down-at"],
+                                      "down_delay_ticks": DOWN_DELAY,
+                                      "down_pawn": victim_a})
+        precondition("7.5d", "`journal-selftest --steps down-at` can arm a "
+                             "downing INSIDE an advance",
+                     ARGS.dry_run or dig(e, "ok") is True,
+                     "down-at refused: %s — it is dev-gated like every other "
+                     "step and 722c951 owns it" % show(dig(e, "error")))
+        eq("7.5e", "…on an OWN-FACTION pawn, which is what the filter keys on",
+           e, "data.down_at.player_faction", True)
+        fires = dig(e, "data.down_at.fires_at_tick")
+        # Arming journals a `dev` row of its own; discharge it so the unescaped
+        # advance below meets the CASUALTY guard and not the unread one.
+        if not ARGS.dry_run:
+            journal_since(max(0, watermark() - 1), limit=5)
+        t0 = dig(send("digest", {"sections": ["time"]}), "data.time.tick") or 0
+        # THE ADVANCE'S OWN BOUND IS A PREDICATE — "until the clock reaches T",
+        # T read off the game — so "it stopped early" is a measurement and not
+        # an interpretation. `timeout_ticks` bounds it regardless (git-bug
+        # 1113019: an `until` with no bound whose predicate is already true at
+        # arm time runs unbounded).
+        e = raw_advance({"until": {"condition": {"path": "time.tick",
+                                                 "op": ">=",
+                                                 "value": t0 + SPAN}},
+                         "timeout_ticks": SPAN + 2000, "speed": "fast"},
+                        timeout=300)
+        S["unescaped"] = e
+        ok = dig(e, "ok")
+        reason = dig(e, "data.reason")
+        ticks = dig(e, "data.ticks_elapsed")
+        print("  %sunescaped advance ACROSS a downing (armed %s, bound %s): "
+              "ok=%s reason=%s ticks=%s error=%s%s"
+              % (DIM, fires, t0 + SPAN, ok, reason, ticks,
+                 show(dig(e, "error")), OFF))
+        # THE INVARIANT FIRST, and it is deliberately not a spelling: what
+        # cannot be up for grabs is that an advance which crosses an own-faction
+        # downing does not come back looking like one that ran to its own bound.
+        innocuous = (ok is True and reason in ("ticks", "condition", "timeout"))
+        check("7.6a", "an advance across an own-faction downing does not come "
+                      "back as an ordinary completed advance — it is refused, "
+                      "or it halts (722c951)",
+              ARGS.dry_run or not innocuous,
+              "ok:false, or a reason that is not the advance's own bound",
+              {"ok": ok, "reason": reason, "ticks_elapsed": ticks,
+               "error": dig(e, "error")})
+        eq("7.6b", "…and the spelling 722c951 shipped and proved on a bench is "
+                   "`casualty`", e, "data.reason", "casualty")
+        eq("7.6c", "…identifying itself as a casualty halt", e,
+           "data.halted_on.kind", "casualty")
+        eq("7.6d", "…naming the event class", e, "data.halted_on.event", "downed")
+        eq("7.6e", "…and the pawn, so the response is one `rescue` call away", e,
+           "data.halted_on.pawn_id", victim_a)
+        eq("7.6f", "…and that it was OUR faction", e,
+           "data.halted_on.player_faction", True)
+        check("7.6g", "…and it stopped EARLY — the M1 shape (step 148 crossed a "
+                      "downing at 214,599 and ran on), halted",
+              ARGS.dry_run or (num(ticks) and ticks < SPAN - 1000),
+              "ticks_elapsed well under the predicate's %s" % SPAN, ticks)
+        eq("7.6h", "…and whatever happened, the game is left PAUSED",
+           send("digest"), "data.time.paused", True)
+
+        # ---- (f3) THE SAME EXPERIMENT WITH THE ESCAPE ON --------------------
+        # Same fixture step, same span, a second victim: the escape is the ONLY
+        # variable, which is the shape 722c951's phases 3 and 4 use for the
+        # faction filter.
+        victim_b = standing[1] if len(standing) > 1 else 0
+        e = send("journal-selftest", {"steps": ["down-at"],
+                                      "down_delay_ticks": DOWN_DELAY,
+                                      "down_pawn": victim_b})
+        precondition("7.7", "a second downing armed for the escaped arm",
+                     ARGS.dry_run or dig(e, "ok") is True,
+                     "down-at refused for %s: %s" % (victim_b, show(dig(e, "error"))))
+        t0 = dig(send("digest", {"sections": ["time"]}), "data.time.tick") or 0
+        e = advance({"until": {"condition": {"path": "time.tick", "op": ">=",
+                                             "value": t0 + SPAN}},
+                     "timeout_ticks": SPAN + 2000, "speed": "fast"}, timeout=300)
+        S["escaped"] = e
+        print("  %sESCAPED advance across the same fixture: ok=%s reason=%s "
+              "ticks=%s%s" % (DIM, dig(e, "ok"), dig(e, "data.reason"),
+                              dig(e, "data.ticks_elapsed"), OFF))
+        eq("7.7a", "…and with `through_casualties` given a reason it proceeds",
+           e, "ok", True)
+        eq("7.7b", "…to its OWN bound rather than the casualty — the escape is "
+                   "the only thing that changed", e, "data.reason", "condition")
+        ge("7.7c", "…having actually run PAST the downing it was armed for", e,
+           "data.ticks_elapsed", DOWN_DELAY)
+        shape("7.7d", "advance", e, "data.through_casualties")
+        eq("7.7e", "…and it still leaves the game paused", send("digest"),
+           "data.time.paused", True)
+    else:
+        note("7.6", "the down-at fixture could not be staged, so neither arm of "
+                    "the seam ran. 7.5a still proves the anti-wedge half: an "
+                    "unescaped advance across ALREADY-downed colonists "
+                    "completes.")
+
+    note("7.8", "7.6a asserts an INVARIANT and 7.6b-7.6f the spelling. The "
+                "invariant is what the seam owns: an advance crossing an "
+                "own-faction downing does not return as an ordinary completed "
+                "advance. The spelling is 722c951's and is now merged and "
+                "bench-proved, so asserting it here is a join between the two "
+                "suites rather than a guess. 7.5a is the OTHER half of the "
+                "2026-09-01 ruling and the one this phase used to get wrong: "
+                "the halt is on the transition, so a colony that is already "
+                "carrying a casualty it cannot rescue still advances.")
 
 
 # ------------------------------------------------------------------- phase 8 --
