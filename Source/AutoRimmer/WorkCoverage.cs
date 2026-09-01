@@ -230,6 +230,47 @@ namespace AutoRimmer
             return rows;
         }
 
+        // ============================ git-bug 58794e4 =======================
+        // THE PROJECTION, AND WHY IT IS A MUTATION OF A SNAPSHOT AND NOT OF THE
+        // GAME. `work-cover {dry_run:true}` writes nothing to `workSettings`, so
+        // a re-read of the map necessarily reports the coverage BEFORE the
+        // repair — under a field named `coverage_after`. That is not a naming
+        // quibble: a dry run exists to answer "would this fix it", the field
+        // answered "is it fixed", and the same envelope's `repaired` list
+        // contradicted it. This applies the planned promotions to the ROWS, in
+        // memory, so the section that comes out is the one the caller asked
+        // about.
+        //
+        // A promotion moves a pawn into `Enabled` and, because `Ranked` only
+        // ever offers a pawn who is Capable, a Responder, has work settings and
+        // is missing no required capacity, into `Available` as well — which is
+        // the count Doctor's floor is measured against. Both are RE-CHECKED
+        // here rather than assumed, because a projection that lies is worse than
+        // no projection at all. `Capable` is deliberately untouched: enabling a
+        // work type does not change who could ever do it, which is why a
+        // capability-floored row can never be repaired by this verb.
+        private static void Project(List<Row> rows,
+            List<KeyValuePair<WorkTypeDef, Pawn>> promotions)
+        {
+            if (rows == null || promotions == null) return;
+            for (int i = 0; i < promotions.Count; i++)
+            {
+                var w = promotions[i].Key;
+                var p = promotions[i].Value;
+                if (w == null || p == null) continue;
+                for (int j = 0; j < rows.Count; j++)
+                {
+                    var r = rows[j];
+                    if (r.Def != w) continue;
+                    if (!r.Enabled.Contains(p)) r.Enabled.Add(p);
+                    if (!r.Available.Contains(p) && Responder(p)
+                        && MissingCapacity(p, w) == null)
+                        r.Available.Add(p);
+                    break;
+                }
+            }
+        }
+
         private static List<object> Names(List<Pawn> ps, int cap)
         {
             var l = new List<object>();
@@ -241,10 +282,24 @@ namespace AutoRimmer
         // The digest block. Under-covered rows carry the diagnosis and are
         // never dropped; covered rows are three fields and are what the cap
         // eats.
-        internal static Dictionary<string, object> Section(Map map)
+        internal static Dictionary<string, object> Section(Map map) => Section(map, null);
+
+        // `projected` is the promotions a DRY RUN would make — work type paired
+        // with the pawn it would enable. Applied to a freshly computed snapshot
+        // so a dry run's `coverage_after` answers the question a dry run asks,
+        // "WOULD this fix it", instead of "IS it fixed", which in a dry run is
+        // always no by construction (git-bug 58794e4). Pass null — as the digest
+        // does — for "the coverage as it stands", which is the only correct
+        // reading there.
+        internal static Dictionary<string, object> Section(Map map,
+            List<KeyValuePair<WorkTypeDef, Pawn>> projected)
         {
             List<Row> rows;
-            try { rows = Compute(map); }
+            try
+            {
+                rows = Compute(map);
+                Project(rows, projected);
+            }
             catch (Exception e)
             {
                 return new Dictionary<string, object>
@@ -256,9 +311,28 @@ namespace AutoRimmer
             var under = new List<object>();
             var list = new List<object>();
             int dropped = 0;
+            // ======================= git-bug 9b179ef ========================
+            // TWO PASSES, BECAUSE `order` HAS ALWAYS CLAIMED TWO. The block
+            // published "under-first, then natural-priority-desc" while making
+            // ONE pass over the natural-priority-sorted list and appending
+            // under-rows inline, wherever they fell. On the s21 bench the only
+            // under-covered row (Doctor, naturalPriority 1300) came back at
+            // index 1, behind Firefighter (1400) — which is fine — so a caller
+            // trusting the string read `rows[0]` as the worst problem and got a
+            // work type with nothing wrong with it.
+            //
+            // Fixed by sorting the data rather than rewording the string:
+            // under-first is the more useful order for this block's reader, the
+            // cap already promises never to drop an under-covered row, and a
+            // caller that walks `rows` now gets the right answer without having
+            // to consult `under` at all. `rows` arrives natural-priority-desc
+            // from EssentialTypes(), so each pass preserves that order within
+            // its own group and the second clause of the string stays true too.
+            //
+            // PASS 1 — every under-covered row, and none of them can be dropped.
             foreach (var r in rows)
             {
-                if (r.Under)
+                if (!r.Under) continue;
                 {
                     under.Add(r.Def.defName);
                     var d = new Dictionary<string, object>
@@ -302,9 +376,18 @@ namespace AutoRimmer
                     // colony a caller can act on.
                     d["enabled_but_incapable"] = imp;
                     list.Add(d);
-                    continue;
                 }
-                if (list.Count - under.Count >= RowCap) { dropped++; continue; }
+            }
+            // PASS 2 — the covered rows, same order, and the ONLY rows the cap
+            // can eat. `fine` counts them directly instead of the old
+            // `list.Count - under.Count`, which only worked because the two
+            // groups were interleaved in one pass.
+            int fine = 0;
+            foreach (var r in rows)
+            {
+                if (r.Under) continue;
+                if (fine >= RowCap) { dropped++; continue; }
+                fine++;
                 list.Add(new Dictionary<string, object>
                 {
                     ["work"] = r.Def.defName,

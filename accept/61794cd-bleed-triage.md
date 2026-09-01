@@ -287,21 +287,55 @@ assumed**, and check 9.4h exercises the python side of the gate offline.
 They print as `FINDING` lines and are repeated in the summary. They are
 deliberately **not** checks: the exit code answers "were the acceptance bullets
 met", and a suite that goes permanently red over a metadata string teaches the
-next session to ignore its own colour. All three are filed on the issues.
+next session to ignore its own colour.
 
-| id | what |
-|---|---|
-| **3.7** | `digest.work_coverage.order` says `"under-first, then natural-priority-desc"`, but `WorkCoverage.Section` emits rows in ONE pass over the natural-priority-sorted list and appends under-rows **inline**. On the banked s21 digest the only UNDER row (`Doctor`) is at index **1**, behind `Firefighter`. A caller trusting the string reads `rows[0]` as the worst problem. Phase 9's 9.6f re-asserts it from the banked envelope so it cannot be argued away |
-| **4.7** | `enabled_but_incapable` is built inside `if (r.Under)`, so a colony with two available doctors and a handless third is never told about the third. Arguably correct (it is a diagnosis of a problem, and there is no problem) — but "you have a doctor who cannot tend" is the class of thing the M1 post-mortem exists about. **Still open, and deliberately narrower than it was:** the INNER guard `if (r.Impaired.Count > 0)` was a different defect and is fixed — the list is now always present, empty when nobody is impaired (7.2h, 3.3q, 9.8d, 9.11a). What 4.7 still asks is whether a COVERED row should carry the diagnosis at all, which is the digest's three-field byte budget and is a design decision, not a shape bug |
-| **5.2c** | a clean `dry_run` reports `action.journal_seq: 0` carrying `Stamp(0)`'s sentence *"NOT WRITTEN — the journal writer is closed"*. The writer is not closed and nothing was mutated: the emit guard is `(repaired>0 && !dryRun) \|\| stillUnder>0`. `NoStamp()` is the shape this case wants |
+**That argument stops applying the moment the thing is fixed**, and three of the
+four have been. A finding that outlives its defect is the suite declining to
+protect its own repair, so they were promoted to checks in the same round.
 
-Plus one the orchestrator filed first and this suite deliberately does not
-assert either way: **git-bug `58794e4`** — `work-cover {dry_run:true}` reports
-`coverage_after` as the coverage BEFORE the repair. Asserting the current value
-would make this suite go red the day it is fixed; asserting the fixed value
-would make it red today. What IS asserted is the thing that is true either way
-and that the bullet needs: **the dry run mutated nothing**, proved from an
-independent `digest` (5.2a) and from the journal (5.2b).
+| id | what | now |
+|---|---|---|
+| **3.7** | `digest.work_coverage.order` said `"under-first, then natural-priority-desc"` while `WorkCoverage.Section` emitted rows in ONE pass and appended under-rows **inline** — on the banked s21 digest the only UNDER row (`Doctor`) is at index **1**, behind `Firefighter` | **PROMOTED** to 3.7a–3.7d, plus 5.6a–5.6c. Fixed by sorting the rows (git-bug `9b179ef`) |
+| **4.7** | `enabled_but_incapable` is built inside `if (r.Under)`, so a colony with two available doctors and a handless third is never told about the third. Arguably correct (it is a diagnosis of a problem, and there is no problem) — but "you have a doctor who cannot tend" is the class of thing the M1 post-mortem exists about | **STILL A FINDING, and narrower.** The INNER guard `if (r.Impaired.Count > 0)` was a different defect and is fixed (7.2h, 3.3q, 9.8d, 9.11a). What 4.7 still asks is whether a COVERED row should carry the diagnosis at all — the digest's three-field byte budget, a design decision rather than a shape bug, and not one to take from the chair |
+| **5.2c** | a clean `dry_run` reported `action.journal_seq: 0` carrying `Stamp(0)`'s sentence *"NOT WRITTEN — the journal writer is closed"*. The writer is not closed and nothing was mutated: the emit guard is `(repaired>0 && !dryRun) \|\| stillUnder>0` | **PROMOTED** to 5.2c–5.2c3, plus 7.2p8 for the other side of the guard. Fixed with `NoStamp()` keyed on the guard (git-bug `6fc75e3`) |
+| — | **git-bug `58794e4`** — `work-cover {dry_run:true}` reported `coverage_after` as the coverage BEFORE the repair, while `repaired` in the same envelope named the promotion that fixes it. The suite asserted neither value: asserting the current one would go red the day it was fixed, asserting the fixed one would be red today | **PROMOTED** to 5.1g2/5.1g3, 5.2a2, 5.3i and 7.2p1–7.2p7. Fixed by projecting the planned promotions |
+
+The three fixes are one class and DESIGN's decisions log says so: **a field that
+states a false reason is the same defect as a read that hides the truth**, which
+is what `61794cd` and `7382bdd` are about one size up. Prose shipped inside an
+envelope reads as authoritative.
+
+### Why the pre-fix envelopes are still asserted
+
+9.6f, 9.6v and 9.6w assert the DEFECTS against `accept/runs/s21-20260901/`,
+which was banked from assembly `1.0.0+52606d1` before any of this. They are
+kept, not rewritten: they are the filed evidence that each issue described
+something real, and the live checks above assert the repair. Re-banking them
+would destroy the only record of what was wrong.
+
+### The bullet that could not be staged, and what replaced it
+
+`9b179ef` asks for **two under-covered work types**, so "under-first" cannot be
+one row's natural priority in disguise. **It is not stageable and that is not a
+fixture oversight:** every floor but Doctor's is on CAPABILITY
+(`!WorkTypeIsDisabled`), which is backstory and trait driven, and no shipped
+`dev:` verb sets it. Doctor is the only availability floor. Two substitutes,
+both of which discriminate the same thing:
+
+- **5.6a–5.6c, live, from two reads of ONE type.** Doctor sits at its natural
+  index (behind Firefighter) in the read where it is covered and at index **0**
+  in the read where it is under — so the row was moved past a covered row of
+  higher natural priority *because* it was under. 5.6c then checks the "then
+  natural-priority-desc" half by stripping the under rows out of the first read
+  and requiring the remainder to be in the same relative order as the second,
+  which needs no knowledge of any natural priority.
+- **9.3h, offline**, over `order_agrees()` with two under rows in both orders.
+
+`58794e4`'s "short by TWO" bullet IS stageable and is staged: phase 7's M1
+end-state leaves Doctor `available:0` against a floor of 2 with exactly one
+promotable colonist, so the dry run at 7.2p plans one promotion and must still
+report the floor unmet — the case that tells a projection apart from optimism,
+and apart from the pre-repair reading it replaces.
 
 ---
 
