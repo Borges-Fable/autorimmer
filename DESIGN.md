@@ -1754,3 +1754,21 @@ queue by default (an agent flailing mid-experiment must not page triage).
   objects to and a `DiningChair` (which has none) is not. Filth, motes and
   attachments are excluded — they are not occupants in any sense a placement
   cares about. `c718e4a`.
+- 2026-09-01 (session 16) — **`rwa` owns the IR dialect; `place-layout` takes a
+  RESOLVED layout in one call.** The mod reads no IR — `File.ReadAllText`
+  appears twice in the whole tree, for `config.json` and the journal — and it
+  stays that way. `rwa place-layout <file.ir.json> --origin P` is the CLI
+  surface; `baseviz/ir.py`, which already IS the dialect, expands it and sends
+  ONE call carrying `{def, at, rot, stuff?}` per element. **Atomicity is why
+  it is one call and not N `build` calls:** "preflight every cell, place
+  nothing on any failure" cannot hold across N transactions, and a half-built
+  room is exactly what the invariant exists to prevent. Same split as 2.5's PNG
+  channel ("no game-side image rendering; a pure function of dump + catalog")
+  and the same ground rule ("the file half of the bridge never touches Verse").
+  One dialect, one parser: a C# reader beside `ir.py` is a guaranteed drift
+  point, and `ir.py` already documents that XML→IR is lossy at the edges. And a
+  file path the GAME must resolve is machine-dependent — on BORGES the client
+  and the bench are different trees — while a resolved payload cannot mean two
+  things. Plumbing exists on both ends: `rwa --args-json` carries arbitrary
+  nested objects and `DesignateEngine` already accepts a `cells` list.
+  `1adc737`.
