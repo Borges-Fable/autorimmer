@@ -1139,3 +1139,23 @@ queue by default (an agent flailing mid-experiment must not page triage).
   "changing it needs a rebuild" is the rigour, not the objection.
   `postmortem.md` step 3's table now carries the override, step 5 states it,
   and the ladder's mod rung is marked MANDATORY rather than available.
+- 2026-09-01 (session 13) — **`autostart.rws` stays PARKED while `--quicktest`
+  is the bench fixture; `--quicktest` is not retired.** The two cannot coexist:
+  `Root_Entry` and `Root_Play` race on `Root.checkedAutostartSaveFile` with a
+  scene-targeted long event, the autostart load wins, the quicktest lambda then
+  finds `Current.Game != null` and skips, and map generation fails. It is
+  DETERMINISTIC, not flaky — it cost the M1 run two launches before anyone knew
+  why (`RUNS/m1-20260831/mapgen-failure-{1,2}.Player.log`,
+  `[[quicktest-and-autostart-collide]]`, git-bug `c8c0199`). The alternative was
+  real and was rejected on cost, not on principle: making the save the fixture
+  would be MORE reproducible — a fixed map rather than a fresh random tile, and
+  4.3's temperate requirement satisfied by construction instead of by draw — but
+  every suite in `accept/` is written against a fresh `--quicktest` map, so each
+  would have to be re-checked against a fixed one before the switch could land.
+  Nothing in the M1 run argues for paying that now. Mechanised rather than
+  written down, per the entry above: `profile/run-agent.sh` and `run-agent.ps1`
+  now REFUSE to launch `--quicktest` while `Saves/autostart.rws` exists, naming
+  the `mv` that fixes it. Refusing rather than warning, because the launch cannot
+  succeed and a warning scrolls past inside two minutes of boot log. That
+  refusal is what stops a future session recreating the collision by tidying the
+  save directory.
