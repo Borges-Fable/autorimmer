@@ -18,6 +18,7 @@ Checks (PASS/FAIL/WARN per check, exit 0 iff no FAIL):
   summary-written     RUNS/<run>/summary.md exists, non-empty
   final-undrafted     digests/final.json: no colonist drafted, hostiles == 0
   advance-invariants  from transcript result envelopes: timeout_ticks <= 60000,
+                      ticks_elapsed <= 60000 + the envelope's own overshoot_bound,
                       halt_on_error never false, no two consecutive 0-tick advances
   transcript-journal  every journal action/dev verb appears among transcript ops,
                       with journal count <= transcript count per op
@@ -194,9 +195,30 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
             # 10x this policy's own cap. An advance that actually ran past
             # the cap is a real violation even when the declared args look
             # clean, so check what happened, not just what was asked for.
+            #
+            # But the cap is a TARGET, not a promise, and the driver says so.
+            # TimeDriver's stop check runs once per FRAME, after vanilla has
+            # already ticked up to TickRateMultiplier*2 times, so an advance
+            # lands at its target or a little past — bounded by exactly one
+            # frame's worth of ticks. TimeDriver.MaxTicksPerFrame publishes
+            # that bound in every advance envelope as `overshoot_bound`
+            # (30 at Ultrafast, 24 at Superfast, ...). Comparing elapsed to
+            # the bare cap therefore FAILs the driver for behaviour it
+            # documents: m1-20260831's 132-advance came in at 60021 against
+            # a 60000 cap — 21 ticks, inside a bound of 30.
+            #
+            # Read `overshoot_bound`, NOT `overshoot`: TimeDriver only emits
+            # `overshoot` when Target >= 0, i.e. for `advance {ticks:N}`. An
+            # `until`+timeout advance — which is the shape that can reach the
+            # cap at all — has no `overshoot` key to read.
             elapsed = data.get("ticks_elapsed", 0)
-            if isinstance(elapsed, (int, float)) and elapsed > MAX_ADVANCE_TICKS:
-                problems.append(f"{name}: ticks_elapsed {elapsed} exceeded cap ({args})")
+            bound = data.get("overshoot_bound", 0)
+            if not isinstance(bound, (int, float)) or bound < 0:
+                bound = 0
+            if isinstance(elapsed, (int, float)) and elapsed > MAX_ADVANCE_TICKS + bound:
+                problems.append(
+                    f"{name}: ticks_elapsed {elapsed} exceeded cap "
+                    f"{MAX_ADVANCE_TICKS}+{bound} overshoot_bound ({args})")
         zeros = [d.get("ticks_elapsed", None) == 0 for _, _, d in advances]
         if any(a and b for a, b in zip(zeros, zeros[1:])):
             problems.append("two consecutive 0-tick advances (wedge rule violated)")
@@ -272,7 +294,11 @@ def build_fixture(root, repo):
     for i, (op, args, data) in enumerate([
         ("advance", {"until": {"letter": True}, "timeout_ticks": 60000}, {"reason": "letter", "ticks_elapsed": 41000}),
         ("designate", {"kind": "harvest"}, {}),
-        ("advance", {"until": {"letter": True}, "timeout_ticks": 60000}, {"reason": "timeout", "ticks_elapsed": 60000}),
+        # A timeout advance that lands PAST the cap by less than the bound the
+        # envelope itself publishes. This is legal — the stop check is per
+        # frame — and the clean fixture must stay green on it.
+        ("advance", {"until": {"letter": True}, "timeout_ticks": 60000},
+         {"reason": "timeout", "ticks_elapsed": 60021, "overshoot_bound": 30}),
     ], 1):
         d = tr / f"{i:03d}-{op}"
         d.mkdir(parents=True)
