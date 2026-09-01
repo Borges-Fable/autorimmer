@@ -166,8 +166,17 @@ has '"until": {"event": {"type": "death", "contains": "Xitral"}}'
 has '"types": ["letter", "death"]'
 has '"rect": [10, 20, 5, 5]'
 run 2 "an id the mod would sanitise is rejected up front, not silently rewritten" -- \
-    "$RWA" ping --id 'has.a.dot'
+    "$RWA" ping --cmd-id 'has.a.dot'
 has "Poller.Sanitize"
+# The reserved-option collision: rwa's own command id is --cmd-id precisely so
+# that a bare --id is an ORDINARY op argument. It used to be a global, so
+# `rwa pawn --id 3` set the command id and the verb got bad-args instead.
+run 0 "--id is a verb argument, --cmd-id is rwa's own" -- \
+    "$RWA" ping --json --cmd-id verb-id-check --id 3
+run 0 "…and the command file proves both landed where they belong" -- \
+    sh -c 'cat "$RWA_TRANSCRIPTS"/*/*-ping/cmd.json | tail -1'
+has '"id": "verb-id-check"'
+has '"args": {"id": 3}'
 
 
 section "6. the error taxonomy, one code at a time"
@@ -221,6 +230,28 @@ has "rwa-game-down"
 has "stale-on-restart at the next launch"
 SERVER=""
 
+# A client that dies mid-call cannot write its own post-mortem, so cmd.json is
+# written BEFORE the command is dispatched. Killing rwa -9 is the only honest
+# way to prove it: the step directory has to name what was in flight. Two such
+# steps in run m1-20260831 (136-advance, 187-advance) were empty directories,
+# and a full in-game day passed unobserved behind them.
+serve --answer silent
+export RWA_RUN="killed-mid-call"
+"$RWA" advance --ticks 999999 --timeout 0 --quiet >/dev/null 2>&1 &
+VICTIM=$!
+sleep 2
+kill -9 "$VICTIM" 2>/dev/null; wait "$VICTIM" 2>/dev/null
+run 0 "a client killed mid-command still left its request on disk" -- \
+    sh -c 'cat "$RWA_TRANSCRIPTS/killed-mid-call/001-advance/cmd.json"'
+has '"op": "advance"'
+has '"ticks": 999999'
+run 0 "…and no result.json beside it, which is what marks the step unfinished" -- \
+    sh -c 'ls "$RWA_TRANSCRIPTS/killed-mid-call/001-advance/"'
+has "cmd.json"
+lacks "result.json"
+unset RWA_RUN
+stop
+
 
 section "8. journal and tail"
 serve
@@ -256,6 +287,9 @@ run 0 "the transcript replays against the bench" -- "$RWA" replay acceptance --r
 hasre "4 sent, 0 failed"
 run 0 "…and the replay is itself a transcript" -- \
     sh -c 'ls "$RWA_TRANSCRIPTS/replayed"'
+run 0 "--same-ids replays under the original ids (the --cmd-id path)" -- \
+    "$RWA" replay acceptance --run replayed-same --same-ids --pretty
+hasre "4 sent, 0 failed"
 unset RWA_RUN
 run 0 "with no --run, the run dir is the game session id" -- \
     sh -c '"$RWA" ping --quiet >/dev/null; ls "$RWA_TRANSCRIPTS" | grep -E "^[0-9]{8}T[0-9]{6}$"'

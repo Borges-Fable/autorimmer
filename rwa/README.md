@@ -128,12 +128,37 @@ rwa find-rect --w 7 --h 5 --near 120,130 --require buildable --require noRoof
 rwa map-view --rect:json '[100,100,24,24]' --layers terrain --layers things
 rwa landmark --set.kitchen 120,130
 rwa journal-selftest --steps letter --steps message --letter_delay_ticks 400
+rwa pawn --id 3
+rwa zone --op delete --id 12
 rwa send status                       # explicit form, needed only for name clashes
 rwa advance --args-json '{"until":{"alert":"Alert_LowFood"},"timeout_ticks":120000}'
 ```
 
 `--args-json` is the escape hatch and the machine-friendly path: it takes the
 exact object the protocol will carry, and explicit flags override it.
+
+### Reserved names (`--id` is NOT one of them)
+
+`rwa`'s own flags are recognised anywhere on the line, so any op argument
+sharing a name with one would be eaten before the mod ever saw it. The reserved
+set is deliberately kept out of the verbs' namespace:
+
+```
+--root --timeout --cmd-id --run --transcripts --stale-secs --fps-floor
+--poll-ms --json --pretty --no-transcript --quiet --version --help -h
+```
+
+`id` is the only argument name in the whole verb registry that ever collided
+with that list, and **`--id` no longer does**: since client 0.2.0 rwa's own
+command id is spelled `--cmd-id`, and a bare `--id` is an ordinary op argument
+that reaches the verb. Before that, `rwa pawn --id 3` silently became the
+command id and the mod answered `bad-args: missing required arg 'id'` — a full
+M1 run worked around it with `--args-json`. If you scripted `--id` meaning the
+*command* id, that is the one thing to re-spell.
+
+Nothing else on that list is a verb argument today. If a future verb wants one
+of those names, `--args-json '{"run":…}'` passes it through untouched — the
+reserved table applies to flags, never to the JSON object.
 
 ## Output, and what pretty mode is allowed to do
 
@@ -232,6 +257,17 @@ transcripts/<sid>/
   001-ping/result.json  the exact bytes read back from results/<id>.json
   002-advance/…
 ```
+
+`cmd.json` is written **before** the command is dispatched; `result.json` is
+written when the result comes back. So a step directory holding a `cmd.json`
+and no `result.json` is a command that was in flight when the client stopped —
+killed, disconnected, or still running — and it names exactly what was asked
+for. (It used to be the other way round: both files were written after the
+result returned, so a dead client left an empty numbered directory and no
+record at all. `136-advance` and `187-advance` in run `m1-20260831` are that
+hole — about 60,000 ticks, a full in-game day, with nothing on disk saying
+what had been sent.) Consumers already tolerate the half-written step:
+`accept/4.2-play-loop.py` warns past it and carries on.
 
 The run directory is named for the **game session id** by default, because
 `sid` is already the join key for `journal/<sid>.ndjson` and for every result
