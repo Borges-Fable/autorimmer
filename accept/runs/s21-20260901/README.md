@@ -89,3 +89,40 @@ because the orchestrator does not edit a worker's spec mid-round.
 `work_coverage` predicate section, the "enabled but incapable" row, and the
 in-game readout comparison. All of those are the acceptance suite's job. The
 suite is the deliverable; this is the proof it has ground to stand on.
+
+---
+
+# Second half: `40ed42f`'s verbs, and the whole `triage` chain
+
+Envelopes `12`–`23`, same bench session. Written up in full as comment #3 on
+`40ed42f`; the short version:
+
+- **`work-cover` repairs for real** — promoted Harrell citing
+  `Pawn_WorkSettings.EnableAndInitialize`'s own order, `coverage_after.ok`
+  flipped true, a **separate `digest` read agreed**, and it is journalled as an
+  `action` row (seq 33) carrying the `repaired` list. That acceptance bullet is
+  met on a bench.
+- **One defect, filed as `58794e4`:** `work-cover {dry_run:true}` reports
+  `coverage_after` as the coverage BEFORE the repair, while `repaired` in the
+  same envelope names the promotion that fixes it.
+- **`triage` proven through four states of one casualty** — needs-tend standing
+  (`no-rescuer`), downed with no bed (**`no-bed`**), downed with a bed
+  (**`in-time`**, `margin_ticks:6755`, `act` populated), and in bed
+  (`no-rescuer` again). The casualty UNION is confirmed: the first row was
+  `downed:false, needs_tend:true` and was reported anyway.
+- **`act` carries `{"op":"rescue","args":{"pawn":359,"target":362}}`** with both
+  ids and the M1 rationale.
+
+## Two things the suite must know
+
+**`triage`'s `act` path is unreachable on a bare `--quicktest` map.** No bed
+means `TakeToBedGate` returns `no-bed` for every colonist and every verdict is
+`no-rescuer`. One `dev:spawn-thing {def:"Bed", stuff:"WoodLog",
+pos:"pawn:<id>", mode:"direct"}` is the whole fixture.
+
+**`act` is a snapshot and the world moves under it.** Sent verbatim, it was
+refused `cannot-rescue`. Not a gate mismatch — `triage` and `rescue` call the
+same two predicates in the same order — but the patient had been carried to the
+bed by the game's own AI between the read and the send, and `CanRescueNow` is
+false for a pawn already in a bed. Pause before reading `triage`; send `act`
+while still paused.
