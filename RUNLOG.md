@@ -2129,3 +2129,174 @@ it. A staleness sweep belongs before dispatch, not inside each agent.
 ### Bench state
 
 CLOSED — never launched this session. `autostart.rws` untouched.
+
+## Session 11 — 2026-08-31 (dorian's Linux box). PROVE IT; ledger `65b03c2`
+
+Fable orchestrator, opus agents. The round the acceptance suites finally RAN.
+Six agents; six merges; **502 checks executed against a live bench, where the
+project's lifetime total had been zero.**
+
+**Evan locked the play run mid-session** — "the actually play part needs to be
+locked, do everything but step 3, you can run the game to test or whatever, just
+no step 3." So 4.3 / M1 (`664e9b9`) did not run and stays open. Everything below
+is Wave 1 and Wave 2.
+
+### Step 0 — the staleness sweep paid for itself in four minutes
+
+`origin/main` was 50 commits behind. Pushed `d153521..3e831ee` (fast-forward)
+before anything else, so BORGES was not stranded the way session 10's first hour
+was spent un-stranding it.
+
+Then the finding that shaped the night. **A bench was already running, and it was
+stale.** Session `20260831T232158`, launched **19:21:58**. The assembly carrying
+3.5's dialog verbs and 3.6's bills verbs — `172e168` — was committed at
+**20:19:20**, fifty-seven minutes later. RimWorld loads the assembly at STARTUP.
+That bench was running IL that predates both surfaces, and any number measured
+against it would have been a phantom in exactly the way session 10's `4087644`
+"48/51, three real failures" were: all three of those were measured against a DLL
+built before the fix.
+
+Killed and relaunched. Freshness then PROVEN rather than assumed, by reading
+**118 verbs** back off a live `status` call — including all five `dialog-*` /
+`letter-*` verbs and all ten `bill-*` / `storage-*` verbs, none of which exist in
+the older assembly.
+
+### The first live acceptance run in this project's history
+
+Logs committed at `accept/runs/s11-20260831/` (`8e6cedb`).
+
+| suite | first run | after repair |
+|---|---|---|
+| `70ac258-things-stable-order` | **99/99**, exit 0 | — |
+| `3.6-bills-storage` | **116/116**, exit 0 | — |
+| `4087644-order-honesty` | 92/97 | **100/100**, exit 0 |
+| `8b0b88f-already-designated` (new) | 121/123 | **123/123**, exit 0 |
+| `3.4-pawn-orders` | 147/150 | re-run after repair |
+| `3.5-dialog-verbs` | 48 pass, 0 fail, exit 2 | 104 pass, 0 fail; then 79/86 in phase 3 |
+
+**Zero red errors in every suite that asserted on them**, across every run.
+
+**The phase-0 guard is no longer unproven.** It was session 10's answer to the
+`eq(..., None)`-passes-on-an-absent-key hazard and had never executed. It ran and
+passed in all five drivers — 48 shape checks in `70ac258`, 58 in `3.6`.
+
+### THE HEADLINE: every failure so far has been the DRIVER's, not the mod's
+
+Eight failures across three suites on the first pass, plus two in the new suite.
+**Every one classified so far is a driver defect. No mod change was owed by any
+of them.** That is worth stating plainly because the round was budgeted for the
+opposite.
+
+- **`4087644` 6.5** read `data.rows` / `data.entries`; `JournalVerbs.Read`
+  publishes `data.events` — a key the same driver's own `0.2b` asserts. It then
+  read `verb` flat where `PawnActs.Act` nests it at `payload.verb`. The rows were
+  being written all along: `6.1b`–`6.4b` each returned `journal_seq >= 1`. **The
+  journal rule was implemented and the instrument was pointed at the wrong key.**
+  This is what had made `ac407f1` look unimplemented for two sessions.
+- **`4087644` 6.9a/b** sent `work:"Warden_DeliverFood"` — the giverClass, not the
+  defName `DeliverFoodToPrisoner`. `Dev.Named` throws before `Prioritize` builds
+  its `Outcome`, so the reply had **no `data` block at all**. The null was an
+  ABSENT key, indistinguishable to `dig` from a gate-less rejection.
+- **`4087644` 6.15a/b** targeted a colonist, so `Attack`'s `CanDraftAttack` →
+  `cannot-target` exit returned before the `queue-unsupported` branch was
+  reachable. **That check was unpassable on ANY save** — not a fixture gap, a
+  wrong target choice. My own first read called it a fixture problem and was
+  wrong; the diagnosis pass refuted it with the control-flow order.
+- **`8b0b88f` 1.2l/m** dug `data.action.rejected_by_reason`. The tally has two
+  spellings in two PLACES: `rejects_by_reason` on the response data block
+  (`DesignateEngine.PublishRejects`), `rejected_by_reason` on the JOURNAL ROW
+  (`DesignationVerbs.Designate`). The response's `action` block is `{journal_seq}`
+  and nothing else. **The suite written to close the absent-key trap contained
+  it.** Now reads the journal at the seq the action block names, which is the
+  stronger assertion anyway.
+
+### The one that matters most: a green that could not go red
+
+`3.4` failed `3.2`, `3.6b` and `3.6c` — one cause. The bench colonist already
+wore exactly `Apparel_Parka` + `Apparel_Tuque`, which is exactly what phase 3's
+`cold` policy allows, so the policy asked for a wardrobe the pawn was already in.
+
+**The three reds were not the important part.** Check `3.6a` — "the pawn is
+WEARING the parka" — **PASSED while asserting nothing**, because it was already
+true before the policy was ever assigned. A check that cannot go red is this
+project's standing failure mode, and here it was hiding behind three
+honest-looking reds. Repairing the reds without closing the hollow green would
+have been the wrong fix and would have left the suite reporting 150/150.
+
+Phase 3 now stages its own start state and gates on a `3.0j` precondition that
+the pawn wears neither garment; only `JobGiver_OptimizeApparel` can dress it from
+there, because phase 3 issues no `wear` order. `3.6c` also loses its "or it
+started naked" escape, which let a naked pawn pass a check about taking clothes
+off.
+
+### `dev:incident` could not fire a world-targeted incident
+
+3.5 exited 2 on `IncidentDef 'GiveQuest_Random' does not allow a Map target
+(targetTags: World)` — the verb always passed a Map. That blocked ~123 of 171
+checks, the largest block of unproven acceptance in the project. The target is
+now resolved from the def by the game's own chooser, the `GetDefaultTarget` local
+function inside `StorytellerComp.DebugTablesIncidentChances`.
+`DebugActionsIncidents.GetTarget` was deliberately NOT copied: it picks by camera
+state, which is meaningless headless. 3.5 went 48 → 104 passing, still zero
+failures, and then reached its trade phase.
+
+### What did NOT come out green, stated plainly
+
+- **3.5 phase 3 — 79/86, seven failures, UNRESOLVED tonight.** An out-of-range
+  buy was accepted rather than refused, and it journaled a call it should have
+  wholly refused; the silver arithmetic came out +99 instead of ~0. **I am not
+  calling this a mod defect.** The driver bought and sold the SAME def
+  (`ComponentIndustrial`) in one deal, which a single `Tradeable.countToTransfer`
+  cannot represent, and that alone explains the arithmetic. Under diagnosis;
+  `20e5cda` stays open.
+- **`091e3f0` is merged but NOT closed.** The forbidding is proven live from two
+  directions — the kit reports 10 forbidden stacks, and `unforbid` independently
+  accepts exactly 10, then 0 on a second pass. Left forbidden and advanced 2500
+  ticks, all 10 were still there. Journaled as `type: dev` seq 133 with
+  `forbid: true`. But acceptance bullet 2 says "**and a pawn then picks the gear
+  up** — proving the obstacle was real and the remedy works, not just that a flag
+  flipped", and after 4000 further ticks **no haul job ran**. That bullet exists
+  precisely to stop a flipped flag from counting as done, so it would be wrong to
+  close on the flag.
+- **Deferred, and said rather than skipped:** `f7b6207` (2.5's legibility read —
+  it needs a fresh reader per iteration and I am disqualified the moment I have
+  seen the answer key), `e6faa51` (two-channel compare), `2a7c064` (p3).
+
+### The bug store broke, and it was not our code
+
+Pushing the bug refs was rejected; `git-bug pull` merged the remote's work and
+**every git-bug command then panicked with `DFS failed`.** Bisected from an empty
+ref set: five bugs unreadable (`20e5cda`, `70ac258`, `96d9315`, `d2e1229`,
+`fbb2c59`), 49 fine. The decisive measurement — **all five have two-parent merge
+heads and BOTH PARENTS OF ALL FIVE ARE INDIVIDUALLY READABLE.** Only the merges
+git-bug itself wrote are broken, and they are exactly the bugs where both sides
+had diverged. `20e5cda`'s bad merge came from the REMOTE, so BORGES's git-bug
+does it too. No data lost; each was reset to its fuller parent. Filed as
+`16b959a` with the dropped parent shas.
+
+One methodological note worth keeping: the first bisect blamed `20e5cda` alone
+and then "proved" all 17 of its commits unreadable. **A confound — one bad ref in
+the set poisons every later test.** Nothing can be bisected until the set is
+otherwise clean.
+
+### What landed
+
+`9219a6d` 091e3f0 forbidden kit · `8e6cedb` first-run evidence · `cd9f390`
+dev:incident world target · `2a31cb9` build · `3b3f905` 8b0b88f suite · `1fc5e5b`
+3.4 staging · plus the 4087644 driver merge and the 8b0b88f 1.2l/m repair.
+
+`2a31cb9` verified: InformationalVersion names `cd9f390`, AssemblyConfiguration
+blob Release, pdb path this worktree's `obj/Release`.
+
+**A verification trap worth recording.** The new op strings are NOT findable with
+an ASCII grep — .NET puts string literals in the UTF-16 `#US` heap, so
+`grep -a 'target_note'` returns 0 on an assembly that contains it. Counted as
+UTF-16LE they are all there. The build rules already record this for
+`InformationalVersion`; it applies to every literal.
+
+### Bench state
+
+RUNNING at session close — `20260901T005842`, autostart.rws, paused. It has been
+mutated by the acceptance runs (policies created, kits spawned, ~12k ticks
+advanced, a quest and a trade caravan staged). **`autostart.rws` on disk is
+untouched**; the next session should relaunch rather than inherit it.
