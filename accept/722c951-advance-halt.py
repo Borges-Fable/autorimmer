@@ -6,9 +6,10 @@ that file's header first, especially the SHAPE CONTRACT note — `eq(..., None)`
 passes on an absent key, so phase 0 proves every dig path before any later phase
 leans on it.
 
-    ./accept/722c951-advance-halt.py             # everything
+    ./accept/722c951-advance-halt.py             # everything (phases 0-6)
     ./accept/722c951-advance-halt.py --phase 3   # one phase (0 always runs)
     ./accept/722c951-advance-halt.py --dry-run   # print the plan, send nothing
+    ./accept/722c951-advance-halt.py --selftest  # phase 7 only: NO bench needed
 
 Start the bench first (`_RimWorld-Agent/run-agent.sh --quicktest`) with a colony
 of at least TWO standing free colonists, `devMode = True` (the fixture steps
@@ -39,9 +40,21 @@ mod now refuses to advance blind and stops when a colonist falls.
     with a reason, journaled.
   * PHASE 6 — 40ed42f part 3, the bleedout deadline. A downed colonist whose
     bleed clock is shorter than the nearest rescuer's travel makes `advance`
-    refuse with both numbers. Staged by escalation and GATED ON `triage`'s own
-    verdict: if the fixture cannot produce `too-slow`, that is a fixture gap and
-    the suite says so rather than passing a check it did not earn.
+    refuse with both numbers. IT STAGES ITS OWN FIXTURE, because a fresh map
+    cannot produce that verdict: with no bed anywhere every `triage` verdict is
+    `no-rescuer`, and with everybody standing a few cells apart the clock cannot
+    be driven below the walk without killing the patient. So it spawns a bed and
+    strands a colonist ~140 cells away — the orchestrator's hand-proven recipe
+    (accept/runs/s21-20260901/suites/README.md). Still GATED ON `triage`'s own
+    verdict: if the staging does not take, the suite SKIPs rather than passing a
+    check it did not earn. It also asserts `act` is published ON `too-slow`,
+    which is right — the agent may still choose to try, and the verb's job is to
+    PRICE the rescue, not to decide it.
+  * PHASE 7 — `--selftest`, offline. The suite's own helpers run over the REAL
+    envelopes banked at accept/runs/s21-20260901/, so "the assertions work"
+    means "they work on what the mod actually emitted". Needs no bench, which is
+    the point: every other suite in accept/ has one, and without it this file
+    could not be validated while the bench was busy.
 
 NO BARE TICK COUNTS. Every advance here is bounded by a predicate —
 `until:{condition:{path:"time.tick", op:">=", value:<absolute tick>}}`, i.e.
@@ -54,10 +67,12 @@ which needs the journal to GROW during an advance and uses the shipped
 standing guard — because "wait until something is journaled" has no predicate
 spelling and inventing one would be the guess this rule exists to stop.
 
-IT DAMAGES COLONISTS. Phases 3, 5 and 6 down a colonist on purpose and phase 6
-adds severe blood loss; each phase heals its subject afterwards, but a fixture
-that crashes mid-phase leaves a casualty. Run it on a bench you are willing to
-dirty, and not on a colony you care about.
+IT DAMAGES COLONISTS AND ADDS TO THE COLONY. Phases 3, 5 and 6 down a colonist
+on purpose and phase 6 adds severe blood loss; each heals its subject afterwards,
+but a fixture that crashes mid-phase leaves a casualty. Phase 4 spawns a hostile
+and phase 6 spawns a BED and an extra COLONIST that it does not remove — both are
+noted in the output with the `dev:destroy` call that would. Run it on a bench you
+are willing to dirty, and not on a colony you care about.
 
 Exit 0 = every check passed · 1 = at least one FAIL · 2 = a fixture
 precondition could not be met, which is NOT a spec failure and says so.
@@ -388,6 +403,37 @@ def banner(t):
 
 
 # ------------------------------------------------------------------ fixtures --
+
+def colony_anchor():
+    """(x, z) of a standing colonist, and the map's (w, h).
+
+    `Dev.PosArg` defaults an omitted `pos` to `Dev.Anchor` — the first free
+    colonist, else map centre — so "near the colony" is a real, shipped concept
+    and this reproduces it rather than inventing a landmark."""
+    at = None
+    e = send("pawns", {"filter": "colonist", "cap": 200})
+    for row in as_list(dig(e, "data.list")):
+        if isinstance(row, dict) and isinstance(row.get("at"), list) and len(row["at"]) >= 2:
+            at = (row["at"][0], row["at"][1])
+            break
+    d = send("digest", {"sections": ["site"]})
+    size = dig(d, "data.site.map_size")
+    if not (isinstance(size, list) and len(size) >= 2):
+        size = [250, 250]
+    return at, (size[0], size[1])
+
+
+def far_cell(anchor, size, dx=110, dz=90):
+    """A cell ~140 cells from the colony, pushed toward whichever edge has the
+    room. The distance is the POINT of the fixture: on a fresh map everybody
+    stands a few cells apart, so the bleed clock cannot be driven below the walk
+    without killing the patient outright (orchestrator bench pass,
+    accept/runs/s21-20260901/suites/README.md)."""
+    (ax, az), (w, h) = anchor, size
+    x = ax + dx if ax < w // 2 else ax - dx
+    z = az + dz if az < h // 2 else az - dz
+    return [max(5, min(w - 6, x)), max(5, min(h - 6, z))]
+
 
 def standing_colonists():
     """(id, name) for every spawned free colonist who is UP.
@@ -836,102 +882,367 @@ def phase6():
                  "one to bleed and one who could rescue; with a single colonist "
                  "`triage` answers `no-rescuer` and there is no deadline to "
                  "compare. Found: %r" % (roster,))
-    victim = roster[0] if roster else (0, "?")
     clear_journal()
 
-    # STAGE BY ESCALATION, AND VERIFY WITH `triage` RATHER THAN ASSUME.
-    # The refusal fires on `verdict == "too-slow"`, i.e. clock < travel+carry.
-    # A downed colonist on a small map is usually reachable in time, so the
-    # clock has to be driven down until the comparison inverts — and whether it
-    # has is `triage`'s answer, not this file's arithmetic.
-    e = send("dev:damage", {"pawn": victim[0], "mode": "until-downed",
-                            "allow_bleeding": True})
-    precondition("6.b", "the victim can be downed and left bleeding",
-                 dig(e, "ok") is True and dig(e, "data.downed") is True,
+    # ============ STAGE THE FIXTURE, BECAUSE A FRESH MAP CANNOT ==============
+    #
+    # This phase SKIPped on its first bench run and the SKIP was right: the
+    # deadline refusal fires on `verdict == "too-slow"` and nothing else, and a
+    # bare `--quicktest` map cannot produce that verdict at all. TWO independent
+    # reasons, both measured (accept/runs/s21-20260901/suites/README.md), and
+    # both have to be fixed or the fixture stays impossible:
+    #
+    #   1. THERE IS NO BED ANYWHERE. `TakeToBedGate` -> `HealthAIUtility
+    #      .CanRescueNow` -> `FindBed` answers `no-bed` for every colonist, so
+    #      every verdict is `no-rescuer` with a null margin — which correctly
+    #      does NOT refuse. The banked run shows exactly this: BloodLoss 0.00
+    #      -> no-rescuer, 0.50 -> no-rescuer, and the escalation never got
+    #      anywhere because the gate was upstream of the clock.
+    #   2. EVERYBODY STANDS A FEW CELLS APART. Even with a bed, a walk of ~10
+    #      cells is ~200 ticks and the clock cannot be driven under that without
+    #      killing the patient outright — `BloodLoss` is lethal at severity 1.0,
+    #      so there is no severity that makes a 10-cell walk too slow AND leaves
+    #      a live patient.
+    #
+    # So the fixture spawns a bed near the colony and a colonist ~140 cells
+    # away, then downs THAT pawn. The recipe and its numbers are the
+    # orchestrator's, proven by hand on 2026-09-01: clock 3,061 against a
+    # nearest rescuer at 142 cells (travel 2,264 + carry 2,284 = 4,548),
+    # verdict `too-slow`, margin -1,487.
+    anchor, size = colony_anchor()
+    precondition("6.b", "the colony's position and the map size are readable",
+                 ARGS.dry_run or (anchor is not None),
+                 "the fixture needs an anchor to place a bed near and a far cell "
+                 "to strand the patient at. `pawns` returned no colonist with an "
+                 "`at`.")
+
+    # A BED, so `FindBed` has something to find. `mode:"direct"` and an explicit
+    # cell two off the anchor: `mode:"near"` would search, and a fixture that
+    # silently staged somewhere else is the thing `pos_source` exists to catch.
+    bed_at = ([anchor[0] + 2, anchor[1] + 2] if anchor else None)
+    bed = send("dev:spawn-thing", {"def": "Bed", "stuff": "WoodLog",
+                                   "pos": bed_at, "mode": "direct"}) if bed_at \
+        else {"ok": False}
+    if dig(bed, "ok") is not True:
+        # A map that already HAS a bed is fine and common; so is a blocked cell.
+        # Neither is fatal, because 6.d gates on the verdict rather than on this.
+        note("6.1", "bed spawn at %s did not take (%s) — continuing; 6.d gates on "
+                    "the verdict, not on this call"
+             % (bed_at, show(dig(bed, "error.detail"))))
+    else:
+        note("6.1", "bed spawned at %s (pos_source=%s)"
+             % (bed_at, dig(bed, "data.pos_source")))
+
+    # THE PATIENT, STRANDED. `faction:"player"` is `Dev.FactionArg`'s own alias
+    # for `Faction.OfPlayer` — the orchestrator's hand-run used the `PlayerColony`
+    # def name, which resolves to the same faction by a longer route.
+    far = far_cell(anchor, size) if anchor else None
+    sp = send("dev:spawn-pawn", {"kind": "Colonist", "faction": "player",
+                                 "pos": far, "count": 1}) if far else {"ok": False}
+    # The new pawn's id is at data.pawns[0].id — `Dev.Describe` rows, the same
+    # key phase 4 reads. NOT `spawned`.
+    victim_id = dig(sp, "data.pawns.0.id")
+    victim_name = dig(sp, "data.pawns.0.name")
+    staged = dig(sp, "ok") is True and isinstance(victim_id, int)
+    if staged:
+        note("6.2", "stranded %s (id %s) at %s, ~%d cells from the colony at %s"
+             % (victim_name, victim_id, far,
+                int(max(abs(far[0] - anchor[0]), abs(far[1] - anchor[1]))), list(anchor)))
+    else:
+        # FALL BACK to the in-roster escalation rather than failing outright.
+        # It cannot usually reach `too-slow` — that is the whole finding — but
+        # it keeps the phase honest on a bench where spawning is refused, and
+        # 6.d then SKIPs with the reason.
+        victim_id, victim_name = roster[0] if roster else (0, "?")
+        note("6.2", "could not strand a far patient (%s) — falling back to %s "
+                    "from the existing roster; expect 6.d to SKIP"
+             % (show(dig(sp, "error.detail")), victim_name))
+
+    e = send("dev:damage", {"pawn": victim_id, "mode": "until-downed"})
+    precondition("6.c", "the patient can be downed and left bleeding",
+                 ARGS.dry_run or (dig(e, "ok") is True and dig(e, "data.downed") is True),
                  "got: %s" % show(dig(e, "data") or dig(e, "error")))
 
+    # ESCALATE AND VERIFY WITH `triage`, NEVER WITH THIS FILE'S ARITHMETIC.
+    # 0.85 is the severity the orchestrator's hand-run used and the one that
+    # produced `too-slow`; the rest of the ladder is kept because a different
+    # map geometry needs a different clock, and stopping at the first `too-slow`
+    # is what keeps the patient alive to be refused over.
     verdict, row = None, None
-    for sev in (0.0, 0.5, 0.8, 0.90, 0.95, 0.98):
-        if sev:
-            send("dev:add-hediff", {"pawn": victim[0], "def": "BloodLoss",
-                                    "severity": sev})
+    for sev in (0.85, 0.90, 0.95, 0.98):
+        send("dev:add-hediff", {"pawn": victim_id, "def": "BloodLoss", "severity": sev})
         t = send("triage", {})
         rows = [r for r in as_list(dig(t, "data.casualties"))
-                if isinstance(r, dict) and r.get("pawn") == victim[0]]
+                if isinstance(r, dict) and r.get("pawn") == victim_id]
         if not rows:
             continue
         row, verdict = rows[0], rows[0].get("verdict")
-        note("6.1", "BloodLoss %.2f -> verdict %s, clock %s, margin %s"
-             % (sev, verdict, dig(row, "clock.ticks"), row.get("margin_ticks")))
+        note("6.3", "BloodLoss %.2f -> verdict %s, clock %s, margin %s, pathed %s"
+             % (sev, verdict, dig(row, "clock.ticks"), row.get("margin_ticks"),
+                row.get("candidates_pathed")))
         if verdict == "too-slow":
             break
 
-    precondition("6.c", "`triage` reaches verdict `too-slow`",
+    precondition("6.d", "`triage` reaches verdict `too-slow`",
                  ARGS.dry_run or verdict == "too-slow",
                  "the deadline refusal fires on that verdict and NOTHING ELSE "
                  "— `no-rescuer`/`no-path`/`no-deadline` deliberately do not "
                  "refuse, because no act clears them and refusing forever "
                  "wedges the run (TriageVerbs.BleedoutDeadline's header). "
-                 "Reached %r instead (clock %s, margin %s, rescuers %s). TWO "
-                 "known fixture gaps: on a bare --quicktest map there is NO BED "
-                 "anywhere, so TakeToBedGate answers `no-bed` for everyone and "
-                 "every verdict is `no-rescuer` — build or spawn a bed first; "
-                 "and on a map where every rescuer is a few cells away the clock "
-                 "cannot be driven below the walk without killing the patient — "
-                 "run this phase on a colony with some distance in it, or stage "
-                 "a rescuer far from the casualty."
+                 "Reached %r instead (clock %s, margin %s, pathed %s). The two "
+                 "known causes are STAGED ABOVE, so reaching this line means one "
+                 "of them did not take: check 6.1 (the bed) and 6.2 (the far "
+                 "spawn) in the output above."
                  % (verdict, dig(row, "clock.ticks") if row else None,
                     row.get("margin_ticks") if row else None,
-                    dig(row, "candidates_pathed") if row else None))
+                    row.get("candidates_pathed") if row else None))
 
     # `row` is None only under --dry-run, where `precondition` prints and
-    # returns instead of exiting. Everywhere else 6.c has already stopped the
-    # suite if the verdict is anything but `too-slow`.
+    # returns instead of exiting.
     clock = dig(row, "clock.ticks")
     margin = row.get("margin_ticks") if isinstance(row, dict) else None
+
+    # `act` IS STILL PUBLISHED ON `too-slow`, and that is right rather than a
+    # leftover: the agent may still choose to try, and `triage`'s job is to
+    # PRICE the rescue, not to decide it. A verb that withheld the call on a
+    # bad verdict would be making the decision for the caller — the exact
+    # inversion 40ed42f's "candidates + reasons, never bare booleans" rule
+    # exists to prevent.
+    shape("6.4", "triage", row, "act", dict)
+    eq("6.5", "…and it is a `rescue` call", row, "act.op", "rescue")
+    eq("6.6", "…aimed at this patient", row, "act.args.target", victim_id)
+    shape("6.7", "triage", row, "act.args.pawn", int)
+
     a = advance(pass_time(), timeout=180)
-    refused("6.2", "the advance is REFUSED on the deadline", a, "bleedout-deadline")
-    # The negative half of the same rule, and it is the one that keeps a
-    # ten-day run alive: a casualty NOBODY can reach is not a casualty nobody
-    # can reach IN TIME, and only the second is a decision an advance is making.
-    # Phase 6.c above already exercised the `no-rescuer` path — every escalation
-    # step before `too-slow` was one — and none of them refused, or 6.2 would
-    # have fired on the first `dev:damage` instead of after the escalation.
-    note("6.2b", "the pre-escalation verdicts (%s) did NOT refuse — only "
-                 "`too-slow` does" % "no-rescuer/in-time/no-deadline")
+    refused("6.8", "the advance is REFUSED on the deadline", a, "bleedout-deadline")
+    # The negative half of the same rule, and it is the one that keeps a ten-day
+    # run alive: a casualty NOBODY can reach is not a casualty nobody can reach
+    # IN TIME, and only the second is a decision an advance is making. The
+    # banked run is the evidence — BloodLoss 0.00 and 0.50 both read
+    # `no-rescuer` and NEITHER refused, or this phase would have failed at its
+    # first `dev:damage` instead of SKIPping at the verdict.
+    note("6.8b", "`no-rescuer`/`no-path`/`no-deadline` do NOT refuse — only "
+                 "`too-slow` does (accept/runs/s21-20260901/suites/722c951.log)")
     detail = dig(a, "error.detail") or ""
-    check("6.3", "the refusal reports the BLEED CLOCK",
+    check("6.9", "the refusal reports the BLEED CLOCK",
           token(detail, "bleedout_ticks") == clock,
           "bleedout_ticks=%s (triage's own number)" % clock, detail[:400])
-    check("6.4", "…and the RESCUE estimate",
+    check("6.10", "…and the RESCUE estimate",
           isinstance(token(detail, "rescue_ticks"), int)
           and token(detail, "rescue_ticks") > (clock or 0),
           "rescue_ticks=<N> with N > the clock", detail[:400])
-    check("6.5", "…and the margin, negative, matching triage",
+    check("6.11", "…and the margin, negative, matching triage",
           token(detail, "margin_ticks") == margin,
           "margin_ticks=%s" % margin, detail[:400])
-    contains("6.6", "…and NAMES THE PAWN", a, "error.detail", str(victim[1]))
-    contains("6.7", "…and points at the verb that fixes it", a, "error.detail", "rescue")
-    check("6.8", "a refusal carries NO data block — no ticks ran",
+    check("6.12", "…and NAMES THE SAME RESCUER `triage`'s `act` does",
+          token(detail, "rescuer") == dig(row, "act.args.pawn"),
+          "rescuer=%s" % dig(row, "act.args.pawn"), detail[:400])
+    contains("6.13", "…and names the pawn", a, "error.detail", str(victim_name))
+    contains("6.14", "…and points at the verb that fixes it", a, "error.detail", "rescue")
+    check("6.15", "a refusal carries NO data block — no ticks ran",
           not has_key(a, "data"), "the key to be ABSENT", dig(a, "data"))
 
     # The escape covers this refusal too — one flag for "I am deciding to let
     # this happen", not two.
-    a2 = advance_escaping(pass_time(),
-                          unread=True, timeout=180)
-    eq("6.9", "`through_casualties` also overrides the deadline refusal", a2, "ok", True)
-    shape("6.10", "advance", a2, "data.escaped.bleedout_deadline", dict)
-    eq("6.11", "…carrying the reason", a2, "data.escaped.bleedout_deadline.reason", WHY)
-    shape("6.12", "advance", a2, "data.escaped.bleedout_deadline.casualty", dict)
+    a2 = advance_escaping(pass_time(), unread=True, timeout=180)
+    eq("6.16", "`through_casualties` also overrides the deadline refusal", a2, "ok", True)
+    shape("6.17", "advance", a2, "data.escaped.bleedout_deadline", dict)
+    eq("6.18", "…carrying the reason", a2, "data.escaped.bleedout_deadline.reason", WHY)
+    shape("6.19", "advance", a2, "data.escaped.bleedout_deadline.casualty", dict)
 
-    ok = heal(victim[0])
-    note("6.13", "healed %s: %s" % (victim[1], "ok" if ok else "FAILED — bench is dirty"))
+    ok = heal(victim_id)
+    note("6.20", "healed %s: %s" % (victim_name, "ok" if ok else "FAILED — bench is dirty"))
+    if staged:
+        note("6.21", "THE FIXTURE LEAVES A COLONIST BEHIND: %s (id %s) is a spawned "
+                     "pawn standing at %s. Harmless, but it is a roster change — "
+                     "`dev:destroy {thing:%s}` removes it."
+             % (victim_name, victim_id, far, victim_id))
     clear_journal()
+
+
+# ------------------------------------------------------------------- phase 7 --
+#
+# THE SUITE'S OWN MACHINERY, OFFLINE. No bench, no game, nothing sent.
+#
+# Every other suite in accept/ carries one and this one did not, which is what
+# stopped the orchestrator validating it while the bench was busy. It follows
+# `accept/61794cd-bleed-triage.py`'s phase 9 exactly: THE FIXTURES ARE REAL
+# ENVELOPES the orchestrator banked at accept/runs/s21-20260901/, so "the
+# assertions work" means "they work on what the mod actually emitted" rather
+# than "they agree with a dict this file wrote".
+
+S21 = os.path.join(REPO, "accept", "runs", "s21-20260901")
+
+
+def _s21(name):
+    try:
+        with open(os.path.join(S21, name), encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def probe(fn):
+    """Run one assertion and report whether it PASSED, without letting it into
+    the real tally. The check helpers report through module state, so this
+    swaps that state out and puts it back."""
+    global FAILS, CHECKS
+    keep_f, keep_c = FAILS, CHECKS
+    FAILS, CHECKS = [], 0
+    try:
+        import io, contextlib
+        with contextlib.redirect_stdout(io.StringIO()):
+            fn()
+        return not FAILS
+    finally:
+        FAILS, CHECKS = keep_f, keep_c
+
+
+# THE REFUSAL DETAIL, VERBATIM from the orchestrator's hand-run on 2026-09-01
+# (accept/runs/s21-20260901/suites/README.md). Pinned as a string because the
+# refusal carries no `data` block — `Poller.BuildResultJson` writes `error`
+# instead — so `error.detail` IS the machine contract, and `token()` is the only
+# thing that reads it. If the detail is ever reworded so a number stops being
+# parseable, this is what notices.
+REAL_BLEEDOUT_DETAIL = (
+    "Darcie bleeds out in 3061 ticks and the nearest capable rescuer needs 4548 "
+    "ticks to reach a bed with them — 1487 ticks short. bleedout_ticks=3061 "
+    "rescue_ticks=4548 margin_ticks=-1487 pawn=44015 pawn_name=Darcie "
+    "rescuer=905 verdict=too-slow. Advancing now is a decision to let this pawn "
+    "die, and the M1 run made it by accident: at tick 231,968 a ~9,040-tick "
+    "bleed clock was answered with a work-priority flip whose chosen rescuer "
+    "stayed asleep for ~6,100 ticks.")
+
+REAL_UNREAD_DETAIL = (
+    "the previous advance journaled 6 event(s) that no `journal` call has read "
+    "(seq 65..70; types: alert_on 1, death 1, letter 2, message 2). unread=6 "
+    "unread_total=6 read_watermark=64 advance_end_seq=70.")
+
+
+def phase7():
+    banner("PHASE 7 — the suite's OWN machinery (offline; no bench, no game)")
+
+    # -- token(): the machine half of a refusal that has no data block -----
+    d = REAL_BLEEDOUT_DETAIL
+    for num, key, want in (("7.1a", "bleedout_ticks", 3061),
+                           ("7.1b", "rescue_ticks", 4548),
+                           ("7.1c", "margin_ticks", -1487),
+                           ("7.1d", "pawn", 44015),
+                           ("7.1e", "rescuer", 905)):
+        check(num, "token() parses %s from the REAL bleedout refusal" % key,
+              token(d, key) == want, want, token(d, key))
+    check("7.1f", "…and a NEGATIVE margin keeps its sign — the whole point of it",
+          token(d, "margin_ticks") < 0, "< 0", token(d, "margin_ticks"))
+    check("7.1g", "token() answers None for a key that is not there, rather than 0",
+          token(d, "no_such_token") is None, None, token(d, "no_such_token"))
+    # The trap this helper exists to avoid: `pawn=44015` and `pawn_name=Darcie`
+    # share a prefix, and a sloppy regex would read the name as the id.
+    check("7.1h", "…and `pawn=` does not match `pawn_name=`",
+          token("pawn_name=Darcie rescuer=905", "pawn") is None,
+          None, token("pawn_name=Darcie rescuer=905", "pawn"))
+
+    u = REAL_UNREAD_DETAIL
+    check("7.2a", "token() parses unread= from the REAL unread refusal",
+          token(u, "unread") == 6, 6, token(u, "unread"))
+    check("7.2b", "…and read_watermark=", token(u, "read_watermark") == 64,
+          64, token(u, "read_watermark"))
+    check("7.2c", "…and advance_end_seq=", token(u, "advance_end_seq") == 70,
+          70, token(u, "advance_end_seq"))
+    check("7.2d", "the breakdown NAMES the event types — the line that would "
+                  "have said Table's name",
+          "death 1" in u and "types:" in u, "'types:' and 'death 1'", u[:160])
+
+    # -- refused(): a refusal is the assertion ------------------------------
+    real = {"ok": False, "op": "advance",
+            "error": {"code": "bleedout-deadline", "detail": REAL_BLEEDOUT_DETAIL}}
+    check("7.3a", "refused() PASSES on the real refusal envelope",
+          probe(lambda: refused("x", "t", real, "bleedout-deadline")), "pass", "fail")
+    check("7.3b", "…and on a needle the detail really contains",
+          probe(lambda: refused("x", "t", real, "bleedout-deadline", "too-slow")),
+          "pass", "fail")
+    check("7.3c", "…FAILS on the WRONG code — the discriminator 722c951 asks for",
+          not probe(lambda: refused("x", "t", real, "unread-journal")), "fail", "pass")
+    check("7.3d", "…FAILS on a needle the detail does not contain",
+          not probe(lambda: refused("x", "t", real, "bleedout-deadline", "no-rescuer")),
+          "fail", "pass")
+    check("7.3e", "…FAILS on an ok:true envelope, however good the data",
+          not probe(lambda: refused("x", "t", {"ok": True, "data": {"reason": "ticks"}},
+                                    "bleedout-deadline")), "fail", "pass")
+
+    # -- THE ABSENT-VS-NULL TRAP, on a REAL envelope ------------------------
+    #
+    # `15-journal.json` was banked BEFORE this branch merged, so it is a real
+    # `journal` result that genuinely LACKS `read_watermark`. That makes it the
+    # honest fixture for the hazard phase 0 exists to close: a suite that
+    # checked the new fields with `eq(..., None)` would have gone green against
+    # a mod that never published them.
+    j = _s21("15-journal.json")
+    if j is None:
+        note("7.4", "accept/runs/s21-20260901/ is not in this checkout — the "
+                    "envelope half of phase 7 is skipped; the string half above ran")
+    else:
+        check("7.4a", "the banked journal envelope is a pre-watermark one",
+              not has_key(j, "data.read_watermark"),
+              "data.read_watermark ABSENT", dig(j, "data.read_watermark"))
+        check("7.4b", "eq(...,None) PASSES on that absent key — THE TRAP",
+              probe(lambda: eq("x", "t", j, "data.read_watermark", None)),
+              "pass (which is why shape() exists)", "fail")
+        check("7.4c", "shape() FAILS on it — the trap, closed",
+              not probe(lambda: shape("x", "journal", j, "data.read_watermark", int)),
+              "fail", "pass")
+        check("7.4d", "shape() PASSES on a key that envelope DOES carry",
+              probe(lambda: shape("x", "journal", j, "data.last_seq", int)),
+              "pass", "fail")
+
+    # -- the dig paths phase 6 leans on, on a REAL triage row ---------------
+    t = _s21("20-triage-with-bed.json")
+    if t is None:
+        note("7.5", "no banked triage envelope in this checkout — skipped")
+    else:
+        rows = as_list(dig(t, "data.casualties"))
+        check("7.5a", "the banked triage envelope has a casualty row",
+              bool(rows), ">= 1 row", len(rows))
+        if rows:
+            r = rows[0]
+            check("7.5b", "`clock.ticks` is the path phase 6 reads",
+                  isinstance(dig(r, "clock.ticks"), int), "an int", dig(r, "clock.ticks"))
+            check("7.5c", "`margin_ticks` is a top-level field, not under clock",
+                  has_key(r, "margin_ticks"), "present", dig(r, "margin_ticks"))
+            check("7.5d", "`act` is published on a NON-too-slow verdict too — the "
+                          "verb PRICES the rescue, it does not decide it",
+                  has_key(r, "act") and dig(r, "act.op") == "rescue",
+                  "act.op == 'rescue'", dig(r, "act"))
+            check("7.5e", "…and `act.args.target` is the patient's own id",
+                  dig(r, "act.args.target") == r.get("pawn"),
+                  r.get("pawn"), dig(r, "act.args.target"))
+            note("7.5f", "banked verdict %r, clock %s, margin %s — a real row, and "
+                         "NOT `too-slow`, which is why phase 6 has to stage its own"
+                 % (r.get("verdict"), dig(r, "clock.ticks"), r.get("margin_ticks")))
+
+    # -- far_cell(): the arithmetic the staged fixture turns on --------------
+    check("7.6a", "far_cell pushes AWAY from the near edge",
+          far_cell((20, 20), (250, 250)) == [130, 110],
+          [130, 110], far_cell((20, 20), (250, 250)))
+    check("7.6b", "…and away from the FAR edge when the colony is out there",
+          far_cell((230, 230), (250, 250)) == [120, 140],
+          [120, 140], far_cell((230, 230), (250, 250)))
+    check("7.6c", "…and clamps inside the map either way",
+          all(5 <= v <= 244 for v in far_cell((5, 5), (250, 250))
+              + far_cell((245, 245), (250, 250))),
+          "every coordinate in [5, 244]",
+          far_cell((5, 5), (250, 250)) + far_cell((245, 245), (250, 250)))
+
+    # -- pass_time() is a tick count ON PURPOSE ------------------------------
+    check("7.7", "pass_time() sends {ticks:N}, not a clock predicate — see its "
+                 "note; a `time.tick` target loses a race to protocol latency "
+                 "(git-bug 1113019)",
+          pass_time(500) == {"ticks": 500}, {"ticks": 500}, pass_time(500))
 
 
 # ---------------------------------------------------------------------- main --
 
-PHASES = {0: phase0, 1: phase1, 2: phase2, 3: phase3, 4: phase4, 5: phase5, 6: phase6}
+PHASES = {0: phase0, 1: phase1, 2: phase2, 3: phase3, 4: phase4, 5: phase5,
+          6: phase6, 7: phase7}
 
 
 def main():
@@ -943,11 +1254,33 @@ def main():
                     help="run only these phases (0 always runs first)")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the plan and every expectation, send nothing")
+    ap.add_argument("--selftest", action="store_true",
+                    help="phase 7 only: the suite's own assertions over the banked "
+                         "envelopes. No bench, no game, nothing sent.")
     ap.add_argument("--echo", action="store_true", help="echo every result envelope")
     ARGS = ap.parse_args()
 
-    wanted = sorted(set(ARGS.phase or PHASES.keys()))
-    if 0 not in wanted:
+    # --selftest needs NO bench and must not be gated on one — that is the
+    # whole reason it exists: the orchestrator validated every other suite
+    # offline while the bench was busy and could not validate this one.
+    if ARGS.selftest:
+        print("722c951 + 40ed42f#3 acceptance — mode: --selftest")
+        print("offline; no bench, no protocol root, no game, nothing sent")
+        phase7()
+        banner("RESULT")
+        if FAILS:
+            print("%s%d/%d selftest checks FAILED: %s%s"
+                  % (RED, len(FAILS), CHECKS, ", ".join(FAILS), OFF))
+            return 1
+        print("%sSELFTEST PASS — all %d checks%s" % (GREEN, CHECKS, OFF))
+        return 0
+
+    # Phase 7 is offline and is NOT in the default run — `--selftest` is its
+    # front door. `--phase 7` alone still works and skips phase 0's bench
+    # preconditions, because a phase that touches no bench must not be gated on
+    # one.
+    wanted = sorted(set(ARGS.phase or [p for p in PHASES if p != 7]))
+    if 0 not in wanted and wanted != [7]:
         wanted = [0] + wanted
 
     print("722c951 + 40ed42f#3 acceptance — root %s" % ARGS.root)
