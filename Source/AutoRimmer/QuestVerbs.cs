@@ -68,6 +68,17 @@ namespace AutoRimmer
     // anything — `Quest.Accept` even sets `dismissed = false` on its way past.
     // An agent that reads `dismissed` as "we said no" will be wrong, so the
     // result says what it is, every time, in the payload.
+    //
+    // AND `DoDismissButton`'S THIRD STATE IS A HIDE, NOT A DELETE. Its
+    // historical branch is `selected.hiddenInUI = true;` +
+    // `SoundDefOf.Tick_High.PlayOneShotOnCamera();` + `Select(null);` +
+    // `return;`. `QuestManager.Remove` is NEVER called from that window — its
+    // only vanilla callers are `Verse/DebugActionsQuests` and
+    // `RimWorld/QuestPart_SubquestGenerator`. Only the TOOLTIP key says delete:
+    // `string key = (selected.Historical ? "DeleteQuest" : (selected.dismissed
+    // ? "UnDismissQuest" : "DismissQuest"));`. Reading that key as a
+    // destructive call is what made an earlier draft of `quest-dismiss` refuse
+    // historical quests outright.
     internal static partial class PawnActs
     {
         public const int QuestCap = 40;
@@ -436,35 +447,133 @@ namespace AutoRimmer
         // ====================================================================
         // quest-dismiss {quest, dismissed?}
         //
-        // `MainTabWindow_Quests.DoDismissButton`. Cosmetic filtering only, and
-        // the result says so every time. The widget's own third state — DELETE,
-        // for a Historical quest — is NOT reproduced: it calls
-        // `QuestManager.Remove`, which is destructive and outside this spec.
+        // `MainTabWindow_Quests.DoDismissButton`, all three of its states.
+        // Cosmetic filtering only, and the result says so every time.
+        //
+        // THE BUTTON IS A TOGGLE, NOT A SET: `selected.dismissed =
+        // !selected.dismissed;`. So `dismissed` OMITTED toggles (the click),
+        // and `dismissed` GIVEN sets idempotently — still a state the click can
+        // reach, and the shape an agent that wants "make sure it is dismissed"
+        // needs. `mode` in the result says which one ran.
+        //
+        // AND IT PROPAGATES ONE LEVEL, which a model-side write silently drops:
+        //
+        //     selected.dismissed = !selected.dismissed;
+        //     foreach (Quest subquest in selected.GetSubquests())
+        //     {
+        //         subquest.dismissed = selected.dismissed;
+        //     }
+        //
+        // `RimWorld/QuestUtility.GetSubquests` walks the plain
+        // `QuestManager.questsInDisplayOrder` list for `parent == quest` —
+        // DIRECT CHILDREN ONLY (not recursive), and a plain `List<Quest>`
+        // field, so no write-on-read. Writing the parent flag alone leaves a
+        // parent/subquest split no player can reach through the widget.
+        //
+        // THE THIRD STATE IS A HIDE. For a Historical quest the button does
+        // `selected.hiddenInUI = true;` and returns — it does NOT call
+        // `QuestManager.Remove`, and only the tooltip key ("DeleteQuest") says
+        // otherwise. It IS reproduced, as `mode:"hide"`. The hide is ONE-WAY:
+        // nothing in the game clears `hiddenInUI`, so `dismissed:false` on a
+        // historical quest is refused rather than inventing an un-hide.
         // ====================================================================
         [Verb("quest-dismiss")]
         public static object QuestDismiss(VerbContext ctx)
         {
             const string V = "quest-dismiss";
             var q = QuestArg(ctx.Args, "quest");
-            bool want = ctx.Args.Bool("dismissed", true);
+            bool explicitWant = ctx.Args.Has("dismissed");
 
-            // The widget's own branch: for a Historical quest the button is
-            // DELETE, not dismiss ("DeleteQuest"), so dismissing one is not a
-            // click any player can make.
             bool historical = false;
             try { historical = q.Historical; } catch { }
-            if (historical && want)
-                return Refuse(V, q, "historical",
-                    "MainTabWindow_Quests.DoDismissButton draws DeleteQuest (not DismissQuest) "
-                    + "for a Historical quest",
-                    "this quest is historical (" + QState(q) + "); the tab offers deletion rather than "
-                    + "dismissal for it, and deletion is out of scope for this verb");
 
+            // ---- the widget's HISTORICAL branch: hide, not delete ----------
+            if (historical)
+            {
+                // No un-hide exists: `hiddenInUI` is set true here and by
+                // Quest's own cleanup, and nothing anywhere sets it false.
+                if (explicitWant && !ctx.Args.Bool("dismissed", true))
+                    return Refuse(V, q, "no-unhide",
+                        "MainTabWindow_Quests.DoDismissButton's historical branch only ever sets "
+                        + "hiddenInUI = true, and nothing in the game clears it",
+                        "this quest is historical (" + QState(q) + "), so the tab's button hides it "
+                        + "rather than dismissing it, and there is no un-hide to ask for. Call "
+                        + "`quest-dismiss {quest}` with no `dismissed` to hide it.",
+                        new Dictionary<string, object>
+                        {
+                            ["mode"] = "hide",
+                            ["hidden_in_ui"] = q.hiddenInUI,
+                        });
+
+                bool hidBefore = q.hiddenInUI;
+                q.hiddenInUI = true;
+                long hseq = hidBefore ? 0 : Act(V, "hide", "Quest_" + q.id,
+                    new Dictionary<string, object> { ["quest"] = q.id, ["name"] = q.name });
+
+                return new Dictionary<string, object>
+                {
+                    ["verb"] = V,
+                    ["ok"] = q.hiddenInUI,
+                    ["quest"] = q.id,
+                    ["name"] = q.name,
+                    ["mode"] = "hide",
+                    ["hidden_in_ui"] = q.hiddenInUI,
+                    ["was_hidden_in_ui"] = hidBefore,
+                    ["dismissed"] = q.dismissed,
+                    ["was"] = q.dismissed,
+                    ["state"] = QState(q),
+                    ["subquests"] = new List<object>(),
+                    ["action"] = hidBefore ? NoStamp() : Stamp(hseq),
+                    ["note"] = "this quest is HISTORICAL, so the button's third state ran: "
+                        + "MainTabWindow_Quests.DoDismissButton sets hiddenInUI = true and returns. "
+                        + "It is a HIDE, not a delete — QuestManager.Remove is never called from that "
+                        + "window; only the tooltip key says DeleteQuest. The quest still exists, still "
+                        + "reads through `quest {id}`, and `quests {include_hidden:true}` still lists "
+                        + "it. There is NO un-hide.",
+                };
+            }
+
+            // ---- the ordinary branch: toggle, then propagate ---------------
             bool before = q.dismissed;
+            bool want = explicitWant ? ctx.Args.Bool("dismissed", true) : !before;
             q.dismissed = want;
 
-            long seq = before == want ? 0 : Act(V, want ? "dismiss" : "undismiss", "Quest_" + q.id,
-                new Dictionary<string, object> { ["quest"] = q.id, ["name"] = q.name });
+            // `foreach (Quest subquest in selected.GetSubquests()) subquest
+            // .dismissed = selected.dismissed;` — one level, in the widget's
+            // own order, and REPORTED so the write is visible rather than
+            // inferred.
+            var subs = new List<object>();
+            try
+            {
+                foreach (var sub in q.GetSubquests())
+                {
+                    if (sub == null) continue;
+                    bool subBefore = sub.dismissed;
+                    sub.dismissed = q.dismissed;
+                    subs.Add(new Dictionary<string, object>
+                    {
+                        ["quest"] = sub.id,
+                        ["name"] = sub.name,
+                        ["dismissed"] = sub.dismissed,
+                        ["was"] = subBefore,
+                    });
+                }
+            }
+            catch (Exception e)
+            {
+                Journal.EmitWarning(V + ": enumerating subquests threw: " + e.Message);
+            }
+
+            bool changed = before != want || subs.Count > 0;
+            long seq = changed
+                ? Act(V, want ? "dismiss" : "undismiss", "Quest_" + q.id,
+                    new Dictionary<string, object>
+                    {
+                        ["quest"] = q.id,
+                        ["name"] = q.name,
+                        ["subquests"] = subs.Count,
+                    })
+                : 0;
 
             return new Dictionary<string, object>
             {
@@ -472,13 +581,19 @@ namespace AutoRimmer
                 ["ok"] = q.dismissed == want,
                 ["quest"] = q.id,
                 ["name"] = q.name,
+                ["mode"] = explicitWant ? "set" : "toggle",
                 ["dismissed"] = q.dismissed,
                 ["was"] = before,
                 ["state"] = QState(q),
-                ["action"] = before == want ? NoStamp() : Stamp(seq),
+                ["subquests"] = subs,
+                ["action"] = changed ? Stamp(seq) : NoStamp(),
                 ["note"] = "cosmetic filtering only — this does NOT decline the quest, end it or stop "
                     + "its clock. A dismissed NotYetAccepted quest can still be accepted, and "
-                    + "Quest.Accept clears the flag itself.",
+                    + "Quest.Accept clears the flag itself. The button is a TOGGLE "
+                    + "(`selected.dismissed = !selected.dismissed`), which is what ran here when "
+                    + "`dismissed` was omitted; passing it sets instead. The flag was propagated to "
+                    + subs.Count + " direct subquest(s), as MainTabWindow_Quests.DoDismissButton "
+                    + "does — writing the parent alone leaves a split no player can reach.",
             };
         }
 
