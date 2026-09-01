@@ -91,7 +91,8 @@ it becomes. Ledger: log only firings (`verdict:"action"`), per
 
 ### hostiles-standing
 - when: turn
-- read: `digest` → `threats.hostiles`
+- read: `digest` → `threats.hostiles_unpardoned` (fall back to
+  `threats.hostiles` on a run predating the pardon verb)
 - flag: `> 0` → emergency posture (4.2's: verify SeekAndKill engagement,
   intervene by exception); on the transition to `0`, the post-raid trigger in
   `triggered.md` fires.
@@ -102,6 +103,16 @@ it becomes. Ledger: log only firings (`verdict:"action"`), per
   `pawns {filter:"hostile"}` does, so the two can disagree on a part-fogged
   map — a standing hostile you cannot see is real and unreachable, not a
   contradiction (cc8988c verification, miss 1).
+- **A nonzero `hostiles` on a map with a hive is the RESTING state, not an
+  emergency.** M1 ran five days at `threats.hostiles` 6–7 — four megascarab, a
+  locust and a spelopede, map-generated, dormant, fogged from tick 0, never
+  approaching — while `pawns {filter:"hostile"}` read 0 throughout. Reading that
+  as an active threat is what made the transition to `0` unreachable, so the
+  post-raid trigger could never fire on that map from tick 1. Declare them:
+  `threat-pardon {ids:[…], reason:"…"}` is a journalled act with a required
+  reason, and `hostiles_unpardoned` is what this item flags on. A pardon is a
+  DECISION, not a filter — "we are not ready to fight those" said out loud,
+  where the next session can read what was decided and why.
 - retire-when: cc8988c's mod procedure owns the transition; this trip-wire
   then only arms the emergency posture.
 
