@@ -873,8 +873,18 @@ def phase3():
                  'dev:incident {def:"TraderCaravanArrival"} + 8 x 2500 ticks produced no '
                  "WILLING trader (last gate: %s). A caravan can take most of a day to "
                  "arrive and settle and refuses while forming up or leaving; advance "
-                 'further, or stage an orbital trader (dev:incident '
-                 '{def:"OrbitalTraderArrival"}) and use the comms route in phase 5.'
+                 "further, or take the ORBITAL route — but read "
+                 "playbook/orbital-trade-needs-a-beacon.md first, because it needs TWO "
+                 "powered buildings and this phase's staging only gives you one. "
+                 '`dev:incident {def:"OrbitalTraderArrival"}`, a powered comms console, '
+                 "AND a powered `OrbitalTradeBeacon` with the goods standing inside its "
+                 "cells: `RimWorld/TradeShip.ColonyThingsWillingToBuy` is "
+                 "`TradeUtility.AllLaunchableThingsForTrade`, which iterates "
+                 "`Building_OrbitalTradeBeacon.AllPowered(map)` and nothing else — the "
+                 "home area and storage do not enter it at all. The radius is 7.9 and is "
+                 "NOT a circle: `TradeableCellsAround` breadth-first traverses regions "
+                 "with `r.door == null`, so a door or wall cuts it short. And the ship is "
+                 "addressed by NAME (a string, from `comms-targets`), not by a pawn id."
                  % (None if ARGS.dry_run else dig(e, "data.gate")))
     S["trader"] = 2001 if ARGS.dry_run else picked.get("id")
     print("  %strader = %s%s" % (DIM, S["trader"], OFF))

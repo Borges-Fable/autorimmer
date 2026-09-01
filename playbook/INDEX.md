@@ -14,6 +14,7 @@ no opinion).
 | [[who-will-actually-do-it]] | Critical | verified-in-source | after queuing any bill — skill is not assignment, the patient never counts |
 | [[zzzt-letter-is-a-fire-already-burning]] | Critical | verified-in-source | a Zzzt or fire letter — act on the letter; the alert is home-scoped and late (**graduated**: `triggered.md §power-incident` + `templates/power-room`) |
 | [[quicktest-and-autostart-collide]] | Critical | verified-in-source | launching `--quicktest` on a bench whose Saves still holds `autostart.rws` — map gen fails deterministically |
+| [[orbital-trade-needs-a-beacon]] | Critical | verified-in-source | any orbital trade — no beacon means the ship sees nothing of yours, and the console alone is not enough |
 | [[one-doctor-is-zero-doctors]] | Critical | observed-at-bench | colony start and every roster change — the only doctor is a likely casualty |
 | [[read-every-return-or-lose-a-colonist]] | Critical | observed-at-bench | any back-to-back short advances — a narrowed read is a blind loop |
 | [[seek-off-is-a-decision-to-flee]] | Critical | verified-in-source | every threat while seek-at-will is off — armed colonists scatter instead of fighting |
