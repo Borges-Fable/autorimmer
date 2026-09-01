@@ -115,6 +115,41 @@ def send(op, args=None, timeout=240):
     }
 
 
+# ---------------------------------------------- git-bug 722c951: the escape --
+#
+# `advance` has TWO new default-on guards, and both are right for a play loop
+# and wrong for a fixture harness:
+#
+#   * it REFUSES (ok:false, error.code "unread-journal") when the previous
+#     advance journaled events that no `journal` call has read, and
+#   * it HALTS (reason:"casualty") when an own-faction pawn goes down or dies
+#     while time is running.
+#
+# This suite is not a play loop. It advances to MOVE GAME STATE so the next
+# assertion has something to assert on, it never reads the journal in between,
+# and its advances exist to let ordered jobs actually RUN so the
+# result can be checked against what the pawn did. Without an
+# opt-out the second advance onwards would come back refused and every check
+# below would be measuring the refusal instead of the thing it names.
+#
+# So the opt-out lives HERE, in ONE wrapper, and not at the call sites: a
+# `unread_ok` sprinkled inline is indistinguishable to the next reader from one
+# somebody added to get a red check green. The reason string names this file, so
+# `journal --types action` on the bench says which harness turned the guard off
+# and why. Both escapes are per-call and journaled as an act by the mod
+# (session 13's threat-pardon precedent).
+ESCAPE = ("accept/3.4-pawn-orders.py: fixture harness, not a play loop — it advances to move "
+          "game state and asserts on the result, and does not read the journal "
+          "between advances")
+
+
+def advance(args=None, **kw):
+    a = dict(args or {})
+    a.setdefault("unread_ok", ESCAPE)
+    a.setdefault("through_casualties", ESCAPE)
+    return send("advance", a, **kw)
+
+
 def dig(obj, path, default=None):
     cur = obj
     for part in path.split("."):
@@ -468,7 +503,7 @@ def phase1():
     S["standable"] = dig(e, "data.standable_near")
 
     # 1.5 walk there
-    e = send("advance", {"ticks": 2000, "max_tps": 600})
+    e = advance({"ticks": 2000, "max_tps": 600})
     eq("1.5a", "advance ran to its tick budget (no dialog, no red error)", e,
        "data.reason", "ticks")
 
@@ -486,7 +521,7 @@ def phase1():
 
     # 1.7 IT HOLDS. A drafted pawn does not wander off to eat, haul or sleep -
     #     which is the half of the round trip that makes undraft necessary.
-    e = send("advance", {"ticks": 4000, "max_tps": 600})
+    e = advance({"ticks": 4000, "max_tps": 600})
     eq("1.7a", "advance ran to its tick budget", e, "data.reason", "ticks")
     e = send("pawn", {"id": A, "sections": ["state"]})
     at2 = as_list(dig(e, "data.state.at"))
@@ -586,7 +621,7 @@ def phase2():
     # 2.5 "that pawn hauls it NEXT" - the bullet, literally. TryTakeOrderedJob
     #     ends the current job and enqueues first, so the haul is the job the
     #     pawn takes on the next tick.
-    e = send("advance", {"ticks": 10, "max_tps": 60})
+    e = advance({"ticks": 10, "max_tps": 60})
     eq("2.5a", "advance ran", e, "data.reason", "ticks")
     e = send("pawn", {"id": A, "sections": ["state"]})
     jd = str(dig(e, "data.state.job_def"))
@@ -595,7 +630,7 @@ def phase2():
     print("          job report: %s" % dig(e, "data.state.job"))
 
     # 2.6 and it finishes
-    e = send("advance", {"ticks": 4000, "max_tps": 600})
+    e = advance({"ticks": 4000, "max_tps": 600})
     eq("2.6a", "advance ran", e, "data.reason", "ticks")
     e = send("pawn", {"id": A, "sections": ["state"]})
     jd = str(dig(e, "data.state.job_def"))
@@ -698,14 +733,14 @@ def advance_for_apparel(pid, done, nums, why):
     the paths that return null, never after issuing a job — so one advance
     covers the whole cascade of removes and wears, not one garment per 6000."""
     n_run, n_note, n_fallback = nums
-    e = send("advance", {"ticks": 5000, "max_tps": 600})
+    e = advance({"ticks": 5000, "max_tps": 600})
     eq(n_run, "advance ran", e, "data.reason", "ticks")
     e, worn, cold, forced = read_apparel(pid)
     window = 5000
     if not done(worn):
         note(n_note, "%s within 5000 ticks; advancing the documented fallback "
                      "window (the pawn may have been asleep, eating or mid-job)" % why)
-        f = send("advance", {"ticks": 15000, "max_tps": 600})
+        f = advance({"ticks": 15000, "max_tps": 600})
         eq(n_fallback, "fallback advance ran", f, "data.reason", "ticks")
         e, worn, cold, forced = read_apparel(pid)
         window = 20000
@@ -1019,7 +1054,7 @@ def phase4():
     ge("4.8b", "an `action` row was written", e, "data.action.journal_seq", 1)
 
     # 4.9 THE BULLET: the doctor performs it under advance.
-    e = send("advance", {"ticks": 6000, "max_tps": 600})
+    e = advance({"ticks": 6000, "max_tps": 600})
     eq("4.9a", "advance ran", e, "data.reason", "ticks")
     e = send("bills", {"bench": B})
     recipes = [r for b in as_list(dig(e, "data.benches"))
@@ -1027,7 +1062,7 @@ def phase4():
     if "Anesthetize" in recipes:
         note("4.9b", "not performed within 6000 ticks; advancing the documented "
                      "fallback window")
-        e = send("advance", {"ticks": 14000, "max_tps": 600})
+        e = advance({"ticks": 14000, "max_tps": 600})
         eq("4.9c", "fallback advance ran", e, "data.reason", "ticks")
         e = send("bills", {"bench": B})
         recipes = [r for b in as_list(dig(e, "data.benches"))

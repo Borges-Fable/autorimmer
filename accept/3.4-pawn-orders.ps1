@@ -122,6 +122,38 @@ function Dig {
 
 function Show { param($v) if ($null -eq $v) { 'null' } else { ($v | ConvertTo-Json -Depth 6 -Compress) } }
 
+# ------------------------------------------- git-bug 722c951: the escape ----
+#
+# `advance` has TWO new default-on guards, and both are right for a play loop
+# and wrong for a fixture harness:
+#
+#   * it REFUSES (ok:false, error.code "unread-journal") when the previous
+#     advance journaled events that no `journal` call has read, and
+#   * it HALTS (reason:"casualty") when an own-faction pawn goes down or dies
+#     while time is running.
+#
+# This suite is not a play loop. Its advances exist to let ordered jobs actually
+# RUN so the result can be checked against what the pawn did,
+# and it never reads the journal in between. Without an opt-out every advance
+# after the first that journaled anything would come back refused and every
+# check below would be measuring the refusal instead of the thing it names.
+#
+# So the opt-out lives HERE, in ONE wrapper, and not at the call sites: an
+# inline `unread_ok` is indistinguishable to the next reader from one somebody
+# added to get a red check green. The reason string names this file, so
+# `journal --types action` on the bench says which harness turned the guard off
+# and why. Both escapes are per-call and journaled as an act by the mod
+# (session 13's threat-pardon precedent).
+$script:Escape = "accept/3.4-pawn-orders.ps1: fixture harness, not a play loop - it advances to move game state and asserts on the result, and does not read the journal between advances"
+
+function Send-Advance {
+    param([hashtable]$Args = @{}, [int]$TimeoutSec = 120)
+    $a = $Args.Clone()
+    if (-not $a.ContainsKey('unread_ok')) { $a['unread_ok'] = $script:Escape }
+    if (-not $a.ContainsKey('through_casualties')) { $a['through_casualties'] = $script:Escape }
+    return Send-Cmd advance $a $TimeoutSec
+}
+
 # ------------------------------------------------------------------- asserts --
 
 function Check {
@@ -339,7 +371,7 @@ function Phase1 {
     $S.standable = Dig $e 'data.standable_near'
 
     # 1.5 walk there
-    $e = Send-Cmd advance @{ ticks = 2000; max_tps = 600 }
+    $e = Send-Advance @{ ticks = 2000; max_tps = 600 }
     Eq '1.5a' 'advance ran to its tick budget (no dialog, no red error)' $e 'data.reason' 'ticks'
 
     # 1.6 arrived, and STILL DRAFTED
@@ -354,7 +386,7 @@ function Phase1 {
 
     # 1.7 IT HOLDS. A drafted pawn does not wander off to eat, haul or sleep -
     #     which is the half of the round trip that makes undraft necessary.
-    $e = Send-Cmd advance @{ ticks = 4000; max_tps = 600 }
+    $e = Send-Advance @{ ticks = 4000; max_tps = 600 }
     Eq '1.7a' 'advance ran to its tick budget' $e 'data.reason' 'ticks'
     $e = Send-Cmd pawn @{ id = $A; sections = @('state') }
     $at2 = @(Dig $e 'data.state.at')
@@ -445,7 +477,7 @@ function Phase2 {
     # 2.5 "that pawn hauls it NEXT" - the bullet, literally. TryTakeOrderedJob
     #     ends the current job and enqueues first, so the haul is the job the
     #     pawn takes on the next tick.
-    $e = Send-Cmd advance @{ ticks = 10; max_tps = 60 }
+    $e = Send-Advance @{ ticks = 10; max_tps = 60 }
     Eq '2.5a' 'advance ran' $e 'data.reason' 'ticks'
     $e = Send-Cmd pawn @{ id = $A; sections = @('state') }
     $jd = [string](Dig $e 'data.state.job_def')
@@ -453,7 +485,7 @@ function Phase2 {
     Write-Host "          job report: $(Dig $e 'data.state.job')"
 
     # 2.6 and it finishes
-    $e = Send-Cmd advance @{ ticks = 4000; max_tps = 600 }
+    $e = Send-Advance @{ ticks = 4000; max_tps = 600 }
     Eq '2.6a' 'advance ran' $e 'data.reason' 'ticks'
     $e = Send-Cmd pawn @{ id = $A; sections = @('state') }
     $jd = [string](Dig $e 'data.state.job_def')
@@ -518,14 +550,14 @@ function Phase3 {
     #     NOW, so the pawn re-optimizes at its next free think tick rather than
     #     in 6000-9000. It still has to BE free: asleep, eating or in a mental
     #     state all delay it, hence the documented fallback window.
-    $e = Send-Cmd advance @{ ticks = 5000; max_tps = 600 }
+    $e = Send-Advance @{ ticks = 5000; max_tps = 600 }
     Eq '3.5a' 'advance ran' $e 'data.reason' 'ticks'
     $e = Send-Cmd pawn @{ id = $B; sections = @('apparel') }
     $worn = @(@(Dig $e 'data.apparel.worn') | ForEach-Object { $_.def })
     $window = 5000
     if ($worn -notcontains 'Apparel_Parka') {
         Note '3.5b' 'not re-dressed within 5000 ticks; advancing the documented fallback window (the pawn may have been asleep or eating)'
-        $e = Send-Cmd advance @{ ticks = 15000; max_tps = 600 }
+        $e = Send-Advance @{ ticks = 15000; max_tps = 600 }
         Eq '3.5c' 'fallback advance ran' $e 'data.reason' 'ticks'
         $e = Send-Cmd pawn @{ id = $B; sections = @('apparel') }
         $worn = @(@(Dig $e 'data.apparel.worn') | ForEach-Object { $_.def })
@@ -649,13 +681,13 @@ function Phase4 {
     Ge '4.8b' 'an `action` row was written' $e 'data.action.journal_seq' 1
 
     # 4.9 THE BULLET: the doctor performs it under advance.
-    $e = Send-Cmd advance @{ ticks = 6000; max_tps = 600 }
+    $e = Send-Advance @{ ticks = 6000; max_tps = 600 }
     Eq '4.9a' 'advance ran' $e 'data.reason' 'ticks'
     $e = Send-Cmd bills @{ bench = $B }
     $recipes = @(@(Dig $e 'data.benches') | ForEach-Object { @($_.bills) | ForEach-Object { $_.recipe } })
     if ($recipes -contains 'Anesthetize') {
         Note '4.9b' 'not performed within 6000 ticks; advancing the documented fallback window'
-        $e = Send-Cmd advance @{ ticks = 14000; max_tps = 600 }
+        $e = Send-Advance @{ ticks = 14000; max_tps = 600 }
         Eq '4.9c' 'fallback advance ran' $e 'data.reason' 'ticks'
         $e = Send-Cmd bills @{ bench = $B }
         $recipes = @(@(Dig $e 'data.benches') | ForEach-Object { @($_.bills) | ForEach-Object { $_.recipe } })

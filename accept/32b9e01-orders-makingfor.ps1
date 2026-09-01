@@ -150,6 +150,38 @@ function Dig {
 
 function Show { param($v) if ($null -eq $v) { 'null' } else { ($v | ConvertTo-Json -Depth 6 -Compress) } }
 
+# ------------------------------------------- git-bug 722c951: the escape ----
+#
+# `advance` has TWO new default-on guards, and both are right for a play loop
+# and wrong for a fixture harness:
+#
+#   * it REFUSES (ok:false, error.code "unread-journal") when the previous
+#     advance journaled events that no `journal` call has read, and
+#   * it HALTS (reason:"casualty") when an own-faction pawn goes down or dies
+#     while time is running.
+#
+# This suite is not a play loop. Its one advance exists to let the resource
+# counter rebuild so a `bills` read has something to count,
+# and it never reads the journal in between. Without an opt-out every advance
+# after the first that journaled anything would come back refused and every
+# check below would be measuring the refusal instead of the thing it names.
+#
+# So the opt-out lives HERE, in ONE wrapper, and not at the call sites: an
+# inline `unread_ok` is indistinguishable to the next reader from one somebody
+# added to get a red check green. The reason string names this file, so
+# `journal --types action` on the bench says which harness turned the guard off
+# and why. Both escapes are per-call and journaled as an act by the mod
+# (session 13's threat-pardon precedent).
+$script:Escape = "accept/32b9e01-orders-makingfor.ps1: fixture harness, not a play loop - it advances to move game state and asserts on the result, and does not read the journal between advances"
+
+function Send-Advance {
+    param([hashtable]$Args = @{}, [int]$TimeoutSec = 120)
+    $a = $Args.Clone()
+    if (-not $a.ContainsKey('unread_ok')) { $a['unread_ok'] = $script:Escape }
+    if (-not $a.ContainsKey('through_casualties')) { $a['through_casualties'] = $script:Escape }
+    return Send-Cmd advance $a $TimeoutSec
+}
+
 # ------------------------------------------------------------------- asserts --
 
 function Check {
@@ -615,7 +647,7 @@ function PhaseD {
     Note 'D.f1' ("{0}" -f (Dig $sp 'data.stockpile'))
 
     # (3) let the resource counter rebuild, then stop the clock again.
-    $adv = Send-Cmd advance @{ ticks = 300 }
+    $adv = Send-Advance @{ ticks = 300 }
     Precondition 'D.f2b' 'the clock advanced so resourceCounter could rebuild' `
     ([bool](Dig $adv 'ok')) (Show (Dig $adv 'error'))
     Note 'D.f2b' ("tick {0} -> {1}, paused_on_exit={2}" -f `

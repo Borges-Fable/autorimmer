@@ -104,6 +104,41 @@ await() {
 # send <id> <op> <args-json> [timeout]
 send() { send_async "$1" "$2" "$3"; await "$1" "${4:-120}"; }
 
+# ----------------------------------------------- git-bug 722c951: the escape --
+#
+# `advance` has TWO new default-on guards, and both are right for a play loop
+# and wrong for a fixture harness:
+#
+#   * it REFUSES (ok:false, error.code "unread-journal") when the previous
+#     advance journaled events that no `journal` call has read, and
+#   * it HALTS (reason:"casualty") when an own-faction pawn goes down or dies
+#     while time is running.
+#
+# This script is not a play loop. It advances ~45000 ticks to measure THROUGHPUT
+# and halt behaviour, it never reads the journal in between, and steps 09/12
+# deliberately advance into a self-opening letter. Without an opt-out every
+# advance after the first that journaled anything would come back refused and
+# the throughput numbers below would be measuring a refusal.
+#
+# So the opt-out lives HERE, in ONE wrapper, and not at the call sites: an
+# inline `unread_ok` is indistinguishable to the next reader from one somebody
+# added to get a red check green. The reason string names this file, so
+# `journal --types action` on the bench says which harness turned the guard off
+# and why. Both escapes are per-call and journaled as an act by the mod
+# (session 13's threat-pardon precedent).
+ESCAPE='accept/1.8-game-clock-advance.sh: fixture harness, not a play loop - it advances to measure throughput and halt behaviour, and does not read the journal between advances'
+
+# with_escape <args-json> -> the same JSON with both per-call escapes added
+with_escape() {
+  printf '%s' "$1" | jq -c --arg r "$ESCAPE" '. + {unread_ok:$r, through_casualties:$r}'
+}
+
+# adv <id> <args-json> [timeout]        — every advance in this file goes here
+adv() { send "$1" advance "$(with_escape "$2")" "${3:-120}"; }
+
+# adv_async <id> <args-json>
+adv_async() { send_async "$1" advance "$(with_escape "$2")"; }
+
 # q <jq-filter> -> value from the last RESULT
 q() { printf '%s' "$RESULT" | jq -r "$1" 2>/dev/null; }
 
@@ -174,7 +209,7 @@ hr
 # --- 02  the headline: 20000 ticks, genuinely unpaused ----------------------
 echo "02  advance {ticks:20000} — unpaused while it runs, paused when it returns"
 sample_start "$TMP/sample-02.txt"
-send a18-02 advance '{"ticks":20000}' 300
+adv a18-02 '{"ticks":20000}' 300
 sample_stop
 eq  "ok"                       '.ok'                    true
 eq  "reason"                   '.data.reason'           "ticks"
@@ -217,7 +252,7 @@ echo "       NothingHappeningInGame() (TickManager.TickRateMultiplier)."
 TPS_TABLE=""
 speed_case() {
   local id="$1" speed="$2" name="$3" ticks="$4" nominal="$5" bound="$6" lo="$7" hi="$8"
-  send "$id" advance "{\"ticks\":$ticks,\"speed\":\"$speed\"}" 300
+  adv "$id" "{\"ticks\":$ticks,\"speed\":\"$speed\"}" 300
   eq  "$speed: ok"                 '.ok'                  true
   eq  "$speed: reason"             '.data.reason'         "ticks"
   eq  "$speed: speed as asked"     '.data.speed'          "$name"
@@ -259,7 +294,7 @@ echo "07  until:{letter} — halts on the letter, halted_seq names the journal l
 echo "    and the halt tick is within the bounded overshoot of the event tick"
 send a18-07a journal-selftest '{"steps":["letter"],"letter_delay_ticks":300}' 60
 eq  "letter armed" '.ok' true
-send a18-07 advance '{"until":{"letter":true},"timeout_ticks":20000,"speed":"fast"}' 300
+adv a18-07 '{"until":{"letter":true},"timeout_ticks":20000,"speed":"fast"}' 300
 eq  "reason"                  '.data.reason'   "letter"
 eq  "returns paused"          '.data.paused_on_exit' true
 truthy "halted_seq names a journal line" '.data.halted_seq > 0'
@@ -296,7 +331,7 @@ fixture_letter() {   # <id> <tag> -> OPENS_AT / NOW_TICK
 }
 
 dialog_advance() {   # <id> <tag>
-  send "$1" advance '{"ticks":20000,"speed":"fast"}' 300
+  adv "$1" '{"ticks":20000,"speed":"fast"}' 300
   eq  "advance halted on the dialog"      '.data.reason'                        "dialog"
   eq  "advance returned paused"           '.data.paused_on_exit'                true
   truthy "a force-pausing window is named" '.data.force_pause_windows.count >= 1'
@@ -346,7 +381,7 @@ hr
 echo "14-17  max_tps still works (1.4's CLI and the committed acceptance scripts"
 echo "       pass it) and reports BOTH what was asked and what was set"
 
-send a18-14 advance '{"ticks":120,"max_tps":200}' 120
+adv a18-14 '{"ticks":120,"max_tps":200}' 120
 eq  "200 tps -> Fast"                 '.data.speed'                "Fast"
 eq  "source is max_tps"               '.data.speed_source'         "max_tps"
 eq  "effective tps is Fast's nominal" '.data.max_tps_effective'    180
@@ -355,24 +390,24 @@ eq  "the clamp is reported"           '.data.max_tps_clamped.to'   180
 eq  "clamped by the speed ladder"     '.data.max_tps_clamped.by'   "speed-step"
 eq  "returns paused"                  '.data.paused_on_exit'       true
 
-send a18-15 advance '{"ticks":60,"max_tps":5}' 120
+adv a18-15 '{"ticks":60,"max_tps":5}' 120
 eq  "5 tps -> Normal (nothing runs slower)" '.data.speed'              "Normal"
 eq  "reported as a floor"                   '.data.max_tps_clamped.by' "floor"
 eq  "effective tps"                         '.data.max_tps_effective'  60
 
-send a18-16 advance '{"ticks":600,"max_tps":5000}' 120
+adv a18-16 '{"ticks":600,"max_tps":5000}' 120
 eq  "5000 tps -> Ultrafast"          '.data.speed'              "Ultrafast"
 eq  "clamped by the config cap"      '.data.max_tps_clamped.by' "cap"
 eq  "effective tps"                  '.data.max_tps_effective'  900
 
-send a18-17 advance '{"ticks":120,"max_tps":900}' 120
+adv a18-17 '{"ticks":120,"max_tps":900}' 120
 eq  "an exact ask is not clamped"    '.data.speed'              "Ultrafast"
 truthy "no max_tps_clamped key when nothing moved" '.data.max_tps_clamped == null'
 hr
 
 # --- 18..19  busy-gating and the brake pedal --------------------------------
 echo "18-19  pause still interrupts an advance in flight; busy-gating unchanged"
-send_async a18-18 advance '{"ticks":600000,"speed":"normal"}'
+adv_async a18-18 '{"ticks":600000,"speed":"normal"}'
 sleep 3
 send a18-19a digest '{}' 60
 eq  "a main-thread verb is refused"  '.ok'          false
@@ -395,7 +430,7 @@ if [ "$MANUAL" = "1" ]; then
   echo "    Reveal the bench window (rwa watch on), then press SPACE in it when"
   echo "    prompted. This is the only route the protocol has: unpause is"
   echo "    busy-gated during an advance and pause routes through Interrupt()."
-  send_async a18-20 advance '{"ticks":600000,"speed":"normal"}'
+  adv_async a18-20 '{"ticks":600000,"speed":"normal"}'
   sleep 2
   printf '    >>> PRESS SPACE IN THE RIMWORLD WINDOW NOW, then press Enter here: '
   read -r _
