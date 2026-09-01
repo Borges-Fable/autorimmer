@@ -255,6 +255,35 @@ to execute.
 - retire-when: armament and coverage become sampled/derived fields with their
   own trip-wires.
 
+### casualty-halt
+- when: event: `advance` returns `reason:"casualty"` — an own-faction pawn
+  went DOWN or DIED while time was running, and the mod stopped the advance
+  at that tick rather than running to completion (git-bug 722c951)
+- read: `halted_on` first — it names the pawn, `pawn_id`, the event class
+  (`downed`/`death`), `pawn_kind` and the tick. Then `triage`, which is the
+  whole answer in one call: the bleed clock, every candidate rescuer with the
+  game's own refusal reason, `travel_ticks` + `carry_ticks`, a `verdict`, and
+  `act` — the exact `rescue` envelope with both ids filled in
+- flag: `verdict:"too-slow"` (the patient dies before anyone arrives — this is
+  also what `advance` will REFUSE on next, code `bleedout-deadline`),
+  `no-rescuer` (nobody is capable or the gates all refused — read
+  `rescuers_gated_out`, it says why), `no-path` (reachability, not staffing)
+- act: **send `triage`'s `act` verbatim.** `rescue` FORCES the job through
+  `Pawn_JobTracker.TryTakeOrderedJob` and interrupts `LayDown`; a
+  work-priority flip does not, and that is the single sharpest M1 finding —
+  `rescue` was shipped, solved this exactly, and was called ZERO times in 195
+  ops while the response actually tried was Chili's Doctor 0 → 3, after which
+  she stayed asleep for ~6,100 ticks and Captain died. Then `tend`, then
+  `roster-change` if the pawn is out of action. Only then advance again
+- why: the M1 run was HANDED this news and rode past it. Table went down at
+  214,599 inside step 148, whose own result carried
+  `journal_seq:[125,128]`; the run advanced five more times and he bled for
+  11,335 ticks. The halt is the mod refusing to let that be a silent choice.
+  [[read-every-return-or-lose-a-colonist]], [[one-doctor-is-zero-doctors]]
+- retire-when: never while an advance can cross a downing — this is the
+  trigger the mod itself fires, and the checklist line is what makes the
+  response a procedure rather than a reaction
+
 ### postmortem-trigger
 - when: event: a colonist `death`, a colony loss, or a near-miss that cost
   real recovery (a downed colonist rescued late, a fire that reached a

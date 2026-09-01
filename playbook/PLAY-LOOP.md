@@ -127,6 +127,32 @@ specific pawn is the question.
   `status` is a read of the heartbeat file and costs the game nothing. This
   gate goes first because a running game makes every other read stale,
   including the drafted check below.
+- **Pre-advance gate — the journal delta, and the mod now enforces it.**
+  Since git-bug 722c951 `advance` REFUSES (`ok:false`,
+  `error.code:"unread-journal"`) when the previous advance journaled events
+  that no `journal` call has read. The refusal names how many, the seq range,
+  and the type breakdown — `types: downed 1, letter 1` is the line that would
+  have saved Table. **The fix is step 1 of §read, which this loop already
+  owed:** `rwa journal --since_seq <last>`, then advance. Nothing else clears
+  it — not the digest (`digest.changed` is a COUNT PER TYPE, and "downed: 1"
+  does not name the pawn), and not the advance's own `journal_seq` echo, which
+  is exactly what M1 had and ignored. The obligation is created only by an
+  advance that actually journaled something, so a quiet colony never pays,
+  and the first advance of a session is never refused.
+  - The escape is `advance {unread_ok:"<why>"}` — a REQUIRED non-empty reason,
+    journaled as an act, and it bypasses ONE call without moving the
+    watermark, so the next advance asks again. Using it is a decision the
+    transcript and the journal both record; using it every turn is a decision
+    the post-mortem will find. It exists for the deliberate unattended burn,
+    not for a tight loop that finds reading tedious.
+- **Pre-advance gate — the bleed clock.** `advance` also refuses
+  (`error.code:"bleedout-deadline"`) when a bleeding own-faction pawn dies
+  sooner than the nearest capable rescuer can reach them. The refusal carries
+  both numbers and the pawn. That is not a bug to route around: it is the
+  arithmetic M1 got wrong at tick 231,968. Send `triage`'s `act` — the exact
+  `rescue` call — or make the decision explicitly with
+  `advance {through_casualties:"<why>"}`, which also switches off the casualty
+  halt below for that one call.
 - **Pre-advance gate — the undraft discipline.** Before EVERY advance: if any
   colonist shows `drafted` and `threats.hostiles` is 0 with no threat being
   actively responded to, `undraft` first. Read it from the digest's colonist
@@ -204,6 +230,7 @@ does topology, the game does geometry.
 | `ticks` / `timeout` | the guard didn't fire inside the cap | normal read; the cap firing on `until.letter` is common and fine — a quiet day |
 | `letter` / `alert` / `event` | the guard fired; `halted_on` carries it | the event IS the turn input; run its `triggered.md` entry if one matches |
 | `threat` | ThreatBig/ThreatSmall letter | emergency posture, below |
+| `casualty` | an OWN-FACTION pawn went down or died while time ran; `halted_on` names the pawn, `pawn_id`, the event and the tick | run `casualty-halt` (`triggered.md`): `triage`, then send its `act` — the `rescue` that FORCES the job. A hostile going down never halts; the filter is on faction, not on the event |
 | `dialog` | a force-pausing modal is up; `halted_on.letters` names the decision owed | first-class turn input — see the dialog rule below |
 | `red_error` | halt_on_error tripped | triage; zero-red-errors invariant; escalate if unexplained |
 | `stalled` | the game stopped for a reason that is not ours | `rwa status`, remediate per its verdict, else escalate — never re-advance into it |
