@@ -1,0 +1,39 @@
+AutoRimmer session-13 acceptance — the five M1 mod findings
+  A  dev:spawn-thing refusals reach the journal row  (DevVerbs.cs, Blockers.cs)
+  J  bench_ok is a bench, not a gate                 (ResearchVerbs.cs, ColonyVerbs.cs)
+  K  overshoot_bound from the fastest speed          (TimeDriver.cs)
+  I1 digest.site                                     (WorldSafe.cs, DigestVerb.cs)
+  D  threat-pardon                                   (ThreatPardonVerbs.cs, DigestVerb.cs)
+selftest: phase 9 only — no bench is contacted.
+
+==============================================================================
+PHASE 9 — the suite's OWN machinery (offline; proves it can FAIL)
+==============================================================================
+  9.1a    PASS    shape() PASSES on a key that is present
+  9.1b    PASS    shape() FAILS on a RENAMED key — the whole point of phase 0
+  9.1c    PASS    shape() PASSES on a present-and-NULL key (absent != null)
+  9.1d    PASS    shape(kind=) FAILS when the type is wrong
+  9.1e    PASS    shape() FAILS on a path through a missing parent
+  9.2a    PASS    eq(...,None) PASSES on an ABSENT key — the trap this suite is built around
+  9.2b    PASS    …which is why shape() is asserted FIRST: it fails on the same path
+  9.2c    PASS    eq() FAILS on a wrong value
+  9.3a    PASS    absent() PASSES when the key really is absent
+  9.3b    PASS    absent() FAILS when the key is present
+  9.3c    PASS    absent() FAILS when the key is present and NULL
+  9.4a    PASS    keys_exactly() PASSES on the shipped site field set
+  9.4b    PASS    …and FAILS when a skipped lazy getter is reintroduced (max_temp_c caches cachedMaxTemp)
+  9.4c    PASS    …and the per-name absence check fails on the same envelope
+  9.4d    PASS    a candidate row that leaks a position FAILS the fog-discipline key set
+  9.4e    PASS    …and a row that DROPS a field fails it too
+  9.5a    PASS    dig() indexes a list
+  9.5b    PASS    dig() returns the default past the end of a list
+  9.5c    PASS    has_key() is false past the end of a list
+  9.5d    PASS    has_key() is true for an index that exists
+  9.6a    PASS    ladder_ok() accepts a bound that matches its named speed
+  9.6b    PASS    …and rejects M1's actual envelope: bound 24 published against overshoot_bound_speed Ultrafast
+  9.6c    PASS    …while the pre-fix pairing (bound from the EXIT speed) would have left overshoot 30 > bound 24
+  9.7     PASS    this file's MAX_TICKS_PER_FRAME matches TimeDriver.cs's switch
+  9.8     PASS    this file's SITE_KEYS matches WorldSafe.Site's dictionary
+
+==============================================================================
+RESULT: all 25 checks passed — the ASSERTIONS work. Nothing about the mod was asserted; take this to a bench.
