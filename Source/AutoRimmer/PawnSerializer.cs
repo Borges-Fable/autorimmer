@@ -647,11 +647,22 @@ namespace AutoRimmer
             });
             for (int i = 0; i < capRows.Count && i < CapacityCap; i++) caps.Add(capRows[i].Value);
 
+            var bleedout = Bleedout(pawn, h);
             var d = new Dictionary<string, object>
             {
                 ["summary_pct"] = SafeSummaryHealthPct(pawn),
                 ["pain_pct"] = Safe(() => (object)PawnSafe.Pct(h.hediffSet.PainTotal)),
                 ["bleed_rate"] = PawnSafe.R(h.hediffSet.BleedRateTotal, 2),
+                // THE DEADLINE, not the symptom. `bleed_rate` and `needs_tend`
+                // were the only things this section published about a bleeding
+                // pawn, and neither answers the question the M1 run actually
+                // faced at tick 231,968: "is there time to walk a rescuer 118
+                // cells". Roughly a 2,810-tick walk against a ~9,040-tick
+                // clock, and NEITHER number was published. This is the first
+                // of the two. `null` when the game returns int.MaxValue —
+                // never 2147483647, which reads like a real deadline.
+                ["ticks_until_bleedout"] = bleedout["ticks"],
+                ["bleedout"] = bleedout,
                 ["needs_tend"] = SafeShouldTend(pawn),
                 ["med_care"] = pawn.playerSettings?.medCare.ToString(),
                 ["self_tend"] = pawn.playerSettings?.selfTend,
@@ -665,18 +676,146 @@ namespace AutoRimmer
             return d;
         }
 
+        // ------------------------- the bleed-out clock ----------------------
+        //
+        // `Verse/HealthUtility.TicksUntilDeathDueToBloodLoss(pawn)` is the
+        // GAME's own number and is published rather than re-derived:
+        //
+        //     bleedRateTotal < 0.0001f -> int.MaxValue
+        //     else (1 - BloodLoss.Severity) / bleedRateTotal * 60000
+        //
+        // Publishing OUR arithmetic instead would be a guess dressed as a read;
+        // the M1 post-mortem back-solved this same formula by hand and it
+        // agreed with Captain's actual death to four ticks, which is the
+        // argument for taking it from the game and not for reimplementing it.
+        //
+        // Deliberately INDEPENDENT OF THE HEDIFF LIST. `Verse/Hediff.Visible`
+        // returns `CurStage.becomeVisible` when `visible` is false, and
+        // `BloodLoss` stage 0 sets `<becomeVisible>false</becomeVisible>`, so
+        // below severity 0.15 the row is legitimately absent from `hediffs` —
+        // and the clock must still be computable. `TicksUntilDeathDueToBloodLoss`
+        // reads `BleedRateTotal` and `GetFirstHediffOfDef` directly and never
+        // consults `Visible`, so it is.
+        //
+        // WHAT HAPPENS WHEN THE CLOCK RUNS OUT IS NOT ALWAYS DEATH, and the
+        // raw number is a lie if you assume it is. Three outcomes, read from
+        // `Verse/Pawn_HealthTracker.ShouldBeDead` and the branch above it:
+        //
+        //   `none`  — `hediffSet.HasPreventsDeath`. `ShouldBeDead()` opens with
+        //             `if (hediffSet.HasPreventsDeath) return false;`, so
+        //             nothing happens at all. Checked FIRST because the game
+        //             checks it first.
+        //   `coma`  — the Deathless gene WITH an intact brain.
+        //             `Pawn_HealthTracker` routes a would-be death through
+        //             `ShouldBeDeathrestingOrInComa` ->
+        //             `RimWorld/SanguophageUtility
+        //             .ShouldBeDeathrestingOrInComaInsteadOfDead`, whose real
+        //             condition is `brain != null && !PartIsMissing(brain) &&
+        //             GetPartHealth(brain) > 0f`. The three brain reads are
+        //             reproduced here rather than calling that utility, because
+        //             it opens with `if (!pawn.health.ShouldBeDead()) return
+        //             false;` — it answers "is this pawn dying NOW", and the
+        //             question here is the hypothetical "what happens WHEN the
+        //             clock runs out".
+        //   `death` — everything else.
+        //
+        // Note the Deathless gene alone does NOT appear in `ShouldBeDead`:
+        // a Deathless pawn with a destroyed brain dies of blood loss like
+        // anyone else. `RimWorld/HealthCardUtility` prints "(Deathless)" on the
+        // bare gene check and so would tell the player otherwise —
+        // `game_shows_clock` reproduces the WIDGET (that is what "matches the
+        // game's own readout" means for acceptance) while `outcome` is
+        // computed from the death path, and they can disagree on exactly that
+        // pawn.
+        private static Dictionary<string, object> Bleedout(Pawn pawn, Pawn_HealthTracker h)
+        {
+            var d = new Dictionary<string, object>
+            {
+                ["ticks"] = null,
+                ["blood_loss_severity"] = null,
+                ["outcome"] = null,
+                ["deathless_gene"] = false,
+                ["prevents_death"] = false,
+                ["game_shows_clock"] = false,
+                ["cite"] = "Verse/HealthUtility.TicksUntilDeathDueToBloodLoss; the display "
+                         + "gate is RimWorld/HealthCardUtility.DrawHediffListing's "
+                         + "BleedingRate line; the outcome is Verse/Pawn_HealthTracker"
+                         + ".ShouldBeDead plus ShouldBeDeathrestingOrInComa",
+            };
+            try
+            {
+                var hs = h.hediffSet;
+                float rate = hs.BleedRateTotal;
+                int ticks = HealthUtility.TicksUntilDeathDueToBloodLoss(pawn);
+                d["ticks"] = ticks == int.MaxValue ? null : (object)ticks;
+                var bl = hs.GetFirstHediffOfDef(HediffDefOf.BloodLoss);
+                d["blood_loss_severity"] = bl == null ? (object)0.0 : PawnSafe.R(SevOf(bl), 3);
+
+                bool preventsDeath = hs.HasPreventsDeath;
+                bool deathless = ModsConfig.BiotechActive && pawn.genes != null
+                                 && pawn.genes.HasActiveGene(GeneDefOf.Deathless);
+                bool comaInstead = false;
+                if (deathless)
+                {
+                    var brain = hs.GetBrain();
+                    comaInstead = brain != null && !hs.PartIsMissing(brain)
+                                  && hs.GetPartHealth(brain) > 0f;
+                }
+                d["prevents_death"] = preventsDeath;
+                d["deathless_gene"] = deathless;
+                d["outcome"] = preventsDeath ? "none" : (comaInstead ? "coma" : "death");
+                // The widget's own three-way, reproduced clause for clause:
+                // the line is drawn at all only above 0.01 (NOT the 0.0001 the
+                // estimator uses), Deathless replaces the time with a word, and
+                // a clock of a full day or more prints "WontBleedOutSoon"
+                // instead of a number.
+                d["game_shows_clock"] = rate > 0.01f && !deathless && ticks < 60000;
+            }
+            catch { }
+            return d;
+        }
+
         private static float SevOf(Hediff hd)
         {
             try { return hd?.Severity ?? 0f; } catch { return 0f; }
         }
 
-        // Urgency band for the hediff cap: bleeding first, then life-threatening,
-        // then tendable, then everything else. The cap must never hide the wound.
+        // Urgency band for the hediff cap: a hediff on its OWN lethal clock
+        // first, then bleeding, then life-threatening, then tendable.
+        //
+        // THE TOP BAND EXISTS BECAUSE "BLEEDING FIRST" HID A DEATH (git-bug
+        // 61794cd, M1 run m1-20260831). Captain was read five times while
+        // dying and `BloodLoss` appears in none of them: he carried 17 bleeding
+        // Bites and 3 bleeding Scratches, which is exactly 20 rank-4 rows
+        // against a cap of 20, and `BloodLoss` cannot compete because
+        // `Verse/Hediff.BleedRate` is `=> 0f` and `BloodLoss` declares no
+        // `hediffClass` — a WOUND bleeds; blood loss is what bleeding
+        // PRODUCES, so the old ordering ranked the consequence below every
+        // cause of it. Nor would `lifeThreatening` have saved him:
+        // `Hediffs_Global_Misc.xml` puts that flag on `BloodLoss`'s FIFTH stage
+        // (`minSeverity 0.60`) and he died at ~0.478, so he was rank 0 — below
+        // `TendableNow`, below `Hediff_MissingPart`.
+        //
+        // `HediffDef.lethalSeverity` (default `-1f`) is the game's own name for
+        // "this kills on its own clock when severity reaches it" —
+        // `Verse/Hediff.IsLethal` and `Verse/Hediff.CauseDeathNow`, whose debug
+        // line is literally "CauseOfDeath: lethal severity exceeded". It is
+        // true for `BloodLoss` from severity 0.01 rather than from 0.60, and it
+        // generalises to every disease and toxin with a lethal ceiling — the
+        // same class, none of which bleed either. This is an ADDED band, not a
+        // re-sort: a bleeding wound still outranks a tended flu.
+        private const int RankLethalClock = 5;
+
         private static int Rank(Hediff hd)
         {
             if (hd == null) return -1;
             try
             {
+                // `IsLethal` rather than a bare `lethalSeverity > 0f`: it also
+                // requires `canBeThreateningToPart`, which is how the game
+                // itself excludes a lethal-severity hediff sitting on a part
+                // where it cannot kill.
+                if (hd.IsLethal) return RankLethalClock;
                 if (hd.BleedRate > 0.0001f) return 4;
                 if (hd.CurStage != null && hd.CurStage.lifeThreatening) return 3;
                 if (hd.TendableNow()) return 2;

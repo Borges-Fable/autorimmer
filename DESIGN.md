@@ -1981,3 +1981,56 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `forbidden`/`unreachable`/genuinely absent — because `unforbid` fixes one of
   them and not the others. `CanReserve` is deliberately not applied: a stack
   somebody is already hauling is not missing. `54b0c9a`.
+- 2026-09-01 (session 20) — **The hediff cap gets a band ABOVE bleeding, keyed
+  on `HediffDef.lethalSeverity`, because "bleeding first" ranked a death below
+  every wound that caused it.** The M1 post-mortem said `BloodLoss` was cut by
+  the 20-row cap; the round brief doubted it, on the grounds that
+  `PawnSerializer.Rank` already bands bleeding first and shipped in `c85189d`
+  the day BEFORE the run. The premise holds and the doubt is what is wrong.
+  `Verse/Hediff.BleedRate` is `public virtual float BleedRate => 0f` and
+  `BloodLoss` declares no `hediffClass`, so it is not a `Hediff_Injury` and
+  **`Rank` can never return 4 for it** — a wound bleeds, blood loss is what
+  bleeding produces. Captain's five reads (`transcripts/m1-20260831/`
+  157/161/163/165/167, `hediffs_more` 7/16/18/19/19) each carry exactly twenty
+  rows and every one is a bleeding `Bite` or `Scratch`: twenty rank-4 rows
+  against a cap of 20. Nor would the Scope's own alternative — "life-threatening
+  first" — have helped: `Hediffs_Global_Misc.xml` puts `lifeThreatening` on
+  `BloodLoss`'s FIFTH stage (`minSeverity 0.60`) and he died at ~0.478, so he
+  was rank 0, below `TendableNow` and below `Hediff_MissingPart`. The band that
+  generalises is `Verse/Hediff.IsLethal` (`def.lethalSeverity > 0f` and
+  `canBeThreateningToPart`) — the game's own name for "kills on its own clock",
+  consumed at `Hediff.CauseDeathNow` whose debug line is "CauseOfDeath: lethal
+  severity exceeded". True for `BloodLoss` from severity 0.01 rather than 0.60,
+  and it picks up every disease and toxin with a lethal ceiling, none of which
+  bleed either. An ADDED top band, not a re-sort: a bleeding wound still
+  outranks a tended flu. `61794cd`.
+- 2026-09-01 (session 20) — **`ticks_until_bleedout` is the GAME's number and is
+  INDEPENDENT of the hediff list, and what happens when it expires is published
+  beside it because it is not always death.** `Verse/HealthUtility
+  .TicksUntilDeathDueToBloodLoss` is read rather than re-derived — the M1
+  post-mortem back-solved that same formula by hand and it agreed with Captain's
+  actual death to four ticks, which is the argument for taking it from the game
+  rather than reimplementing it. It is deliberately not computed off the
+  serialized `hediffs` list: `Verse/Hediff.Visible` returns
+  `CurStage.becomeVisible` when `visible` is false and `BloodLoss` stage 0 sets
+  `becomeVisible false`, so below severity 0.15 the row is legitimately absent
+  and the clock must still be computable — and it is, because the estimator
+  reads `BleedRateTotal` and `GetFirstHediffOfDef` directly and never consults
+  `Visible`. `int.MaxValue` is published as `null`, never as 2147483647, which
+  reads like a real deadline. **Three outcomes, from
+  `Verse/Pawn_HealthTracker.ShouldBeDead` and the branch above it:** `none` when
+  `hediffSet.HasPreventsDeath` (that method opens by returning false on it);
+  `coma` for the Deathless gene WITH an intact brain, via
+  `ShouldBeDeathrestingOrInComa` -> `RimWorld/SanguophageUtility
+  .ShouldBeDeathrestingOrInComaInsteadOfDead`, whose real condition is
+  `brain != null && !PartIsMissing(brain) && GetPartHealth(brain) > 0f`; `death`
+  otherwise. The three brain reads are reproduced rather than calling that
+  utility, because it opens with `if (!pawn.health.ShouldBeDead()) return
+  false;` — it answers "is this pawn dying NOW" and the question here is the
+  hypothetical "what happens WHEN the clock runs out". Note the Deathless gene
+  alone does NOT appear in `ShouldBeDead`, so a Deathless pawn with a destroyed
+  brain bleeds out like anyone else — while `RimWorld/HealthCardUtility` prints
+  "(Deathless)" on the bare gene check and tells the player otherwise.
+  `game_shows_clock` reproduces the WIDGET (that is what "matches the game's own
+  readout" means for acceptance) and `outcome` is computed from the death path,
+  and on exactly that pawn they disagree. `61794cd`.
