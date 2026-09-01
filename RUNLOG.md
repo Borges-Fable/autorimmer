@@ -3459,3 +3459,93 @@ has none, and publishing 0 would send a caller to `journal --since 0`.
 repointed at the round's worktree for the run and **restored to
 `projects/rimworld/autorimmer` afterwards**; `Prefs.xml` restored to the 640x480
 windowed unattended values. Zero red errors across every run.
+
+## Session 20 — 2026-09-01 (dorian's Linux box). The M1-gate round, two of four
+
+Solo, no workers — which Evan called out mid-session and was right to. The
+round brief's items 0a and 0b are fully discharged and PROVEN; items 1 and 2
+are shipped and **unproven on a bench**; item 3 was not started.
+
+### 0a — the premise held, and the brief's doubt is what was wrong
+
+The brief put it as a fork: `PawnSerializer.Rank` bands bleeding first and
+shipped in `c85189d` the day BEFORE the M1 run, so either the cap was not the
+mechanism or something else truncated the row. Neither. **The cap is the
+mechanism and the shipped sort is its proximate cause.**
+
+`Verse/Hediff.BleedRate` is `public virtual float BleedRate => 0f` and
+`BloodLoss` declares no `hediffClass`, so `Rank` can never return 4 for it — a
+wound bleeds, blood loss is what bleeding produces. From the raw envelopes, not
+the post-mortem's prose: `transcripts/m1-20260831/` 157/161/163/165/167 are
+**five** reads of pawn 995, not four (`hediffs_more` 7/16/**18**/19/19), each
+with exactly twenty rows, and every row a bleeding `Bite` or `Scratch`.
+`lifeThreatening` would not have saved it either — that flag is on BloodLoss's
+FIFTH stage (`minSeverity 0.60`) and he died at ~0.478, so he was rank 0, below
+`TendableNow` and below `Hediff_MissingPart`. Scope narrowed on-issue: the band
+is `Hediff.IsLethal`, not "life-threatening first", which would have reproduced
+the bug with a better-sounding rationale.
+
+### 0b — 3.5 ran green, and it was eight DRIVER defects
+
+`226 checks, 0 failed, 0 skipped, exit 0`, read directly from `$?`.
+`accept/runs/s20-20260901/` keeps all nine logs because the sequence is the
+evidence. **Zero mod defects.**
+
+The sharpest pair, 3.9g/3.9h, asserted that a bought good is colony stock the
+moment the deal executes. `RimWorld/Tradeable.ResolveTrade` hands a buy to
+`TransferableUtility.TransferNoSplit(thingsTrader, …)`, which calls
+`Pawn_TraderTracker.GiveSoldThingToPlayer` once per trader stack, each placed
+at `toGive.PositionHeld` — **the carrying caravan member's own cell**. The
+rebuilt deal's colony-side count is `ColonyThingsWillingToBuy`, whose test is
+`Home[pos] || IsInAnyStorage()`. Three live deals settled the shape: paying 360
+moved the colony count by exactly **-360**; receiving 83 moved it by **0**;
+receiving 80 moved it by **69**. Outflow is exact, inflow is a fraction —
+however many carriers stood inside the home area.
+
+Evan supplied the refinement that made it general: "trades happen instantly on
+the ground but not orbital traders, that has to get shipped." Verified —
+`TradeShip.GiveSoldThingToPlayer` is `TradeUtility.SpawnDropPod(DropCellFinder
+.TradeDropSpot(map), …)`, which lands AT THE COLONY. So the divergence is a
+ground-caravan property, and a pod in flight is a third state on neither side.
+Both recorded on `7e8c969`, whose `data.after` defect is **refuted**: its
+forbidden-stock hypothesis is disproved by 800 FORBIDDEN silver in the home
+area counting in full.
+
+The other seven were a leaked trade session (a `precondition` skip calls
+`sys.exit(2)` and poisoned the NEXT run's phase 0 with three red checks), a
+fixture that took `traders[0]` and assumed willingness, guidance naming a
+"trade radius" that does not exist, and an unpowered comms console presenting
+as eight red checks instead of a skip. **`20e5cda` CLOSED.**
+
+Two extras: the byte-identical-save half of `548ef48` bullet 4, which nobody
+had run — **the entire 15,401,531-byte save is identical** across ten quest
+reads, `sha256 b5a2f9d4…`. And a live instance of `7382bdd` where the silent
+fallback is DESTRUCTIVE: `journal-selftest {kind:"save"}` drops the unknown key
+and runs its default list, which downs a colonist and starts a berserk while
+returning `ok:true`. Four calls before it was noticed.
+
+### 1 and 2 — shipped, UNPROVEN
+
+`7b034a3` `61794cd`: the `IsLethal` band, `health.ticks_until_bleedout` (the
+game's number, `null` not `int.MaxValue`, independent of the hediff list), and
+`health.bleedout` carrying `outcome` — `none` / `coma` / `death`, because
+`ShouldBeDead` returns false outright on `HasPreventsDeath` and routes a
+Deathless pawn with an intact brain to a coma instead.
+
+`52606d1` `40ed42f`: `digest.work_coverage` (floors from the game's own
+`requireCapableColonist` list, plus Doctor at 2 as the only deviation — and
+**`Doctor.requireCapableColonist` is FALSE**, the game never required one),
+`work-cover` as a VERB rather than a hook (session 13's threat-pardon ruling:
+the decision is a recorded act), and `triage`, which settles the boundary
+`61794cd` asked about — the clock belongs to the patient, the rescue estimate
+belongs to the roster — and publishes `act`, the exact `rescue` envelope, on
+every casualty row.
+
+`db08b3d` is the standalone `Build:`. pdb path names this worktree and Release,
+AssemblyConfiguration Release blob 1 / Debug 0, `InformationalVersion`
+`1.0.0+52606d1`.
+
+### What the next session inherits
+
+**No acceptance suite exists for items 1 or 2 and no verb in either has met a
+bench.** `722c951` is not started. `b1b3060` is still held. M1 cannot re-run.
