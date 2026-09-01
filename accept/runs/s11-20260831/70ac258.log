@@ -1,0 +1,153 @@
+AutoRimmer acceptance - stable thing/fire order (70ac258)
+protocol root: /home/dorian/projects/rimworld/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer
+phases: 0 + 1, 2, 3, 4, 5, 6 + the standing red-error check
+
+==============================================================================
+PHASE 0 - the bench, the fixture, and THE SHAPE CONTRACT
+==============================================================================
+  0.1     OK      precondition: the bench answers `status`
+  0.2     OK      precondition: a game is loaded
+  bench: tick=135914 paused=True
+  0.3a    PASS    `journal` publishes data.last_seq
+  0.3b    PASS    `journal` publishes data.events
+  0.3c    PASS    `journal` publishes data.count
+  journal watermark: seq0=115
+  0.4a    PASS    `things` publishes data.rollups
+  0.4b    PASS    `things` publishes data.rollups_total
+  0.4c    PASS    `things` publishes data.rollups_more
+  0.4d    PASS    `things` publishes data.order
+  0.4e    PASS    `things` publishes data.totals.stacks
+  0.4f    PASS    `things` publishes data.hp_source
+  0.4g    PASS    `things` publishes data.pool
+  0.4h    PASS    `things` publishes data.skipped.fogged
+  0.4i    PASS    `things` publishes data.rollups.0.def
+  0.4j    PASS    `things` publishes data.rollups.0.stacks
+  0.4k    PASS    `things` publishes data.rollups.0.forbidden_stacks
+  0.5     OK      precondition: a def with at least three unforbidden stacks
+  fixture def: MedicineHerbal (3 stacks in the rollup)
+  0.6a    PASS    `things` publishes data.things
+  0.6b    PASS    `things` publishes data.things_total
+  0.6c    PASS    `things` publishes data.things_more
+  0.6d    PASS    `things` publishes data.things_order
+  0.6e    PASS    `things` publishes data.things_selected_by
+  0.6f    PASS    `things` publishes data.query.def
+  0.6g    PASS    `things` publishes data.query.category
+  0.6h    PASS    `things` publishes data.query.category_source
+  0.6i    PASS    `things` publishes data.things.0.id
+  0.6j    PASS    `things` publishes data.things.0.attention_rank
+  0.6k    PASS    `things` publishes data.things.0.forbidden
+  0.6l    PASS    `things` publishes data.things.0.def
+  0.6m    PASS    `things` publishes data.things.0.count
+  0.6n    PASS    `things` publishes data.things.0.at
+  0.7a    OK      precondition: at least three addressable things of that def
+  0.7b    OK      precondition: the whole population fits under the cap (things_more == 0)
+  3 things, ids 13068 … 20051; loud=20051
+  0.8a    PASS    `fires` publishes data.list
+  0.8b    PASS    `fires` publishes data.count
+  0.8c    PASS    `fires` publishes data.more
+  0.8d    PASS    `fires` publishes data.order
+  0.8e    PASS    `fires` publishes data.selected_by
+  0.8f    PASS    `fires` publishes data.in_home_area
+  0.8g    PASS    `fires` publishes data.outside_home_area
+  0.8h    PASS    `fires` publishes data.fogged
+  0.8i    PASS    `fires` publishes data.biggest_size
+  0.9a    PASS    `things` publishes data.fire
+  0.9b    PASS    `things` publishes data.fire.list
+  0.9c    PASS    `things` publishes data.fire.order
+  0.9d    PASS    `things` publishes data.fire.selected_by
+  0.9e    PASS    `things` publishes data.fire.count
+  0.9f    PASS    `things` publishes data.fire.more
+
+==============================================================================
+PHASE 1 - two orders, two fields, and `rollups` left alone
+==============================================================================
+  1.1a    PASS    the DEFAULT emit order is by id — 2.4 shipped 'attention-desc' here, so that word without having asked for it means the old assembly is loaded (data.things_order)
+  1.1b    PASS    and the SELECTION rule is published separately: `things_order` is what position means, `things_selected_by` is what the cap kept (data.things_selected_by)
+  1.1c    PASS    the emitted ids are STRICTLY ASCENDING - this is the whole fix
+  1.1d    PASS    and every line carries an integer `attention_rank`, so urgency survives the reorder instead of being destroyed by it
+  1.1e    PASS    the ranks are a permutation of 0..n-1 - a rank computed before the cut, not an index computed after it
+  1.2a    PASS    `rollups` still says attention-desc — the def-keyed summary was deliberately left alone (the ruling, point 1) (data.order)
+  1.2b    PASS    so the bare `order` and `things_order` genuinely disagree, which is the point of prefixing one of them
+  1.2c    PASS    `things` does NOT publish data.rollups.0.id — a rollup is keyed by def and has no thingIDNumber to sort by
+  1.3a    PASS    the explicit ranked view names its order (data.things_order)
+  1.3b    PASS    and still names its selection rule, which has not changed (data.things_selected_by)
+  1.3c    PASS    under THIS order the rank IS the index - which is the definition of the two agreeing
+  1.3d    PASS    and the two views carry the SAME SET of ids - only the sequence differs
+  1.4a    PASS    an unknown `order` on `things` is a bad-args naming the legal words, never a silent fallback
+  1.4b    PASS    and `fires` refuses the same word the same way — one vocabulary, two verbs
+
+==============================================================================
+PHASE 2 - a score change of 100000 points does not permute the list
+==============================================================================
+  2.1a    PASS    two IDENTICAL reads return the same ids in the same order
+  2.1b    PASS    and the population did not move under us
+  2.1     NOTE    the bench is paused, so 2.1a is the WEAK form of the check: nothing could have moved. 2.3a is the real one — it reads across a deliberate 100000-point score change.
+  F.1a    PASS    the staging forbid was accepted (data.accepted)
+  F.1b    PASS    and it names the item it forbade
+  F.1c    PASS    and it journalled the mutation (data.action.journal_seq)
+  2.3a    PASS    AFTER the score change the id sequence is byte-for-byte the one from before it - this is the property the issue is about, and it is what makes an id read from call 1 still address the same thing in call 2
+  2.3b    PASS    and nothing was added or removed (data.things_total)
+  2.3c    PASS    the whole population is still under the cap, so 2.3a is a statement about the SEQUENCE and not about survivorship (data.things_more)
+  2.4a    PASS    the forbidden item took attention rank 0 - the score really did move
+  2.4b    PASS    and the line says it is forbidden
+  2.4c    PASS    while it is STILL SITTING LAST in the emitted list - urgency travels on the line, not in the position
+  2.5a    PASS    the ranked view puts the forbidden item FIRST
+  2.5b    PASS    so the two views read the same population milliseconds apart and DISAGREE about position - one is a register, one is a ranking, and each now says which it is
+  2.5c    PASS    and they still carry the same set of ids
+
+==============================================================================
+PHASE 3 - the cap still cuts by attention, and does not reorder
+==============================================================================
+  3.1a    PASS    detail_cap:1 returns exactly one entry
+  3.1b    PASS    and it is the FORBIDDEN one, not the lowest id - the id sort runs AFTER the cut, and a re-sort applied to the candidate set would quietly undo spec 2.6 (data.things.0.id)
+  3.1c    PASS    the survivor's line says why it survived (data.things.0.forbidden)
+  3.1d    PASS    and it is rank 0 (data.things.0.attention_rank)
+  3.1e    PASS    the emit order is still id-asc even for a list of one - the two facts are independent of the cap (data.things_order)
+  3.1f    PASS    and the selection rule is unchanged by the cap (data.things_selected_by)
+  3.1g    PASS    everything else is reported as truncated, not silently dropped (data.things_more)
+  3.1h    PASS    and the total still counts the whole scored population (data.things_total)
+  3.2a    PASS    detail_cap:2 returns exactly two entries
+  3.2b    PASS    the urgent item is one of them - selection is still by attention
+  3.2c    PASS    and they are emitted in ASCENDING id order
+  3.2d    PASS    THE WHOLE ISSUE IN ONE LINE: the entry the cap kept FIRST (attention_rank 0) is emitted at INDEX 1, because its id is higher. Rank travels on the line; position is a register. Before the fix these were the same number.
+  3.2e    PASS    and the remainder is published (data.things_more)
+  3.3a    PASS    detail_cap == things_total returns the whole list, in the same order as the pinned read - the cap itself does not reorder anything
+  3.3b    PASS    with nothing left over (data.things_more)
+  3.4a    PASS    detail_cap:0 is refused
+  3.4b    PASS    detail_cap above the 300 ceiling is refused
+  3.4c    PASS    and the ROLLUP cap has its own, different ceiling
+
+==============================================================================
+PHASE 4 - real churn (optional, weaker, and it moves the clock)
+==============================================================================
+  4.0     SKIP    not armed
+          pass --churn to advance 2500 ticks and re-read. It is off by default because it ADVANCES THE GAME CLOCK on the orchestrator's bench, and because it is not a pass/fail gate: on a quiet colony it shows no churn at all, which proves nothing either way. Phase 2 is the check that proves the property.
+
+==============================================================================
+PHASE 5 - `fires`: two facts, two routes, one contract
+==============================================================================
+  5.1a    PASS    the `fires` DEFAULT emit order is by id - it was 'outside-home-then-size-desc' before this fix, so that word under the default means the old assembly is loaded (data.order)
+  5.1b    PASS    and the selection rule states its REAL rule rather than borrowing the word 'attention' - FireScan computes no ThingAttention at all (data.selected_by)
+  5.2a    PASS    `things`' own embedded fire block answers the same contract - before this fix the two routes into FireScan could have answered different ones (the ruling, point 1) (data.fire.order)
+  5.2b    PASS    including the selection rule (data.fire.selected_by)
+  5.2c    PASS    and it is the same list, not a second scan with the same name
+  5.3a    PASS    the `order` argument on `things` reaches the embedded fire list (data.fire.order)
+  5.3b    PASS    and even the ranked view refuses to call itself 'attention' (data.fire.selected_by)
+  5.4a    PASS    whatever is burning now is emitted ascending
+  5.4     NOTE    nothing is burning, so 5.4b-c have no rows to judge. Phase 6 stages two fires; 5.1-5.3 prove the contract's shape without them.
+
+==============================================================================
+PHASE 6 - two staged fires, and the one outside the home area
+==============================================================================
+  6.0     SKIP    not armed
+          pass --fire-inside X,Z and --fire-outside X,Z to run it. The driver CANNOT pick these itself: `areas` publishes `home_cells` as a COUNT and no cell set, and no verb exposes the home area's footprint, so the two cells have to come from a human looking at the map. Pick STONE OR DIRT away from anything wooden. Without them, phase 5 has already proved the contract's shape; what is lost is only the live ordering claim.
+
+==============================================================================
+STANDING CHECK - no red errors across the whole run
+==============================================================================
+  E.1a    PASS    `journal` publishes data.count
+  E.1b    PASS    no red error since the watermark - `things` and `fires` are observers, and the only writes in this run were the deliberate forbid/unforbid and any dev staging (data.count)
+  teardown: unforbid 20051 -> accepted=1
+
+==============================================================================
+RESULT: all 99 checks passed

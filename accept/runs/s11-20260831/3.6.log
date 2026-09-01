@@ -1,0 +1,172 @@
+AutoRimmer acceptance - production bills + storage settings (48f666c)
+protocol root: /home/dorian/projects/rimworld/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer
+phases: 0 + 1, 2, 3, 4, 5, 6
+
+==============================================================================
+PHASE 0 - the bench, the fixture, and THE SHAPE CONTRACT
+==============================================================================
+  0.1a    OK      precondition: the bench answers `status`
+  0.1b    OK      precondition: a game is loaded
+  0.1c    PASS    `status` registers all nine 3.6 verbs
+  0.2a    PASS    `journal` publishes data.last_seq
+  0.2b    PASS    `journal` publishes data.events
+  0.2c    PASS    `journal` publishes data.count
+  journal watermark: seq0=117
+  0.3a    PASS    `pawns` publishes data.list
+  0.3b    OK      precondition: at least one colonist
+  0.3c    OK      precondition: a colonist who is not disabled at Cooking
+  cook: pawn 19809 at [127, 128]
+  0.4a    OK      precondition: a FueledStove on the map
+  FueledStove: thing 26810 (spawned)
+  0.4b    OK      precondition: a stockpile zone
+  stockpile: zone:1
+  0.5a    PASS    `bill-options` publishes data.options
+  0.5b    PASS    `bill-options` publishes data.total
+  0.5c    PASS    `bill-options` publishes data.more
+  0.5d    PASS    `bill-options` publishes data.addable
+  0.5e    PASS    `bill-options` publishes data.bills_total
+  0.5f    PASS    `bill-options` publishes data.bill_slots_free
+  0.5g    PASS    `bill-options` publishes data.bill_cap
+  0.5h    PASS    `bill-options` publishes data.source
+  0.5i    PASS    `bill-options` publishes data.options.0.recipe
+  0.5j    PASS    `bill-options` publishes data.options.0.addable
+  0.5k    PASS    `bill-options` publishes data.options.0.reason
+  0.5l    PASS    `bill-options` publishes data.options.0.can_target_count
+  0.6a    PASS    `bill-add` publishes data.ok
+  0.6b    PASS    `bill-add` publishes data.uid
+  0.6c    PASS    `bill-add` publishes data.index
+  0.6d    PASS    `bill-add` publishes data.configured
+  0.6e    PASS    `bill-add` publishes data.config_refused
+  0.6f    PASS    `bill-add` publishes data.warnings
+  0.6g    PASS    `bill-add` publishes data.bills
+  0.6h    PASS    `bill-add` publishes data.action.journal_seq
+  0.6i    OK      precondition: the shape-contract bill was added
+  0.7a    PASS    `bill-set` publishes data.targets
+  0.7b    PASS    `bill-set` publishes data.targets.0.changed
+  0.7c    PASS    `bill-set` publishes data.targets.0.refused
+  0.7d    PASS    `bill-set` publishes data.counts.targeted
+  0.7e    PASS    `bill-set` publishes data.counts.changed
+  0.7f    PASS    `bill-remove` publishes data.removed
+  0.7g    PASS    `bill-remove` publishes data.bills
+  0.8a    PASS    `storage` publishes data.storages
+  0.8b    PASS    `storage` publishes data.groups
+  0.8c    PASS    `storage` publishes data.order
+  0.8d    PASS    `storage` publishes data.skipped.tab_hidden
+  0.8e    PASS    `storage` publishes data.skipped.fogged
+  0.8f    PASS    `storage` publishes data.storages.0.target
+  0.8g    PASS    `storage` publishes data.storages.0.settings
+  0.8h    PASS    `storage` publishes data.storages.0.priority
+  0.8i    PASS    `storage` publishes data.storages.0.priority_settable
+  0.9a    PASS    `storage-set` publishes data.accepted
+  0.9b    PASS    `storage-set` publishes data.rejected
+  0.9c    PASS    `storage-set` publishes data.bills_invalidated
+  0.9d    PASS    `storage-set` publishes data.counts.targeted
+  0.9e    PASS    `storage-set` publishes data.counts.changed
+  0.9f    PASS    `storage-set` publishes data.counts.rejected
+  shelves: thing:26814 thing:26815
+  0.10a   PASS    `storage-link` publishes data.group.id
+  0.10b   PASS    `storage-link` publishes data.created
+  0.10c   PASS    `storage-link` publishes data.linked
+  0.10d   PASS    `storage-link` publishes data.storages
+
+==============================================================================
+PHASE 1 - THE FULL LOOP: a bill, an advance, and meals that did not exist before
+==============================================================================
+  1.1a    OK      precondition: CookMealSimple is on the FueledStove
+  1.1b    PASS    `bill-options` reports CookMealSimple as addable
+  1.1c    PASS    no option row still carries the collapsed `ideo-or-faction` gate (meme / faction-recipe-tag / ideo-precept are named separately now)
+  1.1d    NOTE    no mechanitor-only recipe on this bench (Biotech off, or the wrong bench), so AddWarnings' fall-through to the skill branch is STATIC-ONLY on this run
+  MealSimple before: 0
+  1.2a    PASS    the cook bill is added (data.ok)
+  1.2b    PASS    at repeat:forever (data.bills.0.repeat_mode)
+  1.2c    PASS    and it journals (data.action.journal_seq)
+  advance 1: MealSimple = 4
+  1.3     PASS    a MealSimple exists that did not before - THE FULL LOOP, not just that the bill object appeared
+
+==============================================================================
+PHASE 2 - THE RESEARCH REFUSAL, and then the same call succeeding
+==============================================================================
+  2.1     OK      precondition: a recipe blocked by an UNFINISHED research project
+  gated: CookMealSurvival on bench 26810, blocked by 'Packaged survival meal'
+  2.2a    PASS    the bill is REFUSED, not queued (data.ok)
+  2.2b    PASS    the gate is named `research` (not a collapsed catch-all) (data.gate)
+  2.2c    PASS    the reason names the blocking project's LabelCap ('Packaged survival meal')
+  2.2d    PASS    and marks itself MOD-AUTHORED, because vanilla omits the row rather than explaining it
+  2.2e    PASS    nothing was journalled (`action.journal_seq` is an explicit null, not a seq)
+  2.2f    PASS    and the bench's bill count did not move
+  2.3a    PASS    with the research finished, THE SAME CALL succeeds (data.ok)
+  2.3b    PASS    and it journals (data.action.journal_seq)
+
+==============================================================================
+PHASE 3 - `bad-args`, NOT A THROW - and a rejected call changes NOTHING
+==============================================================================
+  3.1     OK      precondition: a bill on the stove to move
+  3.2a    PASS    `to` one past the end is bad-args (error.code)
+  3.2b    PASS    AND THE BILL IS STILL IN THE STACK
+  3.3a    PASS    a wild `offset` is bad-args (error.code)
+  3.3b    PASS    and the bill is still in the stack
+  3.4a    PASS    a negative `to` is bad-args (error.code)
+  3.4b    PASS    and the bill is still in the stack
+  3.5a    PASS    a reorder to where it already is reports moved:false (data.moved)
+  3.5b    PASS    and STILL journals - a redundant order the ledger cannot see is a redundant order nobody learns from (git-bug 4087644) (data.action.journal_seq)
+  3.6a    PASS    `bill-add` with a misspelled repeat mode is bad-args (error.code)
+  3.6b    PASS    AND NO BILL WAS ADDED - the parse happens before AddBill now
+  3.7a    PASS    `bill-add` with an out-of-slider ingredient_radius is bad-args (error.code)
+  3.7b    PASS    and no bill was added
+  3.8a    PASS    `storage-set` with a bad quality name is bad-args (error.code)
+  3.8b    PASS    AND THE PRIORITY DID NOT MOVE - it used to be written before the quality parse threw, with no journal row
+  3.9a    PASS    `storage-set` with an unknown filter word is bad-args (error.code)
+  3.9b    PASS    and the priority did not move
+
+==============================================================================
+PHASE 4 - THE GROUP TRAP: a write to one shelf is a write to all of them
+==============================================================================
+  4.1     OK      precondition: two Shelf buildings
+  4.2a    PASS    linking ONE storage is refused (data.ok)
+  4.2b    PASS    with the gizmo's own gate (data.gate)
+  4.3a    PASS    linking two shelves succeeds (data.ok)
+  4.3b    PASS    and reports both linked (data.linked)
+  4.3c    PASS    and it journals (data.action.journal_seq)
+  4.4a    PASS    shelf A now reads its settings from the GROUP's object
+  4.4b    PASS    and so does shelf B
+  4.5a    PASS    setting a priority on shelf A is accepted (data.counts.changed)
+  4.5b    PASS    and A's own row says the write went to the GROUP's object (data.accepted.0.settings)
+  4.5c    PASS    AND SHELF B'S PRIORITY MOVED TOO - the shadowed-object trap was avoided (a write to Building_Storage.settings would have gone nowhere)
+  4.6a    PASS    unlinking shelf A succeeds (data.ok)
+  4.6b    PASS    and `groups_dissolved` reports the group going - StorageGroupManager.Notify_MemberRemoved dissolves at MemberCount <= 1 and unlinks the LAST member too
+  4.7a    PASS    the survivor is back on its OWN settings object
+  4.7b    PASS    and KEPT what it had inside the group (SetStorageGroup copies the group's settings back before clearing Group)
+  4.8a    PASS    re-linking an already-linked pair is refused (data.ok)
+  4.8b    PASS    with the gizmo's `AlreadyLinked` gate (data.gate)
+  4.8c    PASS    and nothing was journalled
+
+==============================================================================
+PHASE 5 - THE LEVERS, including the coupling a half-verb would pass without
+==============================================================================
+  5.1     OK      precondition: a bill on the stove to configure
+  5.2a    PASS    `target` is reported as configured
+  5.2b    PASS    AND SO IS `unpause_when_you_have` - the Dialog_BillConfig coupling is part of the click, not an extra
+  5.2c    PASS    and the bill is in TargetCount mode (data.bills.0.repeat_mode)
+  5.3a    PASS    `include_tainted` on a non-apparel recipe is REFUSED
+  5.3b    PASS    with the gate named after the widget's own condition
+  5.3c    PASS    and it is ABSENT from `changed` - nothing was written
+  5.4a    PASS    `include_from:"all"` is written (the IncludeFromAll option, SetIncludeGroup(null))
+  5.4b    PASS    and reads back as no specific include group (data.bills.0.include_group)
+  5.4c    PASS    `include_from:<a stockpile>` is either written or refused BY NAME - never silently dropped
+
+==============================================================================
+PHASE 6 - THE INVARIANT: zero red errors, after deliberately walking every dodged path
+==============================================================================
+  6.1a    PASS    `store_mode:"specific"` with no `store_target` is refused, not passed to SetStoreMode
+  6.1b    PASS    with the gate that names the missing half
+  6.2a    PASS    `bill-options` on a PAWN is refused (data.ok)
+  6.2b    PASS    with the work-table gate (data.gate)
+  6.2c    PASS    and it names 3.4's surgery route rather than shrugging
+  6.3a    PASS    `suspended` DOES apply to a medical bill - Bill.cs DoInterface draws that button in every listing
+  6.3b    PASS    and `repeat` is refused by name on a non-production bill rather than written behind the game's back
+  6.3c    PASS    with the gate that names the missing dialog
+  6.4     NOTE    no Grave could be placed, so the corpse-casket tab gate was not driven
+  6.5     PASS    ZERO RED ERRORS across the whole run (data.count)
+
+==============================================================================
+RESULT: all 116 checks passed
