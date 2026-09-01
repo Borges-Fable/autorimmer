@@ -108,6 +108,15 @@ afternoon), and the layout form is a **named family rather than a path**,
 because `construction.frames == 0` is the wrong predicate and no amount of edge
 detection makes it the right one.
 
+`timeout_ticks` **defaults to 60,000 — one in-game day — on any `until`
+advance**, and the result publishes `timeout_ticks` beside a `timeout_source` of
+`caller | default | none` so the caller's own bound is distinguishable from
+ours. An `until:{condition}` that is ALREADY TRUE when it arms, with the edge
+required and no positive bound, is **refused** (`unreachable-halt`): the edge
+can never come, so the halt cannot fire. Both are session 21's, and the
+decisions log carries why the day is the idle unit rather than the panic
+button.
+
 **A clock predicate is the one that makes tick arithmetic unnecessary.**
 `advance {ticks:N}` overshoots by up to `MaxTicksPerFrame(speed)` — 30 at
 Ultrafast — and the overshoots accumulate with nothing to re-anchor them. Every
@@ -2425,3 +2434,51 @@ queue by default (an agent flailing mid-experiment must not page triage).
   a standing bleeder and a bedded bleeder outside this refusal, correctly: a
   patient in bed whose DOCTOR cannot arrive in time is a different comparison
   (tend travel, not rescue travel) and is not claimed. `722c951`, `40ed42f`.
+- 2026-09-01 (session 21) — **A quiet in-game DAY is the play loop's normal idle
+  unit, so an `until` advance that names no bound gets 60,000 ticks — and an
+  already-true predicate with the edge required and no bound is REFUSED, because
+  its halt cannot fire.** Evan's ruling, and the reframing is the load-bearing
+  half rather than the number: *"a full day without doing anything while you're
+  fully set is pretty typical. Lots of things the colony does itself day to day
+  and ideally if something bad happens, you'll be woken up, you won't have to
+  check."* So the bound is **not a safety net bolted onto an error path** — it is
+  the natural idle period of the loop, an advance that runs a day and returns
+  `reason:"timeout"` is the system working, and the number's job is only
+  "eventually hand control back when nothing interesting happened". The
+  consequence is that **the HALTS are the wake-up mechanism and this raises their
+  status**: `722c951`'s own-faction casualty halt is the primary interrupt, not a
+  guard rail, and the question this bound puts weight on — what ELSE should wake
+  the agent (a raid letter, a breakdown, a mood collapse, a food cliff) — is its
+  own issue, because a day of quiet is only safe to sleep through if the halt set
+  is good enough. **What it replaces was never a decision:** 1.3 shipped 600000
+  (ten in-game days) as "big enough not to get in the way", which for anything a
+  human would notice is no bound at all. **The refusal, and why the mod already
+  knew.** Session 19's edge rule is right (`hour >= 6` is true all afternoon) and
+  is not reopened; but `time.tick >= N` is MONOTONE, so once true there is no
+  crossing left and the halt is unreachable by construction. Session 19 also
+  anticipated this and instrumented it — `true_when_armed`, `saw_false`,
+  `first_false_tick` ship in every `until` envelope — so **this was an
+  ENFORCEMENT gap, not an observation one**: on a bench on 2026-09-01 the mod
+  published `true_when_armed:true, saw_false:false, first_false_tick:null` and
+  accepted the unbounded advance anyway, which then ran **187,541 ticks** and was
+  stopped only by the casualty halt that had shipped hours earlier, with
+  `ok:true`. The refusal is therefore DERIVED from `PathWatch.TrueWhenArmed` and
+  `EdgeRequired`, the same two accessors `Report()` publishes, so the envelope
+  and the enforcement cannot disagree; and it NAMES `edge:false`, because a
+  caller who wrote `time.tick >= now + N` almost always meant "stop as soon as
+  this holds" and handing back the right call beats rejecting the wrong one.
+  **Both halves are needed, and the reason is a RACE.** Reading the clock and
+  arming are two protocol round trips at a 0.25–1 s floor each (`rwa/README.md`:
+  500 ms poller, inbox files younger than 250 ms ignored), so at ~30 tps the
+  clock moves 60–120 ticks in between and a short `now + N` lead is false when
+  computed and true when armed. Refusal alone would make the same call fail or
+  not depending on latency — a flaky refusal, not a fix; the default bound is
+  what makes a lost race benign everywhere the refusal does not fire. The three
+  outcomes are now total: no bound + already true + edge is refused with the fix
+  named; a caller's own bound + already true + edge is session 19 unchanged
+  (waits for a re-crossing, stops at that bound); everything else gets the
+  60,000 default. One extension beyond the literal ruling, recorded because it is
+  a widening: a SUPPLIED `timeout_ticks:0` is refused too — it is the same
+  unreachable halt with the default explicitly switched off, nothing in the repo
+  spells it, and a caller who wants a very long wait can still pass a large
+  finite number. `1113019`, `fc287ba`, `722c951`.
