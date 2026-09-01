@@ -1086,3 +1086,38 @@ queue by default (an agent flailing mid-experiment must not page triage).
   nor `PreAbsorbStack` and a forbidden stack absorbed into an unforbidden one
   loses the flag entirely — tolerable when a pod lands on open ground, not when
   a kit aims at a stockpile.
+- 2026-08-31 (session 11) — **When an acceptance suite goes red here, suspect
+  the INSTRUMENT before the mod.** Measured, not asserted: the first live run of
+  all five drivers produced twelve failures, and **eleven were driver defects
+  requiring no mod change**. The three shapes they took are worth naming because
+  each recurred: a dig at the wrong key (`data.rows` where `JournalVerbs.Read`
+  publishes `data.events`); a value read flat where the payload nests it
+  (`verb` vs `payload.verb`); and an argument that is a class name rather than a
+  defName (`Warden_DeliverFood` vs `DeliverFoodToPrisoner`), which made
+  `Dev.Named` throw before the verb built its `Outcome` so the reply had **no
+  `data` block at all**. That last one matters most: an absent block and a
+  gate-less rejection are indistinguishable to `dig`, so the failure said
+  "the mod published no gate" when the truth was "the call never ran".
+- 2026-08-31 (session 11) — **A check that cannot go red is worse than a check
+  that fails, and it hides best behind neighbours that do fail.** `3.4`'s `3.6a`
+  ("the pawn is WEARING the parka") PASSED while asserting nothing: the bench
+  colonist already wore one before the policy was ever assigned. Three genuine
+  reds sat beside it from the same cause, and repairing only those would have
+  shipped a 150/150 that proved nothing about the clothes loop. The rule that
+  follows: when a fixture precondition turns out to be unmet, re-examine the
+  checks that PASSED under it before fixing the ones that failed. Corollary
+  found the same night in `8b0b88f`, the suite written specifically to close the
+  absent-key trap: its own `1.2l/m` dug `data.action.rejected_by_reason`, and
+  the response's `action` block is `{journal_seq}` and nothing else. The tally
+  ships under two spellings in two PLACES — `rejects_by_reason` on the data
+  block (`DesignateEngine.PublishRejects`), `rejected_by_reason` on the JOURNAL
+  ROW (`DesignationVerbs.Designate`). Reading the journal at the seq the action
+  block names is both the correct check and the stronger one.
+- 2026-08-31 (session 11) — **An ASCII grep cannot verify a string literal in a
+  .NET assembly.** Literals live in the UTF-16 `#US` heap, so
+  `grep -a 'target_note' AutoRimmer.dll` returns 0 on an assembly that contains
+  it, while type and member names in the `#Strings` heap DO match — which makes
+  the false negative look selective and therefore credible. Count as UTF-16LE
+  instead. The build rules already recorded this for `InformationalVersion`;
+  it generalises to every literal, and a verification pass that greps for new op
+  names is measuring nothing.
