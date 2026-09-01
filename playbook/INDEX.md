@@ -30,6 +30,12 @@ Standing notes, kept visible on purpose:
   zone grows *nothing*. It grows potatoes. Kept as the worked example of a
   plausible lesson pointing at a symptom that never occurs — the failure mode
   `postmortem.md`'s conflict rule exists for.
+- **A lesson no checklist cites is half-landed.** Nothing will surface it at
+  the moment it bites, however good the file is — and the gap is invisible
+  unless someone diffs `[[…]]` citations in `checklists/` against this table.
+  The four M1 lessons sat uncited from the run that wrote them until
+  2026-09-01; the promotion pass now owns the check
+  (`checklists/README.md` §The promotion pass).
 - `combat-role-passion-over-skill` carries the orchestrator's proposed
   constants, not Evan's rule, and says so. Apply as tiebreak, present for
   correction, do not harden.

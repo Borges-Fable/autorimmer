@@ -2,7 +2,11 @@
 
 Evaluated against the digest at **every** return from `advance`. Nothing here
 issues a query; this file is the *meaning* of numbers the loop is already
-holding. Every trip-wire is a state predicate — the `until:condition` matcher
+holding. **Every means every, and a targeted query is not a read**: M1 lost a
+colonist inside a six-iteration polling loop whose only read was
+`pawns {filter:"hostile"}` — the downing, two alerts and the medical
+emergency were all in the journal delta and digest nobody asked for
+([[read-every-return-or-lose-a-colonist]]). Every trip-wire is a state predicate — the `until:condition` matcher
 spec 1.6 (`fc287ba`) will eventually take over; each item names the predicate
 it becomes. Ledger: log only firings (`verdict:"action"`), per
 `checklists/README.md`.

@@ -1121,3 +1121,21 @@ queue by default (an agent flailing mid-experiment must not page triage).
   instead. The build rules already recorded this for `InformationalVersion`;
   it generalises to every literal, and a verification pass that greps for new op
   names is measuring nothing.
+- 2026-09-01 (session 13) — **A deterministic finding goes in the MOD, not in
+  a note — the mod rung outranks the lowest-rung rule.** `postmortem.md`
+  step 5 said "land the outputs at the lowest rung that removes the cause"
+  while this log's 2026-08-31 entry said "deterministic goes in the mod; the
+  playbook carries judgement", and the two disagree whenever a computable
+  response would ALSO be served by a checklist line or a prose lesson —
+  which is most of them. Evan resolved it for DESIGN: notes get ignored. So
+  the lowest rung is the floor for JUDGEMENT findings only; where every
+  branch of the response is computable from state the observers already
+  publish, the output is a mod procedure plus its spec issue, whatever
+  cheaper rung was available. The reasoning is the one this repo has already
+  paid for twice: a checklist line is executed only if the session reads it,
+  remembers it, and is not busy — M1 day 4 missed three daily items while
+  two colonists were bleeding out, which is exactly when the line was worth
+  most. Mod code has no attention budget. The cost is real and accepted:
+  "changing it needs a rebuild" is the rigour, not the objection.
+  `postmortem.md` step 3's table now carries the override, step 5 states it,
+  and the ladder's mod rung is marked MANDATORY rather than available.

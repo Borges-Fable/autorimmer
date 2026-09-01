@@ -36,7 +36,7 @@ So the checklist is three files keyed to the moments the loop actually has:
 |---|---|---|---|
 | `turn.md` | every read | zero extra queries | thresholds over the digest already in hand |
 | `triggered.md` | when its trigger fires | one drill-down per firing | act-keyed checks, event-keyed responses, colony start |
-| `daily.md` | first read after a day boundary | the only unconditional queries | slow drift with no event, no alert, and no digest field |
+| `daily.md` | first read after a day boundary, and the session's first read | the only unconditional queries | slow drift with no event, no alert, and no digest field |
 
 **Why a daily rung survives at all.** Three reasons, all mechanical. The
 variables it watches (freezer temperature, armament vs roster, apparel decay)
@@ -46,6 +46,12 @@ the loop was going to make anyway — the sweep piggybacks on an existing pause
 and never forces one. And one verdict per item per day is exactly the evidence
 row 4.4's retirement ledger needs. Detect a boundary from the read in hand:
 `digest.time.day_of_season` differs from the last read's. No new mechanism.
+**A session's first read is also a boundary** — there is nothing for it to
+differ from, and the loop snapshots that day like any other, so the sweep is
+owed there too. (Under the older wording M1 ran no sweep at all on day 1,
+which `accept/4.2-play-loop.py` correctly failed: the auditor keys coverage
+on the presence of the day snapshot. Resolved in the auditor's favour,
+2026-09-01 — `postmortem.md` §Compliance findings.)
 
 **The checklist is the missing `condition` matcher, run by hand.** `advance
 until:` halts only on events — things that HAPPEN. Nothing fires when a
@@ -97,6 +103,21 @@ The loop (4.2) appends one NDJSON line per evaluation to
 - 4.4's "when did this last fire" is then `grep <item-id> RUNS/*/checklist.ndjson`
   — a computation, not bookkeeping.
 
+**The id space is closed, and that is why there is no incident class.** Every
+`item` a run logs must be a `### <id>` in one of these three files, or
+`colony-start-<n>` inside the colony-start step count:
+`accept/4.2-play-loop.py`'s `item-ids-known` check enforces exactly that, and
+its verdict enum is the four above and nothing else. M1 (`m1-20260831`)
+invented three ids mid-run for real observations that had nowhere to go —
+`barracks-heat`, `postmortem-trigger`, `time-control-drift` — and the run
+FAILS `item-ids-known` on all three. Ruled 2026-09-01: **a run-level incident
+does not get a new class; it gets the moment class it actually has.** Room
+heat is slow, event-less drift → `daily.md`. A death and a lost time control
+are events → `triggered.md`. A schema with a fifth verdict or a parallel
+incident file would have bought a second, unaudited ledger; what session 12
+actually lacked was the promotion pass below, without which any id invented
+mid-run reads as a schema gap for as long as nobody lands it.
+
 **Retirement pressure is not the same for every moment class** (recorded here
 so 4.4 builds on it): a daily item costs its query every day whether or not it
 fires, so silence accrues pressure against it. A turn trip-wire costs nothing
@@ -108,12 +129,60 @@ pass should weigh recurring cost × silence, not silence alone.
 
 **The hard cap binds `daily.md` only** — it is the one file with
 unconditional recurring cost. Cap: **7 items** *(proposed — 4.4 ratifies; what
-fits in one attentive read)*. Current count: 4. Adding an item past the cap
+fits in one attentive read)*. Current count: 5. Adding an item past the cap
 forces a recorded merge-or-retire in the same commit, and the file names what
 was displaced — the digest's own budget rule ("an uncapped section is the
 defect"), applied to attention. `turn.md` is capped by the digest byte budget
 it annotates; `triggered.md` is capped per trigger by the same attentive-read
 bar, enforced at review rather than by a number.
+
+## The promotion pass
+
+4.4 (`d32eadd`) specifies a retirement pass and no promotion pass, so the
+checklists can only ever shrink: nothing turns a repeated observation INTO an
+item, and the thing that does happen instead — a session inventing an id
+mid-run — lands nowhere and fails the audit (§The run ledger). The symmetric
+half, ruled 2026-09-01 and recorded here for 4.4 to build on:
+
+**Run it in the same pass as retirement** — at a post-mortem, or at the end of
+a run — over the same evidence: `RUNS/*/checklist.ndjson` and the run
+summaries.
+
+- **The candidate set is computed, not remembered.** Every ledger `item` with
+  no `### <id>` behind it, plus any check a summary describes in prose only:
+  `grep` the ledgers, diff against `grep '^### '` over the three files. An id
+  a session invented is a REQUEST for an item, filed at the moment the need
+  was felt — the most reliable evidence this system produces, and today it is
+  thrown away.
+- **Two occasions, then promote or reject — in writing.** A candidate seen on
+  two separate days or in two runs is landed as an item, or the file records
+  in one line why not, in the same commit. Silence is the failure being
+  fixed; it is the same rule as retirement's "recorded, not silent", pointed
+  the other way.
+- **It lands at its moment class**, and the ladder still applies: free on the
+  digest → `turn.md`; keyed to an act or event → `triggered.md`; otherwise
+  `daily.md` under the cap, where a promotion past the cap fires the
+  merge-or-retire like any other add. If every branch of the response is
+  computable from published state, it is not a checklist item at all — it
+  goes to the mod rung (`postmortem.md` step 5).
+- **The other candidate class is an UNCITED LESSON.** `grep -o '\[\[[^]]*\]\]'
+  over the three files, diff against `playbook/INDEX.md`: a lesson no
+  checklist cites is one nothing will surface at the moment it bites, however
+  good the file is. All four M1 lessons sat that way until 2026-09-01 — every
+  pre-M1 lesson was cited, and no M1 one was, because the run that wrote them
+  had no pass that would notice. Either cite it from the moment it fires, or
+  record why it needs no checklist (a launch-time or session-shape lesson may
+  belong to `PLAY-LOOP.md` instead).
+- **Promotion is the cheap direction to be wrong in.** A promoted item starts
+  logging immediately, so the retirement pass sees its rows from the next run
+  onward and undoes a bad promotion on the same evidence. The asymmetry is
+  deliberate: a missing item costs a colonist, a spurious one costs a line of
+  attention per day until the next pass.
+
+Worked example, and the pass's first output: the three M1 ids in §The run
+ledger. Each fired at least twice, none had a file, and all three landed on
+2026-09-01 — `barracks-heat` on `daily.md`, `postmortem-trigger` and
+`time-control-drift` on `triggered.md`.
 
 ## Deliberately not here
 

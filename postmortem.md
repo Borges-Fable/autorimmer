@@ -54,6 +54,12 @@ before acting on a new one, or the new one starts unlearned
    | knowledge-wrong | a lesson pointed at the wrong symptom | correction per the conflict rule below |
    | execution-slip | the playbook was right and unfollowed | 4.2 compliance finding, not a new artifact |
 
+   **The class picks the typical output; determinism overrides it.** Where
+   every branch of the response is computable from state the observers
+   already publish, the output is a mod procedure regardless of class — see
+   step 5. `no-signal` and `policy-gap` are the two rows that most often
+   qualify.
+
 4. **The wealth check — mandatory for any prevention that adds wealth.**
    Raid points scale with colony wealth (`StorytellerUtility
    .DefaultThreatPointsNow` over `PointsPerWealthCurve`): "we died, build
@@ -64,17 +70,24 @@ before acting on a new one, or the new one starts unlearned
    (`HistoryAutoRecorder`) — once 2d9a1da reads them out, plot the actual
    curve instead of arguing about it. [[wealth-buys-bigger-raids]]
 
-5. **Land the outputs at the lowest rung that removes the cause** (ladder
-   below), in one commit: the artifact, its INDEX or checklist line, and —
-   if a daily item went over cap — the recorded merge-or-retire that made
-   room (4.4). Then verify each output surfaces at its
-   `playbook/SESSION-START.md` position; an output the next session won't
-   load is not landed.
+5. **Land the outputs at the lowest rung that removes the cause — except
+   that a DETERMINISTIC finding goes in the mod** (Evan, 2026-09-01; DESIGN
+   decisions log). If every branch of the response is computable from state
+   the observers already publish, the output is a mod procedure plus its
+   spec issue, whatever lower rung would also have "worked". Notes get
+   ignored: a rung that only asks the next session to remember is the
+   failure this document exists to remove. The playbook keeps the WHY and
+   the policy flags; the mod executes. Land it in one commit: the artifact,
+   its INDEX or checklist line, and — if a daily item went over cap — the
+   recorded merge-or-retire that made room (4.4). Then verify each output
+   surfaces at its `playbook/SESSION-START.md` position; an output the next
+   session won't load is not landed.
 
 ## The ladder, with promotion criteria
 
 Each rung is a floor, not a queue — a finding may enter at any rung it
-already qualifies for.
+already qualifies for. Determinism is the one thing that is not a floor but
+a *duty*: a computable response does not get to stop lower down (step 5).
 
 - **observation → prose lesson** when it survives verification (source read
   or bench observation, cited), and is not derivable from what every session
@@ -92,9 +105,10 @@ already qualifies for.
   template-built instances in the same commit — escalation removes (4.4).
   The popper is the worked example: `templates/power-room` carries it, and
   the daily check now applies only to rooms built otherwise.
-- **checklist/procedure → mod** when every branch is computable from state
-  the observers already publish (DESIGN 2026-08-31: "deterministic goes in
-  the mod; the playbook carries judgement"). The playbook keeps the WHY and
+- **checklist/procedure → mod** — MANDATORY, not merely available, when
+  every branch is computable from state the observers already publish
+  (DESIGN 2026-08-31: "deterministic goes in the mod; the playbook carries
+  judgement"; ratified over the lowest-rung rule 2026-09-01). The playbook keeps the WHY and
   the policy flags; the mod executes. "Changing it needs a rebuild" is the
   rigour, not the cost. If one branch needs a read that doesn't exist,
   the answer is to NAME the missing read and file it — not to keep the
@@ -108,6 +122,14 @@ not fired while applicable across N runs (the `applies-when` field is what
 separates "idle" from "inapplicable"), weighted by each moment class's cost
 structure (`checklists/README.md`). Flagged items are merged, demoted to
 prose, or retired — recorded in the file, never silent.
+
+**Promotion runs it uphill, in the same pass** (`checklists/README.md` §The
+promotion pass, ruled 2026-09-01). Retirement alone can only shrink the
+checklists; the pass's candidates are the ledger ids with no `### <id>`
+behind them — checks a run invented mid-flight because it needed one — and
+each is landed or rejected in writing. Step 2's "did an item flag it, sit
+`blocked`, or never exist?" is where a post-mortem generates them, so the
+two halves belong to the same procedure and the same commit.
 
 ## When lessons conflict
 
@@ -130,6 +152,46 @@ The rule the potato incident wrote:
    can't fire). `INDEX.md` never lists two live lessons that disagree.
 4. **Check scope before declaring conflict**: two lessons with different
    `applies-when` are not in conflict, they are a map.
+
+## Compliance findings — the execution-slip log
+
+`execution-slip` is the one class in step 3's table with no artifact: the
+playbook was right and unfollowed, so inventing an item would paper over the
+miss. It still has to be RECORDED somewhere or the class means nothing, and
+this is where. Findings are produced by running the auditor over a finished
+run — `python3 accept/4.2-play-loop.py RUNS/<run> --repo .` — which is what
+makes a silent skip a diff instead of a judgement.
+
+- **M1 `m1-20260831`, day 4 — three daily items missed. A clean slip.**
+  `freezer-below-zero`, `production-still-runs` and `apparel-margin` have no
+  ledger line for day 4; `armed-roster` does. The sweep was dropped while two
+  colonists were dying — `postmortem-trigger` and `roster-change` fired four
+  times that day between them. The expensive kind of slip: the day the sweep
+  is hardest to run is the day colony state is least likely to be normal. No
+  new item is owed; the finding is that the sweep is not optional under load.
+  It is also half the argument for the 2026-09-01 mod-rung decision — a
+  checklist line executes only if the session has attention to spare, and mod
+  code has no attention budget.
+- **M1 `m1-20260831`, day 1 — NOT a slip. An auditor/PLAY-LOOP disagreement
+  about when a day begins, fixed 2026-09-01.** No daily item logged on day 1;
+  the colony-start section ran instead. `accept/4.2-play-loop.py` keys
+  `daily-coverage` on the presence of `digests/day-<N>.json` and so demanded
+  four day-1 lines, while `PLAY-LOOP.md` keyed the sweep on
+  `digest.time.day_of_season` DIFFERING from the last read's — and on a
+  session's first read there is no last read, so the sweep the auditor
+  demanded could never fire on the opening day. The session obeyed the
+  playbook and failed the audit; that is a contract defect, not a lapse.
+  Resolved in the auditor's favour: **a session's first read is a day
+  boundary.** `PLAY-LOOP.md`, `checklists/README.md` and `daily.md` now say
+  so, and on a new colony the colony-start section runs first with any daily
+  item it already answered logging `ok` and naming the colony-start line —
+  never logging nothing.
+
+The day-4 gap WIDENS in the current tree, deliberately: `barracks-heat` was
+promoted into `daily.md` on 2026-09-01 (`checklists/README.md` §The promotion
+pass), so the closed M1 ledger now also misses it on days 1, 2 and 4. A closed
+run is a record, not something to re-run; a coverage count that moves when the
+item set moves is the diff working, not a new failure.
 
 ## Worked example — the acceptance dry-run
 

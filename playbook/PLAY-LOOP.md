@@ -40,9 +40,12 @@ loaded eagerly. Two mechanics around it:
   |---|---|
   | `ok` | proceed |
   | `menu` | the right save must be loaded. There is no load verb — loading is the LAUNCHER's job (`run-agent.sh` / the autostart pattern), deliberately outside the protocol. Relaunch with the target save where this machine's rules allow launching the bench; otherwise escalate |
-  | `down` | start the bench via `run-agent.sh` — `_RimWorld-Agent` only, the standing carve-out (DESIGN §Non-goals). On a machine whose rules forbid the agent launching anything (BORGES), escalate instead |
+  | `down` | start the bench via `run-agent.sh` — `_RimWorld-Agent` only, the standing carve-out (DESIGN §Non-goals). On a machine whose rules forbid the agent launching anything (BORGES), escalate instead. **A `--quicktest` launch needs `autostart.rws` parked out of `Saves/` first** — otherwise map gen fails every time and lands right back on `menu`, which reads as bad luck with a seed ([[quicktest-and-autostart-collide]]) |
   | `stalled` / `starved` | remediate per `rwa/README.md` (windowrules, `rwa watch on`, relaunch through the launcher); never work around it by hammering commands |
 
+- **The session's first read is a day boundary** — `daily.md` runs at it, on
+  a new colony or a resumed one, and its snapshot is written like any other
+  day's (§read, step 5).
 - **On a NEW colony**: `triggered.md`'s colony-start section runs now, top to
   bottom, before the first advance — every line logging a verdict, `blocked`
   lines naming their issue ids (3.3, 3.6). This is SESSION-START position 3's
@@ -113,6 +116,17 @@ specific pawn is the question.
 - `max_tps` is left to the mod's thermal cap; never raise it for a
   fast-forward (the cap exists because this hardware trips — DESIGN §Time
   model, and FINDINGS §6 measured ~1392 tps at a 30fps cap anyway).
+- **Pre-advance gate — time control, checked FIRST.** Read `rwa status` and
+  look at `paused` before EVERY advance. If it is false the game has been
+  running unobserved: `pause`, then log `time-control-drift` (`triggered.md`)
+  with the SIZE of the window, then read the whole journal delta across it
+  before advancing again. A dead `rwa` client does not stop the game — the
+  mod keeps advancing toward its target through a tool error, an interrupt or
+  a timeout, and M1 lost ~60,000 ticks that way, more than once, with
+  `pause` afterwards reporting `was_advancing:true, speed_before:Ultrafast`.
+  `status` is a read of the heartbeat file and costs the game nothing. This
+  gate goes first because a running game makes every other read stale,
+  including the drafted check below.
 - **Pre-advance gate — the undraft discipline.** Before EVERY advance: if any
   colonist shows `drafted` and `threats.hostiles` is 0 with no threat being
   actively responded to, `undraft` first. Read it from the digest's colonist
@@ -135,7 +149,13 @@ owns time.
 
 ### read
 
-In this order, every return:
+In this order, every return — **unconditional and not parameterised.** A
+targeted query never substitutes for steps 1 and 2, however tight the loop
+feels: M1's six back-to-back 2,500-tick advances read only
+`pawns {filter:"hostile"}`, and a colonist was downed, alerted on twice, and
+left bleeding inside that window ([[read-every-return-or-lose-a-colonist]]).
+If you are waiting for one specific thing, that is an argument for an
+`until:` guard, not for a poll.
 
 1. `rwa journal --since <last_seq>` — the delta. What happened while time
    ran, including the `action` echoes of your own acts. Any `red_error`:
@@ -151,10 +171,18 @@ In this order, every return:
    raid-end transitions, Zzzt, roster changes; one drill-down per firing,
    every firing logged.
 5. **Day boundary** — `digest.time.day_of_season` differs from the last
-   read's: run `daily.md` top to bottom, one ledger line per item per day
-   whatever the verdict (`n/a` for off-cadence or inapplicable items, so
-   coverage stays a diff, not a judgement), and snapshot the digest to
-   `RUNS/<run>/digests/day-<N>.json`.
+   read's, **or this is the session's first read**, which counts as a
+   boundary because there is no last read to differ from and the loop
+   snapshots that day anyway: run `daily.md` top to bottom, one ledger line
+   per item per day whatever the verdict (`n/a` for off-cadence or
+   inapplicable items, so coverage stays a diff, not a judgement), and
+   snapshot the digest to `RUNS/<run>/digests/day-<N>.json`. The rule is
+   keyed to the SNAPSHOT: a `digests/day-<N>.json` with no full set of daily
+   lines behind it is a compliance failure, which is exactly what
+   `accept/4.2-play-loop.py` checks. On a new colony `triggered.md`'s
+   colony-start section runs first, and a daily item it already answered
+   logs `ok` naming the colony-start line — not nothing. (M1 day 1 missed
+   all four items to this ambiguity; `postmortem.md` §Compliance findings.)
 
 ### think
 
@@ -319,6 +347,10 @@ imitating a live one.
    where machine rules allow.
 9. Long advances are announced when the window is watched.
 10. The session always ends with a summary — normal end, wedge, or loss.
+11. `status.paused` is read before EVERY advance; a game found running is
+    paused first, its window logged as `time-control-drift`, and its journal
+    delta read before the next advance. The agent owns time only while its
+    client lives.
 
 ## Acceptance (4.3 exercises this; the mechanical half is scripted)
 
