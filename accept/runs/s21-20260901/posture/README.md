@@ -99,3 +99,47 @@ in `7382bdd`'s title, caught in the wild rather than in a fixture.
 
 The save/load round trip, which is the one acceptance bullet a suite cannot
 assert without a restart.
+
+---
+
+## The save/load round trip — PASSED, and the strong way
+
+The bullet reads "the posture survives a save/load round trip, **or the digest
+says it did not**." It survives, so the fallback never came up.
+
+Saved via `journal-selftest {steps:["save"], save_name:"s21-posture"}`
+(`GameDataSaveLoader.SaveGame`), 14,470,877 bytes. Bench killed, then relaunched
+**without `--quicktest`** through the autostart route (`s21-posture.rws` copied
+to `autostart.rws`, which `SaveGameFilesUtility.GetAutostartSaveFile` picks up)
+— deliberately not with `--quicktest`, since the launcher refuses that
+combination and is right to.
+
+New session `20260901T221926`, envelopes `08` and `09`:
+
+| field | before save | after load |
+|---|---|---|
+| `ok` | true | **true** |
+| `will_seek` | 1/1 | **1/1** |
+| `area_bound` | 3/3 | **3/3** |
+| `attack` | 1/1 | **1/1** |
+| `on_contact` | flee 2, attack-then-seek 1 | **identical** |
+| `flee_risk` | [] | **[]** |
+| `areas` | ["Area 2 x3"] | **["Area 2 x3"]** |
+
+Per pawn, read back from `posture` after the load: all three still bound to
+Area 2; Teresa still `Attack` + seek on → `attack-then-seek`; the two
+violence-incapable still `Flee`.
+
+**All three settings persisted, including seek — which is the one that is not
+ours.** Area membership is `Scribe_Collections` by reference and hostility is
+`Scribe_Values`, both vanilla pawn state, so those were expected. Seek lives in
+SeekAndKill's own GameComponent (`SK_SeekPawns`), and a third-party mod's
+GameComponent surviving a round trip is the half that could only be settled by
+doing it. The worker predicted it from reading `PruneStaleIds` and could not
+test it; this is the test.
+
+## Housekeeping owed after this run
+
+`autostart.rws` is a COPY of `s21-posture.rws` and must be parked again before
+the next `--quicktest` launch, or `run-agent.sh` refuses — correctly, per the
+standing decision and `playbook/quicktest-and-autostart-collide.md`.
