@@ -741,3 +741,63 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `KeyBindingDefOf`, `Find.Selector`, `Event.current` and `Messages.Message`.**
   Wrap-don't-reinvent is still the default; this is the exception's shape.
   Recorded as PawnSafe Class I.
+- 2026-08-31 — **A derived boolean can be RIGHT and still be read as an answer
+  to a question it was never computing.** `ordered` is published as the triple
+  `jobGiver is ThinkNode_QueuedJob && workGiverDef != null && playerForced`, and
+  a `wear` order reads `ordered:false`. Every reader took that for a bug. It is
+  not: `ordered` means *prioritized-WORK order*, and a direct order has no
+  WorkGiver. The field is correct and its NAME invites the wrong question.
+
+  **The reasoning recorded for that triple was nonetheless backwards, and the
+  correction matters more than the field.** The `workGiverDef != null` clause
+  was believed to be what excludes `JobGiver_Work`'s autonomous `playerForced`.
+  It is not. `RimWorld/JobGiver_Work.cs TryIssueJobPackage` reaches its
+  emergency-prioritized branch through `GiverTryGiveJobPrioritized`, which sets
+  `workGiverDef` on the job BEFORE the branch sets `playerForced = true` — so
+  the autonomous job carries BOTH clauses and neither excludes it. What actually
+  rejects it is `jobGiver is ThinkNode_QueuedJob`: `Verse.AI/Pawn_JobTracker.cs
+  StartJob` assigns `curJob.jobGiver` from the ThinkResult's source node, and
+  that node is the `JobGiver_Work` itself, never a queued node. The queued-node
+  clause is load-bearing for a second reason too — four non-player sites
+  (`JobDriver_AttackStatic`, `JobDriver_AttackMelee`, `JobInBedUtility`, and
+  `Pawn_JobTracker`'s `resumeCurJobAfterwards`) enqueue with `playerForced`
+  false, so the PAIR is the discriminator and the WorkGiver split is a
+  refinement on top of it. That is why splitting on it is safe.
+
+  **The resolution is to publish the distinction rather than to widen the
+  boolean**: `order_kind` = `work` | `direct` | `null`, alongside an unchanged
+  `ordered`, with `ordered == (order_kind == "work")` by construction. Widening
+  `ordered` to mean "the player caused this" would have re-admitted exactly the
+  autonomous `playerForced` the triple was built to exclude. **The rule: when a
+  field is correct but under-read, add the field that answers the question being
+  asked — do not redefine the one that is already right.**
+- 2026-08-31 — **`TryTakeOrderedJob` has THREE outcomes past its early-out, and
+  a verb that reports only `accepted` cannot tell you which one you got.** Past
+  the `JobIsSameAs` collision return, `Verse.AI/Pawn_JobTracker.cs` branches:
+  `ClearQueuedJobs` + `EnqueueFirst` + `EndJobWith(InterruptForced)`; or
+  `EnqueueLast`; or `ClearQueuedJobs` + `EnqueueLast`. Three consequences that
+  nothing published and every one of which an agent would misread:
+
+  1. **`queue:true` on an IDLE pawn does not queue.** The first branch is
+     reachable with `requestQueueing` set whenever `mindState.IsIdle ||
+     CurJob == null || CurJob.def.isIdle`, and it STARTS the job. `job_queue.total`
+     then reads 0 — not because publication is broken, but because nothing queued.
+  2. **Two of the three branches CLEAR THE EXISTING QUEUE.** An order can
+     silently destroy work already lined up.
+  3. **The third queues an order the caller never asked to queue**, leaving the
+     pawn on its current job, and still answers `accepted:1`.
+
+  So accepted lines now carry `order_effect` (`started` | `queued` | `gone`),
+  `queue_depth` and `queue_dropped`, with a note attached only when the effect
+  CONTRADICTS the request. All three reads are side-effect free and by reference
+  identity — never `JobIsSameAs`, whose `GetCachedDriver` lazily allocates and
+  `Log.Error`s on a pawn mismatch (PawnSafe Class H).
+
+  **The acceptance lesson travelled with it and is the more general one.** The
+  suite staged its "running job" with `wear`, then advanced 2500 ticks — long
+  enough to FINISH wearing. Worn apparel is unspawned, so `ThingArg` refused it
+  and the stage silently did nothing, leaving an idle pawn, firing branch 1, and
+  producing a queue reading of 0 that looked exactly like a publication bug.
+  **A fixture that fails silently is indistinguishable from the defect it was
+  built to detect** — so a staging step must assert that it staged (git-bug
+  4087644, ac407f1).
