@@ -560,8 +560,13 @@ def phase1():
     t = now_tick()
     a4 = advance(pass_time(), timeout=180)
     eq("1.16", "AFTER the read, the same advance PROCEEDS", a4, "ok", True)
-    eq("1.17", "…on its own predicate, not on anything else",
-       a4, "data.reason", "condition")
+    # The point of this check is NEGATIVE — the advance ended on its OWN bound
+    # and not on the unread guard, a casualty, or a timeout. `pass_time()` sends
+    # {"ticks": N}, so that bound is reported as "ticks"; it read "condition"
+    # while this wait was dressed as a `time.tick` predicate. Asserting the form
+    # actually sent, because the claim is about WHICH thing stopped it.
+    eq("1.17", "…on its own bound, not on the guard or a casualty",
+       a4, "data.reason", "ticks")
 
 
 # ------------------------------------------------------------------- phase 2 --
