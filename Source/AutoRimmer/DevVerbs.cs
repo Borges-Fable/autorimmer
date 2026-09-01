@@ -1070,8 +1070,8 @@ namespace AutoRimmer
         }
 
         // --------------------------------------------------------------------
-        // dev:incident {def, points?, faction?, strategy?, arrival?, at?,
-        //               drop_radius?, trader_kind?, count?, letter?,
+        // dev:incident {def, target?, points?, faction?, strategy?, arrival?,
+        //               at?, drop_radius?, trader_kind?, count?, letter?,
         //               recount_wealth?, check_only?}
         //
         // Provenance: Verse/DebugActionsIncidents — GetIncidentDebugAction (the
@@ -1087,7 +1087,39 @@ namespace AutoRimmer
         // A fixture that spawns a starter kit and immediately fires a scaled
         // raid gets points computed against the colony's wealth BEFORE the kit,
         // silently. ForceRecount is one call and makes the raid match the
-        // colony you just built.
+        // colony you just built. A WORLD target recounts every map, not just the
+        // current one: RimWorld.Planet/World.PlayerWealthForStoryteller SUMS
+        // every map's and every caravan's, so one map's stale watcher makes the
+        // world's points stale too.
+        //
+        // WORLD-TARGETED INCIDENTS, AND WHY THE DEF PICKS THE TARGET. Measured
+        // on the bench 2026-08-31: `dev:incident {def:"GiveQuest_Random"}` was
+        // refused — the verb always passed a Map, and GiveQuest_Random's
+        // targetTags are World-only, so ~123 of spec 3.5's checks could not be
+        // staged. RimWorld/IncidentParms.target is an IIncidentTarget, not a
+        // Map, and Verse/Map and RimWorld.Planet/World both implement it with
+        // DISJOINT tag sets — Map yields the Map_* tags, World yields exactly
+        // IncidentTargetTagDefOf.World — so RimWorld/IncidentDef.TargetAllowed
+        // (targetTags.Intersect(target.IncidentTargetTags()).Any()) already
+        // answers "which of the two does this def want".
+        //
+        // NOT the palette's chooser, and the game supplies the one we DO want.
+        // Verse/DebugActionsIncidents.GetTarget picks by CAMERA: world view
+        // selected -> the selected world object or Find.World, otherwise
+        // Find.CurrentMap. That is the right rule for a human holding a mouse
+        // and a useless one for a headless caller, who would have to know to
+        // flip the view before asking for a quest. The def-driven chooser is
+        // the game's own, in RimWorld/StorytellerComp — the local function
+        // GetDefaultTarget inside DebugTablesIncidentChances, which is verbatim
+        // "map if TargetAllowed(Find.CurrentMap), else world if
+        // TargetAllowed(Find.World), else null". ResolveIncidentTarget below is
+        // that function plus a refusal that says why. `target:"map"|"world"`
+        // overrides it when a caller needs to.
+        //
+        // Everything downstream follows the choice — StorytellerUtility
+        // .DefaultParmsNow(category, target) and StorytellerComp.GenerateParms
+        // both take the IIncidentTarget, which is the palette's own route
+        // (GetIncidentDebugAction passes incidentParms.target, not the map).
         //
         // THE 1.7 WEDGE. A letter-bearing incident can open a force-pausing
         // modal, and from then on `advance` halts `reason:"dialog"` and
@@ -1097,25 +1129,42 @@ namespace AutoRimmer
         // static prediction (does def.letterDef's letterClass derive from
         // ChoiceLetter/LetterWithTimeout); and `force_pause_after` reports what
         // ACTUALLY went up, measured, in TimeDriver.ForcePausePayload's shape.
+        //
+        // `letter:false` IS NOT UNIVERSAL, and the world-targeted quest
+        // incidents are the exception that matters. parms.sendLetter is honoured
+        // only by workers that read it; RimWorld/IncidentWorker_GiveQuest.
+        // GiveQuest never looks at it — it calls QuestUtility
+        // .SendLetterQuestAvailable(quest) whenever the quest is not hidden and
+        // questDef.sendAvailableLetter, full stop. So GiveQuest_Random posts its
+        // letter even with letter:false. `force_pause_after` is still the
+        // measurement, and 3.5 owns dismissal.
         // --------------------------------------------------------------------
         [Verb("dev:incident")]
         public static object Incident(VerbContext ctx)
         {
             const string V = "dev:incident";
             Dev.Gate(V);
-            var map = Dev.CurrentMap(V);
             var a = ctx.Args;
 
             var def = Dev.Named<IncidentDef>(a.StrReq("def"), "def");
-            if (!def.TargetAllowed(map))
-                throw new VerbArgsException(
-                    $"IncidentDef '{def.defName}' does not allow a Map target "
-                    + "(targetTags: " + TagNames(def) + ")");
+
+            // THE TARGET IS RESOLVED FIRST, because everything below is a
+            // function of it: the wealth recount, the parms the storyteller
+            // generates, and whether `at` means anything at all. Note that the
+            // "needs a current map" refusal is no longer unconditional — a
+            // World-targeted incident does not need one, and Dev.CurrentMap's
+            // message would have been a lie for it.
+            var map = Find.CurrentMap;
+            IIncidentTarget world = Find.World;
+            string targetNote;
+            bool onMap;
+            IIncidentTarget target = ResolveIncidentTarget(
+                def, a.Str("target", "auto"), map, world, out onMap, out targetNote);
 
             int iterations = a.Int("count", 1);
             if (iterations < 1 || iterations > 10) throw new VerbArgsException("count must be 1..10");
             bool recount = a.Bool("recount_wealth", true);
-            if (recount) { try { map.wealthWatcher.ForceRecount(); } catch { } }
+            int recounted = recount ? RecountWealth(onMap ? map : null) : 0;
 
             bool hasPoints = a.Has("points");
             IncidentParms parms;
@@ -1126,14 +1175,14 @@ namespace AutoRimmer
                 // carry a storyteller-shaped point budget rather than
                 // DefaultParmsNow's flat one.
                 var comp = MainStorytellerComp();
-                parms = comp != null ? comp.GenerateParms(def.category, map)
-                                     : StorytellerUtility.DefaultParmsNow(def.category, map);
+                parms = comp != null ? comp.GenerateParms(def.category, target)
+                                     : StorytellerUtility.DefaultParmsNow(def.category, target);
             }
             else
             {
-                parms = StorytellerUtility.DefaultParmsNow(def.category, map);
+                parms = StorytellerUtility.DefaultParmsNow(def.category, target);
             }
-            parms.target = map;
+            parms.target = target;
             parms.forced = true;
             if (hasPoints) parms.points = (float)a.NumReq("points");
             if (a.Has("faction")) parms.faction = Dev.FactionArg(a.Str("faction"));
@@ -1142,6 +1191,14 @@ namespace AutoRimmer
             if (a.Has("trader_kind")) parms.traderKind = Dev.Named<TraderKindDef>(a.Str("trader_kind"), "trader_kind");
             if (a.Has("at"))
             {
+                // A cell is a MAP coordinate. Refuse rather than silently drop
+                // it: IncidentParms.spawnCenter on a world-targeted incident is
+                // read by nobody, and Positions.Resolve has no map to resolve
+                // against anyway.
+                if (!onMap)
+                    throw new VerbArgsException(
+                        $"arg 'at' names a cell on a map, but IncidentDef '{def.defName}' fires at "
+                        + "the World (targetTags: " + TagNames(def) + ")");
                 // The drop-pod-at-location shape: an explicit spawnCenter is
                 // only honoured by an arrival mode that reads it, so default to
                 // the debug one the game uses for exactly this.
@@ -1159,6 +1216,8 @@ namespace AutoRimmer
             {
                 ["def"] = def.defName,
                 ["category"] = def.category?.defName,
+                ["target"] = onMap ? "map" : "world",
+                ["target_tags"] = TagNames(def),
                 ["points"] = Math.Round(parms.points, 1),
                 ["faction"] = parms.faction?.Name,
                 ["faction_def"] = parms.faction?.def?.defName,
@@ -1170,6 +1229,8 @@ namespace AutoRimmer
                 ["send_letter"] = sendLetter,
                 ["letter_bearing"] = LetterBearing(def),
             };
+            if (recount) data["wealth_recount_maps"] = recounted;
+            if (targetNote != null) data["target_note"] = targetNote;
 
             if (a.Bool("check_only", false))
             {
@@ -1197,12 +1258,14 @@ namespace AutoRimmer
             long seq = Dev.Emit(V, "incident",
                 def.defName + " x" + fired + "/" + iterations
                 + " @" + Math.Round(parms.points, 0) + "pts"
-                + (parms.faction != null ? " (" + parms.faction.Name + ")" : ""),
+                + (parms.faction != null ? " (" + parms.faction.Name + ")" : "")
+                + " -> " + (onMap ? "map" : "world"),
                 new Dictionary<string, object>
                 {
                     ["args"] = new Dictionary<string, object>
                     {
                         ["def"] = def.defName,
+                        ["target"] = onMap ? "map" : "world",
                         ["points"] = Math.Round(parms.points, 1),
                         ["faction"] = parms.faction?.def?.defName,
                         ["strategy"] = parms.raidStrategy?.defName,
@@ -1238,6 +1301,129 @@ namespace AutoRimmer
             var n = new List<string>();
             foreach (var t in def.targetTags) n.Add(t.defName);
             return string.Join(",", n.ToArray());
+        }
+
+        // The def picks the target. RimWorld/StorytellerComp's GetDefaultTarget
+        // (local to DebugTablesIncidentChances) verbatim — map first, world
+        // second, null third — with the null arm turned into a refusal that says
+        // which candidate failed and why, and with `want` able to override.
+        //
+        // MAP-FIRST IS THE GAME'S OWN PREFERENCE, not a tiebreak we invented, and
+        // in vanilla the tie cannot arise: RimWorld/IncidentDef.ConfigErrors
+        // reports "allows world target type along with other targets. World
+        // targeting incidents should only target the world." for any def that
+        // tags both. A modded def that does it anyway gets the map and is TOLD
+        // so (target_note), because silently preferring one of two legal targets
+        // is the kind of thing that costs an afternoon.
+        //
+        // `onMap` rather than a type test at the call sites: Verse/Map is not
+        // the only Map-tagged IIncidentTarget in principle, and the two things
+        // downstream that need a Map (the wealth recount, `at`) need the
+        // variable, not the interface.
+        private static IIncidentTarget ResolveIncidentTarget(
+            IncidentDef def, string want, Map map, IIncidentTarget world,
+            out bool onMap, out string note)
+        {
+            onMap = false;
+            note = null;
+
+            // Verse/Map.IncidentTargetTags delegates to info.parent (the
+            // MapParent), so a parentless map yields NO tags and TargetAllowed
+            // is false for every def — hence the null-guard AND the allowed
+            // check, not one standing in for the other.
+            bool mapOk = map != null && def.TargetAllowed(map);
+            bool worldOk = world != null && def.TargetAllowed(world);
+
+            switch (want)
+            {
+                case "map":
+                    if (map == null)
+                        throw new VerbArgsException("target:\"map\" was asked for but there is no current map");
+                    if (!mapOk)
+                        throw new VerbArgsException(
+                            $"IncidentDef '{def.defName}' does not allow a Map target "
+                            + "(targetTags: " + TagNames(def) + ")");
+                    onMap = true;
+                    return map;
+
+                case "world":
+                    if (world == null)
+                        throw new VerbArgsException("target:\"world\" was asked for but there is no world");
+                    if (!worldOk)
+                        throw new VerbArgsException(
+                            $"IncidentDef '{def.defName}' does not allow a World target "
+                            + "(targetTags: " + TagNames(def) + ")");
+                    return world;
+
+                case "auto":
+                    break;
+
+                default:
+                    throw new VerbArgsException(
+                        $"arg 'target' must be \"auto\", \"map\" or \"world\" (got '{want}'); "
+                        + "\"auto\" reads the def's own targetTags and is the default");
+            }
+
+            if (mapOk)
+            {
+                onMap = true;
+                if (worldOk)
+                    note = "this def's targetTags allow BOTH a Map and the World, which "
+                         + "IncidentDef.ConfigErrors calls malformed (\"World targeting incidents "
+                         + "should only target the world\"). Picked the map, as the game's own "
+                         + "StorytellerComp.GetDefaultTarget does. Pass target:\"world\" to override.";
+                return map;
+            }
+            if (worldOk) return world;
+
+            // Neither. Name targetTags — that is the diagnostic that told us
+            // GiveQuest_Random was World-only in the first place — and say what
+            // each candidate did, because "no current map" and "the def wants a
+            // tag neither candidate has" are different operator problems.
+            string mapWhy = map == null
+                ? "there is no current map"
+                : "the current map offers " + MapTagNames(map);
+            string worldWhy = world == null
+                ? "there is no world"
+                : "the world offers only " + IncidentTargetTagDefOf.World.defName;
+            throw new VerbArgsException(
+                $"IncidentDef '{def.defName}' allows neither a Map nor a World target "
+                + "(targetTags: " + TagNames(def) + ") — " + mapWhy + "; " + worldWhy);
+        }
+
+        private static string MapTagNames(Map map)
+        {
+            try
+            {
+                var n = new List<string>();
+                foreach (var t in map.IncidentTargetTags()) if (t != null) n.Add(t.defName);
+                return n.Count == 0 ? "no target tags at all (no MapParent)" : string.Join(",", n.ToArray());
+            }
+            catch { return "unreadable target tags"; }
+        }
+
+        // A Map target reads its own wealthWatcher; the World SUMS every map's
+        // (RimWorld.Planet/World.PlayerWealthForStoryteller), so `null` here
+        // means "the target is the world, recount them all". Returns how many
+        // watchers actually recounted, so a caller can see the world path did
+        // more than one. Verse/DebugActionsIncidents.RecalculateThreatPoints is
+        // the single-map original.
+        private static int RecountWealth(Map only)
+        {
+            int n = 0;
+            if (only != null)
+            {
+                try { only.wealthWatcher.ForceRecount(); n++; } catch { }
+                return n;
+            }
+            var maps = Find.Maps;
+            if (maps == null) return 0;
+            for (int i = 0; i < maps.Count; i++)
+            {
+                if (maps[i] == null) continue;
+                try { maps[i].wealthWatcher.ForceRecount(); n++; } catch { }
+            }
+            return n;
         }
 
         private static StorytellerComp MainStorytellerComp()
