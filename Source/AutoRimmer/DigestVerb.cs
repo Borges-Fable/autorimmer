@@ -148,6 +148,25 @@ namespace AutoRimmer
                 ["resources"] = ResourceSection(map),
                 ["power"] = PowerSection(map),
                 ["threats"] = ThreatSection(map),
+                // WHICH WAY THE COLONY IS MOVING (git-bug 2d9a1da). Every other
+                // section here is a LEVEL, and a level is what an alert already
+                // is: `Alert_LowFood` fires AT the threshold, which is the
+                // moment it is too late to plant. This block is the SLOPE — the
+                // colony's `ticks_until_bleedout`, which `61794cd` shipped this
+                // week for one pawn. Half of it is the game's own recorders
+                // (wealth, threat points, mood, population, which RimWorld has
+                // graphed since tick 0 and nothing here had ever read); half is
+                // AutoRimmer's own 2,500-tick sampler, because the game records
+                // no food series at all and food is what a ten-day run dies of.
+                //
+                // It is in the GLANCE for the M1 post-mortem's reason: that run
+                // made 27 advances, 10 digests and zero journal calls, so an
+                // indicator behind a verb the agent must remember to call is an
+                // indicator nobody reads. Cheapest section in the file on
+                // session 19's axis — it reads no game state for its own fields
+                // (the ring is already in memory) and the game's half is plain
+                // field reads over 11 recorders. See ColonySampler.TrendSection.
+                ["trends"] = ColonySampler.TrendSection(map),
                 ["changed"] = ChangedSection(since),
             };
         }
@@ -176,7 +195,7 @@ namespace AutoRimmer
         // Nothing here is being sent to a model.
         internal static readonly string[] PredicateSections =
             { "time", "site", "alerts", "construction", "colonists", "work_coverage",
-              "posture", "resources", "power", "threats" };
+              "posture", "resources", "power", "threats", "trends" };
 
         internal static bool IsPredicateSection(string name)
         {
@@ -214,6 +233,22 @@ namespace AutoRimmer
                 case "resources": return ResourceSection(map);
                 case "power": return PowerSection(map);
                 case "threats": return ThreatSection(map);
+                // The cheapest predicate section there is: arithmetic over a
+                // ring already in memory plus 11 field reads. So
+                // `advance {until:{condition:{path:"trends.food_days_per_day",
+                // op:"<=", value:-1.0}}}` — "stop when the colony starts losing
+                // more than a food-day per day" — is affordable, and it is the
+                // leading indicator this whole surface was missing.
+                //
+                // ONE TRAP, stated where a caller writing a predicate will read
+                // it: `trends.*_to_zero` is NULL whenever the stock is not
+                // falling, and StateWatch.One() refuses an ordering operator
+                // against null — at arm time that is a clean refusal, but
+                // mid-advance Poll returns false and never halts, so an advance
+                // waiting on `food_days_to_zero <= 2` stops halting the moment
+                // food stops falling. Predicates want `*_per_day`, which is
+                // always a number once `trends.ready` is true.
+                case "trends": return ColonySampler.TrendSection(map);
                 default: return null;
             }
         }

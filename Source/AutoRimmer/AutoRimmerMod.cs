@@ -15,6 +15,7 @@ namespace AutoRimmer
                 Poller.Init();
                 Config.Load(Poller.Root);
                 Journal.Init(Poller.Root);
+                ColonySampler.InitLog(Poller.Root);
                 TimeDriver.HookJournal();
                 Log.Message("[AutoRimmer] ready — " + VerbRegistry.Count + " verbs; root=" + Poller.Root);
             }

@@ -58,6 +58,22 @@ namespace AutoRimmer
         // happen while one is running.
         public override void GameComponentTick()
         {
+            // git-bug 2d9a1da. HERE AND NOT IN GameComponentUpdate, and that is
+            // the whole correctness argument for the sampler: this virtual runs
+            // inside DoSingleTick, so it fires once per GAME TICK, whereas
+            // GameComponentUpdate fires once per FRAME including while the game
+            // is paused. Sampling per frame would append identical rows at a
+            // wall-clock rate while the agent sat thinking and flatten every
+            // slope toward zero with data containing no game time. (Verse/
+            // TickManager.DoSingleTick calls Find.History.HistoryTick()
+            // immediately before GameComponentUtility.GameComponentTick(), so a
+            // sample taken here sees a history the game has already updated
+            // this tick.) The method returns on its first line 2,499 ticks out
+            // of every 2,500; it catches its own exceptions, because a throw
+            // from inside the tick loop would be a red error every cadence for
+            // the rest of the run.
+            try { ColonySampler.Tick(); }
+            catch { }
             try { JournalVerbs.TickErrorFixture(); }
             catch { }
             try { JournalVerbs.TickCasualtyFixture(); }
