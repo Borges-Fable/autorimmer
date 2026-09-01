@@ -89,46 +89,99 @@ rotations of an even-sized def.
 
 ---
 
-# SESSION B — the gate's consumers, and `build`. After A merges.
+# SESSION B — the gate's consumers, and `build`
 
-Branch `spec/build-verb`. This is where the round's headline verb lands.
+Branch `spec/build-verb`. Session A is MERGED (`25b65ff`, rebuilt `43e86c7`) and
+had a watched bench pass (`accept/runs/s15-20260901/`). Read that README before
+you start — it lists what is proven and, more usefully, four things that are not.
 
-- **`3a5ff6c`** — `dev:spawn-thing {buildable:true}` (opt-in; the god-hand stays
-  default), `wiped[]` on the default path, `site-audit`, and `dev:starter-kit`
-  passing `mode:"direct"` for buildings. That omission is M1's `placed:0` root
-  cause: `StarterKit` builds `{def, count, stuff, quality, pos, stockpile,
-  forbid}` with no `mode`, so a building goes through `ThingPlaceMode.Near`.
+## What A left you, so you do not rewrite it
 
-- **`build {def, pos, rot, stuff}`** — consumes A's `SiteGate`; does not
-  re-implement it. It lands here, not in its own session, because `1adc737` #7
-  establishes that instant mode IS `dev:spawn-thing {buildable:true}` — the same
-  call, and splitting them means writing it twice against one DLL.
+`Source/AutoRimmer/Siting.cs` and `SiteVerbs.cs` ship the shared routine.
+`site-survey {def, pos|at, rot?, stuff?, margin?}` returns:
+
+- `verdict` — `{ok, source: "GenConstruct.CanPlaceBlueprintAt(godMode:false)", reason}`,
+  the game's own sentence verbatim.
+- `selectable` — `{ok, source: "Designator_Build.Visible", clause, detail}`, a
+  SEPARATE field so "would be refused" and "cannot even be selected" never read
+  alike. All TEN of `Visible`'s clauses ship as branchable tokens.
+- `gate: "site-gate/1"`, `pos`, `rot`, `pos_source`, `rot_source`, `footprint`,
+  `interaction_cells`, `tiers.{footprint,interaction,margin,margin_facts}`, `view`.
+
+**`build` and `dev:spawn-thing {buildable:true}` CONSUME this. Do not
+re-implement any of it.**
+
+## Three inherited decisions — do not relitigate
+
+1. **godMode is published, never honoured.** `Designator_Build.Visible`'s first
+   clause is `if (DebugSettings.godMode) return true;`. `SiteGate` reports the
+   flag and ignores it, because honouring it would make every player verb a
+   god-hand the moment a dev session left it set. Resolved by the orchestrator
+   on `c718e4a` and `1adc737`. **`build` gets no godMode bypass, ever.**
+2. **`rot` defaults diverge per verb, deliberately.** `dev:spawn-thing` stays
+   `Rot4.North`; the siting reads use `def.defaultPlacingRot`. 76 vanilla defs
+   set it non-North, so unifying would silently re-face every building the
+   shipped suites stage.
+3. **Row 0 is north; a rotation suffix is the `Rot4` value verbatim**
+   (`templates/INDEX.md`). Only matters to you if you touch templates.
+
+## Your work
+
+- **`3a5ff6c`** — `buildable:true` (opt-in; god-hand stays default), `wiped[]`,
+  `site-audit`, and `dev:starter-kit` passing `mode:"direct"` for buildings.
+  **Live evidence you are closing a real hole:** on the bench, `site-survey`
+  refused a bench for `InteractionSpotOverlaps` and `dev:spawn-thing --mode
+  direct` **placed it anyway** — two benches on one standing square, nothing in
+  the envelope or journal remarking on it. `GenSpawn.CanSpawnAt` runs no
+  PlaceWorker. See `accept/runs/s15-20260901/evidence/`.
+  **And `wiped[]` is completely unexercised** — every spawn in the pass reported
+  `wiped: null` because nothing placed onto an occupied cell. Stage a wall and
+  place on top of it, or that bullet ships unproven.
+
+- **`build {def, pos, rot, stuff}`** — the round's headline verb. It lands here
+  because `1adc737` #7 establishes instant mode IS `dev:spawn-thing
+  {buildable:true}`: same call, and splitting them means writing it twice
+  against one DLL.
+  **You owe the half A could not test:** `c718e4a`'s acceptance asks that
+  `site-survey`'s verdict and the build verb's refusal be the SAME SENTENCE for
+  the same arguments. A proved survey ≡ `dev:spawn-thing`'s current refusal;
+  assert the `build` half rather than assuming it.
 
 - **`d7c8088`** — the construction read, which `build` is unusable without.
-  Three things to carry:
   - **Completion is an ABSENCE.** A finished build leaves no blueprint and no
-    frame, so `built` and `cancelled` are the same nothing unless the read is
-    keyed on the placement id and the `Frame.CompleteConstruction` /
-    `FailConstruction` transitions are journaled (Harmony postfixes, in
-    `JournalHooks.cs`'s existing read-only idiom).
-  - **Reading material cost can EMIT A RED ERROR**, and every suite counts them.
+    frame, so `built` and `cancelled` are the same nothing unless the read keys
+    on the placement id and `Frame.CompleteConstruction` / `FailConstruction`
+    are journaled (Harmony postfixes, `JournalHooks.cs`'s read-only idiom).
+  - **Reading material cost can EMIT A RED ERROR** and every suite counts them.
     `CostListCalculator.CostListAdjusted` `Log.Error`s on null stuff for a
-    `MadeFromStuff` def; `Frame.ThingCountNeededWithEnroute` twice more. A naive
-    observer turns a clean run red by reading it. The acceptance has a bullet
-    that proves the guard exists — it is not optional.
+    `MadeFromStuff` def; `Frame.ThingCountNeededWithEnroute` twice more. The
+    acceptance has a bullet that proves the guard exists — not optional.
   - `CostListAdjusted` is a memoizing static cache. Acceptable, same ruling as
-    `PlaceWorkers`, and the comment must say why.
+    `PlaceWorkers`; the comment must say why.
 
-- **`0d9cbd7`** — world-fixture chaining. Its verification comment is load-
-  bearing: the audit list in the body is WRONG BY OMISSION, and `open-letter`
-  has the identical defect. Read comment #1 before the body.
+- **`0d9cbd7`** — world-fixture chaining. **Read comment #1 before the body:**
+  the body's audit list is wrong by omission and `open-letter` has the identical
+  defect.
 
-**Done (the round's DONE MEANS):** `build {def, pos, rot, stuff}` places a
-blueprint the game would accept, refuses with the game's own sentence when it
-would not, and the agent can read back whether it stalled, progressed, or
-finished.
+## Two small things from the bench pass, if they are cheap while you are there
 
----
+- **The tolerated chair is not listed.** With a chair on the interaction cell
+  the tier reports `{ok: true, blocker: null, standable: true}` and names no
+  occupant, so an agent cannot tell "a chair is there, which is fine" from "the
+  cell is empty" — and that chair is what the next bench's overlap check trips
+  on. `blocker` is the wrong field (nothing is blocking); the cell wants an
+  `occupants`/`tolerated` list. It is `c718e4a`'s open bullet, but you are in
+  the same tiers. Fix it if trivial, report BLOCKED if it would change the
+  contract.
+- **The rotation search never had to rotate** — open desert took
+  `defaultPlacingRot` everywhere. If you stage a two-deep corridor for anything
+  else, note whether an East candidate appears.
+
+## Done
+
+`build {def, pos, rot, stuff}` places a blueprint the game would accept, refuses
+with the game's own sentence when it would not, and the agent can read back
+whether it stalled, progressed, or finished.
 
 # SESSION C — CUT FROM THIS ROUND
 
