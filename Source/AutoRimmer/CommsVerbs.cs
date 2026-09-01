@@ -248,6 +248,62 @@ namespace AutoRimmer
                         "'" + TargetName(target) + "' is not willing to trade right now");
 
                 OpenSessionUnchecked(ship, negotiator, false);
+
+                // `RimWorld/TradeShip.TryOpenComms` is FOUR statements, not one,
+                // and the third is NOT presentation:
+                //
+                //     Find.WindowStack.Add(new Dialog_Trade(negotiator, this));
+                //     LessonAutoActivator.TeachOpportunity(ConceptDefOf.BuildOrbitalTradeBeacon, ...);
+                //     PawnRelationUtility.Notify_PawnsSeenByPlayer_Letter_Send(
+                //         Goods.OfType<Pawn>(),
+                //         "LetterRelatedPawnsTradeShip".Translate(Faction.OfPlayer.def.pawnsPlural),
+                //         LetterDefOf.NeutralEvent);
+                //     TutorUtility.DoModalDialogIfNotKnown(ConceptDefOf.TradeGoodsMustBeNearBeacon);
+                //
+                // That letter is how the player learns a COLONIST'S RELATIVE is
+                // among the pawns for sale — a fact the agent cannot get any
+                // other way, and a real decision input. Reproduced.
+                // `TradeShip.Goods` is a plain iterator over `things` skipping
+                // `soldPrisoners`, so reading it is safe.
+                // The two TUTOR calls are dropped, and that is deliberate:
+                // `LessonAutoActivator` is a UI nudge, and
+                // `TutorUtility.DoModalDialogIfNotKnown` STACKS A MODAL, which
+                // is precisely what halts every subsequent advance (spec 1.7).
+                var relations = new Dictionary<string, object>
+                {
+                    ["cite"] = "RimWorld/TradeShip.TryOpenComms -> PawnRelationUtility"
+                        + ".Notify_PawnsSeenByPlayer_Letter_Send(Goods.OfType<Pawn>(), ...)",
+                    ["called"] = false,
+                };
+                try
+                {
+                    if (ship is TradeShip tradeShip)
+                    {
+                        var seen = new List<Pawn>();
+                        foreach (var g in tradeShip.Goods) if (g is Pawn gp) seen.Add(gp);
+                        relations["pawns_in_goods"] = seen.Count;
+                        PawnRelationUtility.Notify_PawnsSeenByPlayer_Letter_Send(
+                            seen,
+                            "LetterRelatedPawnsTradeShip".Translate(Faction.OfPlayer.def.pawnsPlural),
+                            LetterDefOf.NeutralEvent);
+                        relations["called"] = true;
+                        relations["note"] = "the game decides internally whether a letter is warranted "
+                            + "(Notify_PawnsSeenByPlayer_Letter returns empty text when no seen pawn "
+                            + "has a colony relative), so `called` is not `a letter was sent` — read "
+                            + "`interactions` for that.";
+                    }
+                    else
+                    {
+                        relations["note"] = "this passing ship is not a TradeShip, so vanilla has no "
+                            + "relations letter to send on this route";
+                    }
+                }
+                catch (Exception e)
+                {
+                    relations["error"] = e.GetType().Name + ": " + Journal.Truncate(e.Message, 160);
+                    Journal.EmitWarning(V + ": the TradeShip relations letter threw: " + e.Message);
+                }
+
                 long tseq = Act(V, "call-trade", TargetName(target), new Dictionary<string, object>
                 {
                     ["target"] = TargetName(target),
@@ -259,11 +315,18 @@ namespace AutoRimmer
                 td["kind"] = "trade";
                 td["negotiator"] = PawnRef(negotiator);
                 td["negotiator_walked"] = false;
+                td["relations_letter"] = relations;
                 td["action"] = Stamp(tseq);
-                td["note"] = "calling a trade ship opens a TRADE, not a dialogue: "
-                    + "RimWorld/TradeShip.TryOpenComms is `Find.WindowStack.Add(new Dialog_Trade("
-                    + "negotiator, this))`. The session is open — use `trade-set` / `trade-confirm` / "
-                    + "`trade-cancel`. No Dialog_Trade was stacked (spec 1.7).";
+                td["note"] = "calling a trade ship opens a TRADE, not a dialogue. "
+                    + "RimWorld/TradeShip.TryOpenComms is four statements: the Dialog_Trade add (NOT "
+                    + "reproduced — a force-pausing window halts every subsequent advance, spec 1.7; "
+                    + "its only model effect, TradeSession.SetupWith, ran here directly), the "
+                    + "BuildOrbitalTradeBeacon lesson and the TradeGoodsMustBeNearBeacon tutorial "
+                    + "modal (both dropped as UI, and the second one would itself stack a modal), and "
+                    + "PawnRelationUtility.Notify_PawnsSeenByPlayer_Letter_Send, which IS reproduced "
+                    + "and is reported under `relations_letter` — it is how you learn a colonist's "
+                    + "relative is among the pawns for sale. The session is open: use `trade-set` / "
+                    + "`trade-confirm` / `trade-cancel`.";
                 return td;
             }
 
