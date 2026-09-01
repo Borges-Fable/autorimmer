@@ -767,9 +767,28 @@ queue by default (an agent flailing mid-experiment must not page triage).
   expire or end anything, and `Quest.Accept` sets `dismissed = false` on its way
   past. An agent that reads it as "we said no" will be wrong, so `quests`,
   `quest` and `quest-dismiss` all carry a `dismissed_means` / `note` string
-  rather than trusting a comment nobody will read. The tab's THIRD state —
-  DELETE, for a Historical quest, which calls `QuestManager.Remove` — is
-  deliberately not reproduced.
+  rather than trusting a comment nobody will read.
+  **The tab's THIRD state is a HIDE, not a delete, and an earlier draft of this
+  entry said the opposite.** `DoDismissButton`'s historical branch is
+  `selected.hiddenInUI = true;` + `SoundDefOf.Tick_High` + `Select(null)` +
+  `return` — `QuestManager.Remove` is never called from that window at all (its
+  only vanilla callers are `Verse/DebugActionsQuests` and
+  `RimWorld/QuestPart_SubquestGenerator`). ONLY THE TOOLTIP KEY SAYS DELETE:
+  `string key = (selected.Historical ? "DeleteQuest" : ...)`. Reading that key
+  as a destructive call is what made `quest-dismiss` refuse historical quests
+  outright; it now reproduces the hide and reports `mode:"hide"`. The hide is
+  ONE-WAY — nothing in the game clears `hiddenInUI` — so the verb refuses
+  `dismissed:false` on a historical quest rather than inventing an un-hide no
+  player has.
+  Two further properties of the same button that a model-side write drops if it
+  is not looking: it is a **TOGGLE** (`selected.dismissed = !selected.dismissed`),
+  so `quest-dismiss` toggles when `dismissed` is omitted and only sets when it is
+  given; and it **PROPAGATES ONE LEVEL** —
+  `foreach (Quest subquest in selected.GetSubquests()) subquest.dismissed =
+  selected.dismissed;`. `QuestUtility.GetSubquests` walks the plain
+  `QuestManager.questsInDisplayOrder` list for `parent == quest` (direct children
+  only, no write-on-read), and writing the parent flag alone leaves a
+  parent/subquest split that no player can reach through the widget.
 
 - 2026-08-31 — **"Cancel leaves the trade untouched" is defined against the
   world, not against the statics, and what opening a session costs is disclosed
@@ -789,8 +808,9 @@ queue by default (an agent flailing mid-experiment must not page triage).
   model effect — `TradeUtility.ReceiveQuestFromTrader` for a quest-giving trader
   pawn — while dropping its sound.
 
-- 2026-08-31 — **`Dialog_NodeTree.InteractiveNow` is WAIVED, deliberately, and
-  it is the only widget gate in this spec that is.** `Dialog_NodeTree.DrawNode`
+- 2026-08-31 — **TWO widget gates in this spec are deliberately WAIVED, and
+  both are named here so neither omission reads as a gap.**
+  **Waiver 1 — `Dialog_NodeTree.InteractiveNow`.** `Dialog_NodeTree.DrawNode`
   calls `curNode.options[i].OptOnGUI(rect3, InteractiveNow)`, and `private bool
   InteractiveNow => Time.realtimeSinceStartup >= makeInteractiveAtTime;` with
   `makeInteractiveAtTime = RealTime.LastRealTime + 1f` under
@@ -800,7 +820,23 @@ queue by default (an agent flailing mid-experiment must not page triage).
   rather than tick-based, and reproducing it would put real-time dependence into
   an otherwise deterministic verb. `ChoiceLetter.OpenLetter` and
   `DeathLetter.OpenLetter` both pass `delayInteractivity: false`, so letters are
-  unaffected either way. Recorded here so the omission is a decision, not a gap.
+  unaffected either way.
+  **Waiver 2 — `dialog-dismiss` closes a window no player could close.**
+  `Verse/Dialog_NodeTree`'s constructor sets `closeOnCancel = false`, and
+  `Verse/Window.OnCancelKeyPressed` closes only `if (closeOnCancel)`. So there is
+  NO PLAYER ROUTE that clears a node tree without pressing one of its options —
+  escape does nothing — and `dialog-dismiss` removes it anyway. The reason it is
+  waived rather than honoured: the spec's Scope requires an esc-equivalent that
+  ALWAYS works against a modded dialog nobody has read, and 1.7 proves an
+  unanswerable force-pausing window halts every subsequent `advance` at 0 ticks.
+  A faithful verb here would leave an unattended run wedged forever, which is the
+  failure this spec exists to prevent. The cost is stated in the verb's own
+  `note` rather than left for the agent to discover: dismissing a
+  `ChoiceLetter_*` node tree without choosing SKIPS the option's `action`, and
+  that closure is where `LetterStack.RemoveLetter` lives — so the LETTER SURVIVES
+  the dismissal and can re-open and re-wedge the run. `dialog-dismiss` is the
+  last resort; `letter-choose` / `dialog-choose` answer the decision.
+  Recorded here so the omissions are decisions, not gaps.
 
 - 2026-08-31 — **Where a vanilla option's `action` closure mixes a model effect
   with presentation, the presentation is REVERTED by a window diff rather than
