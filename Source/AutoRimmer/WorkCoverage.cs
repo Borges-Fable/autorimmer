@@ -311,9 +311,28 @@ namespace AutoRimmer
             var under = new List<object>();
             var list = new List<object>();
             int dropped = 0;
+            // ======================= git-bug 9b179ef ========================
+            // TWO PASSES, BECAUSE `order` HAS ALWAYS CLAIMED TWO. The block
+            // published "under-first, then natural-priority-desc" while making
+            // ONE pass over the natural-priority-sorted list and appending
+            // under-rows inline, wherever they fell. On the s21 bench the only
+            // under-covered row (Doctor, naturalPriority 1300) came back at
+            // index 1, behind Firefighter (1400) — which is fine — so a caller
+            // trusting the string read `rows[0]` as the worst problem and got a
+            // work type with nothing wrong with it.
+            //
+            // Fixed by sorting the data rather than rewording the string:
+            // under-first is the more useful order for this block's reader, the
+            // cap already promises never to drop an under-covered row, and a
+            // caller that walks `rows` now gets the right answer without having
+            // to consult `under` at all. `rows` arrives natural-priority-desc
+            // from EssentialTypes(), so each pass preserves that order within
+            // its own group and the second clause of the string stays true too.
+            //
+            // PASS 1 — every under-covered row, and none of them can be dropped.
             foreach (var r in rows)
             {
-                if (r.Under)
+                if (!r.Under) continue;
                 {
                     under.Add(r.Def.defName);
                     var d = new Dictionary<string, object>
@@ -357,9 +376,18 @@ namespace AutoRimmer
                     // colony a caller can act on.
                     d["enabled_but_incapable"] = imp;
                     list.Add(d);
-                    continue;
                 }
-                if (list.Count - under.Count >= RowCap) { dropped++; continue; }
+            }
+            // PASS 2 — the covered rows, same order, and the ONLY rows the cap
+            // can eat. `fine` counts them directly instead of the old
+            // `list.Count - under.Count`, which only worked because the two
+            // groups were interleaved in one pass.
+            int fine = 0;
+            foreach (var r in rows)
+            {
+                if (r.Under) continue;
+                if (fine >= RowCap) { dropped++; continue; }
+                fine++;
                 list.Add(new Dictionary<string, object>
                 {
                     ["work"] = r.Def.defName,

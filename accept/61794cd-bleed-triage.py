@@ -202,6 +202,50 @@ UNDER_ROW_KEYS = ["work", "floor", "floor_on", "floor_by", "have", "short_by",
                   "capable", "enabled", "available", "available_pawns", "candidates",
                   "enabled_but_incapable"]
 
+# ------------------------------------------------------ work_coverage.order --
+# git-bug 9b179ef. `work_coverage.order` is prose shipped INSIDE the envelope,
+# which makes it read as authoritative, and it described an ordering the rows
+# did not have: the block said "under-first" while `WorkCoverage.Section` made
+# ONE pass over the natural-priority-sorted list and appended under-rows inline.
+#
+# THE CHECK KEYS ON THE STRING, NOT ON EITHER ORDERING. The issue offered two
+# fixes — sort the rows, or reword the string — and a suite that asserted
+# "under row at index 0" would have gone red on the second while proving nothing
+# about the first. So `order_claim()` reads what the block SAYS and
+# `order_agrees()` asks whether the rows do that. Rewording the string to
+# something this function does not recognise fails 3.7a rather than sliding
+# past, which is the property the acceptance bullet actually wants.
+
+
+def order_claim(order_str):
+    """What `work_coverage.order` claims about `rows`: 'under-first', 'inline',
+    or None for a string this suite cannot check."""
+    if not isinstance(order_str, str) or not order_str.strip():
+        return None
+    low = order_str.lower()
+    if low.startswith("under-first"):
+        return "under-first"
+    if "inline" in low or "wherever" in low:
+        return "inline"
+    return None
+
+
+def order_agrees(order_str, rows, under_names):
+    """(agrees, detail) — whether `rows` is in the order `order_str` claims."""
+    claim = order_claim(order_str)
+    names = [r.get("work") for r in rows if isinstance(r, dict)]
+    u = [i for i, n in enumerate(names) if n in under_names]
+    f = [i for i, n in enumerate(names) if n not in under_names]
+    detail = {"claim": claim, "under_idx": u, "fine_idx": f, "rows": names}
+    if claim == "under-first":
+        return (not u or not f or max(u) < min(f)), detail
+    if claim == "inline":
+        # The block explicitly does NOT claim a partition, so there is nothing
+        # to check here beyond `under` itself — 3.7c does that.
+        return True, detail
+    return False, detail
+
+
 # PawnSerializer.HediffCap. Phase 9 re-parses it from the source.
 HEDIFF_CAP = 20
 # WorkCoverage.DoctorFloor and WorkCoverage.RowCap. Same.
@@ -1355,21 +1399,57 @@ def phase3():
         eq("3.6a", "nothing was dropped, as the arithmetic requires", e,
            "data.work_coverage.more", 0)
 
-    # ---- FINDING: `order` describes an order the rows are not in ------------
-    if not ARGS.dry_run and under and rows:
-        first_under = next((i for i, r in enumerate(rows)
-                            if isinstance(r, dict) and r.get("work") in under), None)
-        if first_under not in (None, 0):
-            finding("3.7", "digest.work_coverage.order says %r, but the first "
-                           "UNDER row is at index %d: WorkCoverage.Section emits "
-                           "rows in ONE pass over the natural-priority-sorted "
-                           "list and appends under-rows inline, so the real order "
-                           "is natural-priority-desc with under rows wherever "
-                           "they fall. A caller trusting the string would read "
-                           "rows[0] as the worst problem; here rows[0] is %r and "
-                           "is fine. Filed on 40ed42f."
-                    % (dig(e, "data.work_coverage.order"), first_under,
-                       rows[0].get("work")))
+    # ---- `order` DESCRIBES THE ROWS — git-bug 9b179ef, was FINDING 3.7 ------
+    # Promoted from a FINDING to a check because the defect is fixed. It was a
+    # finding while it was a live defect, deliberately: a suite that goes
+    # permanently red over a metadata string teaches the next session to ignore
+    # its own colour. That argument stops applying the moment the thing is
+    # repaired, and leaving it as a finding would then be the suite declining to
+    # protect its own fix.
+    S["d_under"] = e
+    if not ARGS.dry_run and rows:
+        order_str = dig(e, "data.work_coverage.order")
+        claim = order_claim(order_str)
+        check("3.7a", "`order` makes a claim this suite can CHECK — a string "
+                      "shipped inside the envelope reads as authoritative, so a "
+                      "reword has to say something falsifiable rather than "
+                      "something vague",
+              claim is not None,
+              "a string starting 'under-first…' or naming the inline order",
+              order_str)
+        agrees, detail = order_agrees(order_str, rows, under)
+        check("3.7b", "…and the ROWS are in the order it claims. THE ASSERTION "
+                      "IS THE AGREEMENT, not either ordering: 9b179ef offered "
+                      "'sort the rows' or 'reword the string' and this check "
+                      "survives whichever was chosen",
+              agrees, "rows matching order=%r" % order_str, detail)
+        # …and the headline list is still exactly the under rows, in row order,
+        # so a caller can keep using the cheap route.
+        row_under = [r.get("work") for r in rows
+                     if isinstance(r, dict) and r.get("work") in under]
+        eq_val("3.7c", "…and `under` lists exactly the under-covered rows, in "
+                       "the order `rows` puts them", row_under, list(under))
+        # TWO under-covered types would distinguish "under-first" from "the one
+        # under row happened to sort first". It is NOT stageable: every floor but
+        # Doctor's is on CAPABILITY (`!WorkTypeIsDisabled`), which is backstory
+        # and trait driven, and no shipped `dev:` verb sets it — see 5.6, which
+        # gets the same discrimination a different way.
+        if len(under) >= 2:
+            u = [i for i, r in enumerate(rows)
+                 if isinstance(r, dict) and r.get("work") in under]
+            check("3.7d", "…with TWO under-covered types, so `under-first` is "
+                          "not a coincidence of one row's natural priority",
+                  claim != "under-first" or u == list(range(len(under))),
+                  "the under rows occupying indices 0..%d" % (len(under) - 1),
+                  {"under": list(under), "under_idx": u})
+        else:
+            note("3.7d", "only %d work type is under its floor on this bench, so "
+                         "the two-under-types discrimination could not be staged "
+                         "HERE. It is not a fixture oversight: every floor but "
+                         "Doctor's is on CAPABILITY (`!WorkTypeIsDisabled`), "
+                         "which no shipped verb can set. 5.6 makes the same "
+                         "discrimination from two reads of ONE type instead."
+                 % len(under))
 
 
 # ------------------------------------------------------------------- phase 4 --
@@ -1580,6 +1660,81 @@ def phase5():
               DOCTOR not in as_list(dig(e2, "data.work_coverage.under")),
               "Doctor absent from the digest's own `under`",
               dig(e2, "data.work_coverage.under"))
+        # 58794e4's first acceptance bullet, in the only form that can be
+        # asserted: the dry run's PROJECTION and the real run's MEASUREMENT of
+        # the same repair must be the same answer. One is computed, one is read
+        # back off the map, and before the fix they disagreed on every field.
+        eq_val("5.3i", "…and the DRY RUN's projection matched this measurement: "
+                       "same verdict, same `under`, one computed and one read "
+                       "back off the map",
+               (dig(S["cover_dry"], "data.coverage_after.ok"),
+                as_list(dig(S["cover_dry"], "data.coverage_after.under"))),
+               (dig(e, "data.coverage_after.ok"),
+                as_list(dig(e, "data.coverage_after.under"))))
+
+        # ---- 9b179ef's coincidence-killer, from TWO READS OF ONE TYPE -------
+        # The acceptance asks for two under-covered types so that "under-first"
+        # cannot be one row's natural priority in disguise. That is not
+        # stageable (3.7d's note: every floor but Doctor's is on CAPABILITY and
+        # no shipped verb sets it). This is the same discrimination taken from
+        # the other axis — one work type, two reads, its own coverage the only
+        # thing that changed:
+        #
+        #   phase 3's digest — Doctor UNDER  -> where does it sit?
+        #   this digest      — Doctor FINE   -> where does it sit NATURALLY?
+        #
+        # If the second index is > 0 and the first is 0, the row was moved past
+        # a covered row of higher natural priority BECAUSE it was under, which
+        # is exactly what a second under row would have shown. Doctor's natural
+        # priority is 1300 and Firefighter's is 1400, which is why the banked
+        # s21 digest had the only under row at index 1.
+        prev = S.get("d_under")
+        now_rows = [r.get("work") for r in
+                    as_list(dig(e2, "data.work_coverage.rows"))
+                    if isinstance(r, dict)]
+        now_under = as_list(dig(e2, "data.work_coverage.under"))
+        if prev is not None and DOCTOR in now_rows and DOCTOR not in now_under:
+            prev_rows = [r.get("work") for r in
+                         as_list(dig(prev, "data.work_coverage.rows"))
+                         if isinstance(r, dict)]
+            prev_under = as_list(dig(prev, "data.work_coverage.under"))
+            nat = now_rows.index(DOCTOR)
+            check("5.6a", "with Doctor COVERED its natural-priority slot is not "
+                          "the front of the list — which is what makes 5.6b "
+                          "mean anything",
+                  nat > 0, "Doctor at index > 0 when it is fine",
+                  {"rows": now_rows, "doctor_at": nat})
+            check("5.6b", "…and when it was UNDER it was at index 0: the row was "
+                          "moved PAST a covered row of higher natural priority "
+                          "because it was under-covered, not because it sorts "
+                          "first. That is 9b179ef's two-under-types "
+                          "discrimination taken from two reads of one type",
+                  order_claim(dig(prev, "data.work_coverage.order"))
+                  != "under-first"
+                  or (DOCTOR in prev_rows[:max(1, len(prev_under))]),
+                  "Doctor inside the first %s row(s) — the under-covered block "
+                  "— of the earlier read" % max(1, len(prev_under)),
+                  {"under_read": prev_rows[:4], "under": prev_under,
+                   "fine_read": now_rows[:4]})
+            # …and the SECOND clause of the string, checked without the suite
+            # ever needing to know a natural priority: strip the under rows out
+            # of the earlier read and what is left must be in the same relative
+            # order as the all-covered read.
+            prev_fine = [w for w in prev_rows if w not in prev_under]
+            # Compared over the INTERSECTION in each read's own order, so a work
+            # type present in one listing and not the other (a cap that fired,
+            # a type that changed state between the reads) cannot fail this for
+            # a reason that is not about ordering.
+            got = [w for w in prev_fine if w in now_rows]
+            expect = [w for w in now_rows if w in prev_fine]
+            eq_val("5.6c", "…and 'then natural-priority-desc' holds too: the "
+                           "covered rows of the under-covered read are in the "
+                           "same relative order as the read where nothing was "
+                           "under", got, expect)
+        else:
+            note("5.6", "Doctor is not a covered row in this digest (under=%s), "
+                        "so its natural-priority slot could not be read and the "
+                        "ordering cross-check did not run." % (now_under,))
 
     e3 = journal_since(seq_before, types=["action"])
     acts = [a for a in as_list(dig(e3, "data.events"))
@@ -2551,6 +2706,37 @@ def phase9():
                                              "data.health.bleedout", BLEEDOUT_KEYS)),
               "fail", "pass")
 
+        # 9.3d-9.3h ORDER_AGREES(), which is the check 3.7b leans on entirely.
+        # It reads a STRING and validates DATA against it, so it has two ways to
+        # be useless — pass everything, or pass anything once the string is
+        # reworded — and both are demonstrated here rather than trusted.
+        UF = "under-first, then natural-priority-desc"
+        good = [{"work": "Doctor"}, {"work": "Firefighter"}, {"work": "Warden"}]
+        bad = [{"work": "Firefighter"}, {"work": "Doctor"}, {"work": "Warden"}]
+        eq_val("9.3d", "order_agrees() PASSES when the under row leads and the "
+                       "string says under-first",
+               order_agrees(UF, good, ["Doctor"])[0], True)
+        eq_val("9.3e", "…and FAILS on the shape 9b179ef was filed for: same "
+                       "string, under row at index 1",
+               order_agrees(UF, bad, ["Doctor"])[0], False)
+        eq_val("9.3f", "…and PASSES that same data if the string is reworded to "
+                       "describe it, which is why 3.7b asserts the AGREEMENT "
+                       "rather than either ordering",
+               order_agrees("natural-priority-desc, under rows inline",
+                            bad, ["Doctor"])[0], True)
+        eq_val("9.3g", "…and REFUSES a string it cannot check, so a vague "
+                       "reword fails 3.7a instead of sliding past",
+               order_agrees("rows, in an order", bad, ["Doctor"])[0], False)
+        eq_val("9.3h", "…and holds with TWO under rows, which is the "
+                       "discrimination 9b179ef asks for and no bench can stage",
+               (order_agrees(UF, [{"work": "Doctor"}, {"work": "Warden"},
+                                  {"work": "Firefighter"}],
+                             ["Doctor", "Warden"])[0],
+                order_agrees(UF, [{"work": "Doctor"}, {"work": "Firefighter"},
+                                  {"work": "Warden"}],
+                             ["Doctor", "Warden"])[0]),
+               (True, False))
+
         # 9.4 THE WIDGET GATE, against all four banked reads.
         for tag, env, want in (("9.4a", healthy, False),
                                ("9.4b", bleeding, True),
@@ -2620,14 +2806,21 @@ def phase9():
                sorted({r.get("floor") for r in wrows if r.get("work") != DOCTOR}), [1])
         eq_val("9.6e", "…and nothing was dropped, so 3.5a's invariant holds "
                        "vacuously on this read", wc.get("more"), 0)
-        # THE FINDING, measured on the banked envelope so it cannot be argued
-        # away: the published `order` is not the order the rows are in.
+        # THE DEFECT, PRESERVED. This envelope was banked from assembly
+        # `1.0.0+52606d1`, BEFORE 9b179ef was fixed, and it is kept as the
+        # evidence the fix exists for rather than rewritten. Its `order` claims
+        # under-first and its only UNDER row is at index 1, behind Firefighter.
+        # 3.7b asserts the fixed behaviour LIVE; this asserts that the artifact
+        # the issue was filed from really did show what the issue says.
         fu = next((i for i, r in enumerate(wrows)
                    if r.get("work") in as_list(wc.get("under"))), None)
-        check("9.6f", "the FINDING at 3.7 is real on the banked envelope: `order` "
-                      "claims under-first and the only UNDER row is at index %s"
-                      % fu, fu != 0,
-              "the under row NOT at index 0, contradicting `order`", fu)
+        agrees, detail = order_agrees(wc.get("order"), wrows,
+                                      as_list(wc.get("under")))
+        check("9.6f", "the banked PRE-FIX envelope shows 9b179ef exactly as "
+                      "filed: `order` claims under-first and the only UNDER row "
+                      "is at index %s" % fu,
+              fu != 0 and not agrees,
+              "the under row NOT at index 0, contradicting `order`", detail)
 
     # ---- 9.6b the triage/work-cover half of the smoke ----------------------
     tri_nobed = _s21("18-triage-downed.json")
@@ -2775,6 +2968,31 @@ def phase9():
               "the assignment present and not guarded by "
               "`if (r.Impaired.Count > 0)`",
               "guard still present" if guard else "assignment missing")
+        # git-bug 9b179ef: the ordering is TWO passes, and the single-pass
+        # marker is gone. `list.Count - under.Count` only ever made sense while
+        # the two groups were interleaved, so its presence is the regression.
+        # Looked for as CODE — a line that STARTS with the `if` — because the
+        # source comment recording this fix quotes the old expression verbatim,
+        # and a substring search would read its own changelog as a regression.
+        # Same trap as 9.8d's.
+        onepass = re.search(r"^\s*if \(list\.Count - under\.Count", src, re.M)
+        check("9.8e", "…and `rows` is built in TWO passes, under-covered first, "
+                      "which is what `order` has always claimed",
+              not onepass
+              and bool(re.search(r"^\s*if \(!r\.Under\) continue;", src, re.M))
+              and bool(re.search(r"^\s*if \(r\.Under\) continue;", src, re.M)),
+              "an under-only pass and a covered-only pass, and no "
+              "`list.Count - under.Count` cap arithmetic",
+              "single-pass cap arithmetic still present" if onepass
+              else "a pass is missing")
+        # git-bug 58794e4: the projection exists and the digest does not use it.
+        check("9.8f", "…and Section takes a PROJECTION overload, while the "
+                      "no-argument form — the one the digest calls — still means "
+                      "'the coverage as it stands'",
+              "Section(Map map) => Section(map, null)" in src
+              and "private static void Project(" in src,
+              "Section(map) delegating to Section(map, null), plus Project()",
+              None)
 
     src = _src("TriageVerbs.cs")
     if src is None:
