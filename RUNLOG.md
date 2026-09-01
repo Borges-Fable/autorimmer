@@ -2133,8 +2133,10 @@ CLOSED — never launched this session. `autostart.rws` untouched.
 ## Session 11 — 2026-08-31 (dorian's Linux box). PROVE IT; ledger `65b03c2`
 
 Fable orchestrator, opus agents. The round the acceptance suites finally RAN.
-Six agents; six merges; **502 checks executed against a live bench, where the
-project's lifetime total had been zero.**
+Seven agents; seven merges; **502 checks on the first pass and 884 across the
+session, against a live bench, where the project's lifetime total had been zero.**
+**FIVE SUITES FINISHED GREEN** — 3.4 (159/159), 4087644 (100/100), 8b0b88f
+(123/123), 70ac258 (99/99), 3.6 (116/116). Only 3.5's trade phase is outstanding.
 
 **Evan locked the play run mid-session** — "the actually play part needs to be
 locked, do everything but step 3, you can run the game to test or whatever, just
@@ -2171,7 +2173,7 @@ Logs committed at `accept/runs/s11-20260831/` (`8e6cedb`).
 | `3.6-bills-storage` | **116/116**, exit 0 | — |
 | `4087644-order-honesty` | 92/97 | **100/100**, exit 0 |
 | `8b0b88f-already-designated` (new) | 121/123 | **123/123**, exit 0 |
-| `3.4-pawn-orders` | 147/150 | re-run after repair |
+| `3.4-pawn-orders` | 147/150 | **159/159**, exit 0 |
 | `3.5-dialog-verbs` | 48 pass, 0 fail, exit 2 | 104 pass, 0 fail; then 79/86 in phase 3 |
 
 **Zero red errors in every suite that asserted on them**, across every run.
