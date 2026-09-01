@@ -1654,6 +1654,287 @@ def cmd_render(opts, root, tokens):
     return emit(env, opts)
 
 
+# --- place-layout: the IR half of spec 3.3 ------------------------------------
+
+ROT_WORDS = ("North", "East", "South", "West")
+
+
+def ir_tokens(ir, layers=None, with_terrain=True):
+    """Every non-empty cell of an IR, as (grid, row, col, token).
+
+    `grid` is "layer:<n>" or "terrain". Row 0 is NORTH (baseviz/ir.py's
+    docstring, templates/INDEX.md pin 0, pinned 2026-09-01) and the canonical
+    height comes from `size` rather than from each grid's own row count, so a
+    terrain grid with a stray row cannot slide relative to the layer above it.
+    """
+    out = []
+    grids = []
+    for n, layer in enumerate(ir.get("layers") or []):
+        if layers is None or n in layers:
+            grids.append((f"layer:{n}", layer))
+    if with_terrain and ir.get("terrain"):
+        grids.append(("terrain", ir["terrain"]))
+    for name, grid in grids:
+        for r, row in enumerate(grid):
+            for c, tok in enumerate(row):
+                tok = (tok or "").strip()
+                if tok and tok != ".":
+                    out.append((name, r, c, tok))
+    return out
+
+
+def split_token(tok):
+    """`Bed_South` -> ("Bed", "South"); `Wall` -> ("Wall", None).
+
+    ONLY the four Rot4 words are a suffix. templates/INDEX.md pin 2: a rotation
+    suffix is the **Rot4 value verbatim**, not a description of which way the
+    thing faces — wording that was tightened only after `FueledStove_South`
+    shipped with its interaction cell inside a wall.
+
+    Nothing else is stripped, and that is deliberate. `ir.py`'s docstring offers
+    `Wall_WoodLog` as an example token because a KCSG export encodes material in
+    the name; our own corpus does not (INDEX.md: "tokens are bare defNames …
+    material is bound at placement via --stuff-map"). Guessing which underscore
+    is a material needs the def database, which lives on the other side of the
+    bridge — so a stuff-suffixed token goes over verbatim and the MOD refuses it
+    by name ("no ThingDef or TerrainDef named 'Wall_WoodLog'"), which is a true
+    sentence a person can act on. A silent split would invent a def.
+    """
+    if "_" in tok:
+        head, _, tail = tok.rpartition("_")
+        if head and tail in ROT_WORDS:
+            return head, tail
+    return tok, None
+
+
+def ir_elements(ir, origin, layers=None, with_terrain=True):
+    """The IR, resolved against an origin, as the mod's `elements` payload.
+
+    `origin` is the layout's SOUTH-WEST corner — the same corner `find-rect`
+    returns as `at` and `[x,z,w,h]` carries as `x,z`, so `rwa find-rect --w 5
+    --h 7` and `rwa place-layout … --origin <its at>` name the same ground.
+
+    Each element's `at` is the footprint's NORTH-WEST cell (INDEX.md pin 1: the
+    token sits there, remaining cells `.`). The mod converts north-west to
+    south-west to the game's placement CENTRE, because that conversion needs the
+    def's ROTATED size — `AdjustForRotation`'s axis swap — and the def database
+    is not on this side of the bridge.
+    """
+    ox, oz = origin
+    _w, h = ir.get("size") or [0, 0]
+    els = []
+    for grid, r, c, tok in ir_tokens(ir, layers, with_terrain):
+        defname, rot = split_token(tok)
+        el = {"def": defname, "at": [ox + c, oz + (h - 1 - r)],
+              "label": f"{grid}[{r},{c}] {tok}"}
+        if rot:
+            el["rot"] = rot
+        els.append(el)
+    return els
+
+
+def ir_roof_cells(ir, origin):
+    ox, oz = origin
+    _w, h = ir.get("size") or [0, 0]
+    cells = []
+    for r, row in enumerate(ir.get("roof") or []):
+        for c, v in enumerate(row):
+            if v:
+                cells.append([ox + c, oz + (h - 1 - r)])
+    return cells
+
+
+def cmd_place_layout(opts, root, tokens):
+    """`rwa place-layout <file.ir.json> --origin x,z` — spec 3.3's CLI surface.
+
+    THE SPLIT THIS COMMAND EXISTS TO HOLD (git-bug 1adc737 #13, DESIGN
+    2026-09-01): the mod never sees a file path or a token grid. This reads the
+    IR with `baseviz/ir.py` — the module that already IS the dialect — and sends
+    ONE `place-layout` call carrying a resolved list of `{def, at, rot?}`.
+
+    One call and not N `build` calls, which is the whole reason the payload
+    looks like this: "preflight every cell, place nothing on any failure" cannot
+    hold across N transactions, and a half-built room is exactly what the
+    invariant exists to prevent.
+
+    Why not a C# IR reader: `ir.py` is the one parser (a second would drift, and
+    its own docstring already records where XML -> IR is lossy), the file half
+    of the bridge never touches Verse, and a path the GAME must resolve is
+    machine-dependent — on BORGES the client and the bench are different trees,
+    while a resolved payload cannot mean two things.
+    """
+    known = {"--origin": 1, "--mode": 1, "--stuff": 1, "--stuff-map": 1,
+             "--strict-stuff": 0, "--partial": 0, "--dry-run": 0, "--name": 1,
+             "--layer": 1, "--no-terrain": 0, "--roof": 0,
+             "--print-payload": 0, "--save-payload": 1}
+    words, flags = split_words(tokens)
+    _, mine = parse_op_args(flags, known)
+    if not words:
+        die("usage: rwa place-layout <file.ir.json> --origin x,z "
+            "[--mode blueprint|instant]")
+    if len(words) > 1:
+        die(f"rwa place-layout takes one layout file (got {len(words)}: {' '.join(words)})")
+    path = Path(words[0])
+
+    origin_txt = one(mine, "--origin")
+    if not origin_txt:
+        die("rwa place-layout needs --origin x,z — the layout's SOUTH-WEST corner, "
+            "the same corner find-rect returns as `at`")
+    parts = [p for p in re.split(r"[,\s]+", origin_txt.strip()) if p]
+    if len(parts) != 2 or not all(re.fullmatch(r"-?\d+", p) for p in parts):
+        die(f"--origin must be x,z (two integers); got {origin_txt!r}")
+    origin = [int(parts[0]), int(parts[1])]
+
+    mode = one(mine, "--mode") or "blueprint"
+    if mode not in ("blueprint", "instant"):
+        die(f"--mode must be blueprint or instant; got {mode!r}")
+
+    layers = None
+    if mine.get("--layer"):
+        try:
+            layers = {int(v) for v in mine["--layer"]}
+        except ValueError:
+            die("--layer takes a layer index (repeat it for several)")
+
+    # baseviz is imported lazily and by module — this file has a `render()` of
+    # its own, and the shadowing rule cmd_render documents applies here too.
+    sys.path.insert(0, str(REPO))
+    try:
+        from baseviz import ir as bvir
+    except ImportError as e:
+        return emit(envelope("rwa:place-layout", False, code="rwa-layout-no-baseviz",
+                             detail=f"cannot import the vendored baseviz package "
+                                    f"from {REPO}: {e}"), opts)
+
+    try:
+        ir = bvir.parse_xml(path) if path.suffix.lower() == ".xml" else bvir.load_ir(path)
+    except (OSError, ValueError, KeyError) as e:
+        return emit(envelope("rwa:place-layout", False, code=E_IO,
+                             detail=f"cannot read layout {path}: {e}"), opts)
+
+    size = ir.get("size") or [0, 0]
+    if len(size) != 2 or size[0] < 1 or size[1] < 1:
+        return emit(envelope("rwa:place-layout", False, code=E_USAGE, detail=(
+            f"{path} has size {size!r}; ir.py derives size from row lengths, so an "
+            "empty or ragged grid produces one that cannot be placed")), opts)
+
+    elements = ir_elements(ir, origin, layers, not mine.get("--no-terrain"))
+    if not elements:
+        return emit(envelope("rwa:place-layout", False, code=E_USAGE, detail=(
+            f"{path} expanded to zero elements — every cell is '.' or the "
+            "--layer selection matched nothing")), opts)
+
+    # --stuff-map first, --stuff KEY=DEF over the top. `*` is the default for
+    # every MadeFromStuff def the map does not name; an element's own `stuff`
+    # beats both. templates/INDEX.md: tokens are bare defNames and material is
+    # bound HERE, which is why the map is a placement argument and not IR.
+    stuff_map = {}
+    raw_map = one(mine, "--stuff-map")
+    if raw_map:
+        if raw_map.startswith("@"):
+            try:
+                raw_map = Path(raw_map[1:]).read_text()
+            except OSError as e:
+                die(f"--stuff-map @file: {e}")
+        try:
+            blob = json.loads(raw_map)
+        except ValueError as e:
+            die(f"--stuff-map is not JSON ({e})")
+        if not isinstance(blob, dict):
+            die("--stuff-map must be a JSON object of defName -> stuff defName")
+        stuff_map.update(blob)
+    for pair in mine.get("--stuff") or []:
+        if "=" not in pair:
+            die(f"--stuff takes DEF=STUFF (or *=STUFF); got {pair!r}")
+        k, v = pair.split("=", 1)
+        stuff_map[k.strip()] = v.strip()
+
+    args = {
+        "elements": elements,
+        "origin": origin,
+        "size": size,
+        "mode": mode,
+        "name": one(mine, "--name") or ir.get("defName") or path.stem,
+    }
+    if stuff_map:
+        args["stuff_map"] = stuff_map
+    if mine.get("--strict-stuff"):
+        args["strict_stuff"] = True
+    if mine.get("--partial"):
+        args["partial"] = True
+    if mine.get("--dry-run"):
+        args["dry_run"] = True
+
+    roof_cells = ir_roof_cells(ir, origin)
+    if one(mine, "--save-payload"):
+        try:
+            Path(one(mine, "--save-payload")).write_text(json.dumps(args, indent=2))
+        except OSError as e:
+            warn(f"--save-payload failed: {e}")
+    if mine.get("--print-payload"):
+        # Offline, deliberately: the payload is a pure function of (IR, origin,
+        # stuff-map), so it can be reviewed with no bench running at all — the
+        # same argument `render --dump` makes for a saved dump.
+        print(json.dumps(args, indent=2))
+        return EXIT_OK
+
+    if root is None:
+        return emit(envelope("rwa:place-layout", False, code=E_NO_ROOT, detail=(
+            "no AutoRimmer protocol root found, so there is no bench to place on. "
+            "Set RWA_ROOT or pass --root — or expand the layout offline with "
+            "--print-payload / --save-payload.")), opts)
+
+    h = health(root, float(opts.get("--stale-secs") or STALE_SECS),
+               float(opts.get("--fps-floor") or FPS_FLOOR))
+    t = open_transcript(opts, root, h)
+    env = send(root, "place-layout", args, opts, h, t)
+
+    data = env.get("data") or {}
+    # THE ROOF GRID IS NOT PART OF THE TRANSACTION, and it is not dropped
+    # either. A roof is a DESIGNATION, not a placement (git-bug 1adc737 #8):
+    # `area {kind:"build-roof"}` is the shipped verb, and an enclosed player
+    # room of <=26 regions and <=320 cells roofs ITSELF via
+    # AutoBuildRoofAreaSetter.TryGenerateAreaNow — 49 cells for a 7x7 module and
+    # 35 for the 5x7 rehearsal, so both qualify and the designation is usually
+    # redundant. --roof sends it anyway, as a SECOND call, which is what it is.
+    roof_env = None
+    if roof_cells and mine.get("--roof") and env.get("ok") and not mine.get("--dry-run"):
+        roof_env = send(root, "area", {"kind": "build-roof", "op": "add",
+                                       "cells": roof_cells}, opts, h, t)
+
+    if not want_json(opts):
+        pre = data.get("preflight") or {}
+        lines = [
+            f"{path.name} -> {len(elements)} elements  mode {mode}  "
+            f"origin {origin[0]},{origin[1]}  size {size[0]}x{size[1]}",
+            f"  preflight {'ok' if pre.get('ok') else 'FAILED'}  "
+            f"checked {pre.get('checked')}  failed {pre.get('failed')}",
+        ]
+        for row in (pre.get("failures") or [])[:8]:
+            lines.append(f"    x {row.get('def')} at {row.get('at')}: {row.get('reason')}")
+        for row in (pre.get("self_conflicts") or [])[:8]:
+            lines.append(f"    ! {row.get('def')} vs {row.get('with_def')}: {row.get('reason')}")
+        lines.append(f"  placed {data.get('placed_count')}  "
+                     f"layout {data.get('layout_id')}  "
+                     f"rolled_back {data.get('rolled_back')}")
+        for row in (data.get("shortfall") or [])[:8]:
+            lines.append(f"    short {row.get('def')}: need {row.get('needed')}, "
+                         f"stockpiled {row.get('in_stockpiles')}")
+        if roof_cells:
+            lines.append(f"  roof grid: {len(roof_cells)} cells "
+                         + ("designated (second call, outside the transaction)"
+                            if roof_env else
+                            "NOT sent — a roof is a designation, not a placement. "
+                            "--roof sends `area build-roof`; an enclosed room "
+                            "<=320 cells roofs itself next tick anyway."))
+        if roof_env is not None and not roof_env.get("ok"):
+            lines.append(f"  roof call FAILED: {(roof_env.get('error') or {}).get('detail')}")
+        code = env_exit(env)
+        emit(env, opts, pretty_body="\n".join(lines))
+        return code
+    return emit(env, opts)
+
+
 USAGE = """rwa — drive an AutoRimmer bench over the file protocol.
 
   rwa <op> [--arg value …]      send any op the mod knows (ping, digest, advance,
@@ -1675,6 +1956,17 @@ USAGE = """rwa — drive an AutoRimmer bench over the file protocol.
                             the PNG channel: draws a map-dump. --dump renders an
                             already-saved dump offline, with no bench at all.
                             Colours need the catalog — `rwa catalog-dump` writes it.
+  rwa place-layout <file.ir.json|.xml> --origin x,z [--mode blueprint|instant]
+                            [--stuff DEF=STUFF …] [--stuff-map JSON|@file]
+                            [--strict-stuff] [--partial] [--dry-run] [--name N]
+                            [--layer N …] [--no-terrain] [--roof]
+                            [--print-payload] [--save-payload FILE]
+                            expands a baseviz IR with baseviz/ir.py and sends ONE
+                            place-layout call. --origin is the layout's SOUTH-WEST
+                            corner (find-rect's `at`); row 0 of the grid is NORTH.
+                            The whole layout is preflighted before anything is
+                            placed; without --partial a single refusal places
+                            nothing. --print-payload resolves it offline.
 
 Op arguments:
   --key value      type guessed: true/false/null, a number, else a string
@@ -1763,16 +2055,25 @@ def main(argv):
 CLIENT_COMMANDS.update({
     "status": cmd_status, "journal": cmd_journal, "tail": cmd_tail,
     "watch": cmd_watch, "verbs": cmd_verbs, "replay": cmd_replay,
-    "render": cmd_render,
+    "render": cmd_render, "place-layout": cmd_place_layout,
 })
+
+# `place-layout` is BOTH a client subcommand and a mod op, and the subcommand
+# wins here. That is the point of it: what a person types takes a FILE, and what
+# the mod receives is a resolved element list. `rwa send place-layout
+# --args-json …` still reaches the raw verb — main() dispatches `send` past this
+# table — which is what an acceptance suite building its own payload wants.
 
 # Commands that can do useful work with no protocol root at all, and so are
 # dispatched before main's no-root guard. `render --dump file.json` is a pure
 # offline function of a saved dump — refusing it because no bench happens to be
 # running would defeat the point of being able to re-draw evidence later. Such
 # a command must produce its OWN no-root error on the paths that do need the
-# bench; cmd_render does.
-ROOTLESS_COMMANDS = {"render"}
+# bench; cmd_render does. `place-layout --print-payload` is the same shape: the
+# resolved element list is a pure function of (IR, origin, stuff-map), so it is
+# reviewable with no bench running, and cmd_place_layout raises its own no-root
+# error on the path that sends.
+ROOTLESS_COMMANDS = {"render", "place-layout"}
 
 if __name__ == "__main__":
     try:
