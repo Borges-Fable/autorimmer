@@ -863,11 +863,22 @@ namespace AutoRimmer
                     // per-element gate.
                     if (later.Def is TerrainDef || earlier.Def is TerrainDef) continue;
 
-                    if (later.Def == earlier.Def)
+                    // VANILLA'S OWN CONDITION, not "same def anywhere in the
+                    // overlap". `CanPlaceBlueprintAt`'s identical-thing loop
+                    // tests `thing2.Position == center && thing2.Rotation ==
+                    // rot` before it answers `IdenticalThingExists` — so two
+                    // same-def elements that merely OVERLAP are a question for
+                    // `CanPlaceBlueprintOver` below, exactly as they are on the
+                    // map. Shortcutting on the def alone would refuse a
+                    // partial self-overlap the game allows, which is the
+                    // stricter-than-the-widget mistake in miniature.
+                    if (later.Def == earlier.Def && later.Pos == earlier.Pos
+                        && later.Rot == earlier.Rot)
                     {
                         found.Add(ConflictRow(later, earlier, "self-overlap",
                             "IdenticalThingExists — two " + later.Def.defName
-                            + " elements occupy the same cell"));
+                            + " elements are the same placement (same cell, same rotation), "
+                            + "so one of them is a duplicate token"));
                         continue;
                     }
                     var oldDef = mode == ModeInstant
