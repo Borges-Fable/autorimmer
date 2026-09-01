@@ -14,10 +14,12 @@ BY HAND from the tables below** — that is how the first acceptance run went.
     ./accept/4087644-order-honesty.py             # against a live bench
 
 **Fixture:** the agent bench (`_RimWorld-Agent/run-agent.sh`) and a colony with
-two or more colonists. Two loose apparel items are wanted and one is required;
-with none, phase 0 stages two with `dev:spawn-thing {def:"Apparel_Parka",
-count:2}` and says so in its output. With only one, phase 3's queue-growth check
-is skipped by note and its collision check still runs. Paused is fine; the
+two or more colonists. Two loose apparel items are wanted and one is
+required; with none, phase 0 stages two with `dev:spawn-thing
+{def:"Apparel_Parka", count:2}` and says so in its output. With only one,
+phase 3's queued order falls back to a second `move-to` so the check is still
+exercised rather than skipped, and phase 3's collision check is fixture-free
+either way. Paused is fine; the
 driver advances where it needs to.
 
 **Exit codes:** 0 all passed · 1 at least one FAIL · 2 a fixture precondition
@@ -140,14 +142,16 @@ from. Comment #1 supersedes — confirmed with the orchestrator before building.
 
 | # | call | expect |
 |---|---|---|
-| 2.1a–f | `pawn {id:A, sections:["state"]}` | keys present: `job_id`, `player_forced`, `job_giver`, `work_giver`, `job_start_tick`, `ordered` |
+| 2.1a–g | `pawn {id:A, sections:["state"]}` | keys present: `job_id`, `player_forced`, `job_giver`, `work_giver`, `job_start_tick`, `ordered`, `order_kind` |
 | 2.2a | `wear {pawn:A, thing:AP}` then state | `job_giver == "ThinkNode_QueuedJob"` |
 | 2.2b | ″ | `work_giver == null` — a `wear` order has no WorkGiver |
 | 2.2c | ″ | `ordered == false`, **because** the triple requires a WorkGiver |
+| 2.2d | ″ | `order_kind == "direct"` — the field that *does* answer "did I cause this" |
 | 2.3 | ″ | `player_forced == true` |
 | 2.4 | ″ | `job_start_tick >= 0` |
 | 2.5 | ″ | `job_id >= 0` |
-| 2.6 | `advance {ticks:2500}` then state | a think-tree job reads `ordered == false` |
+| 2.6a | `advance {ticks:2500}` then state | a think-tree job reads `ordered == false` |
+| 2.6b | ″ | and `order_kind` present and **null** — neither work nor direct |
 
 `player_forced` **alone is not the discriminator** and 2.6 is what proves the
 suite knows that: `RimWorld/JobGiver_Work.cs` `TryIssueJobPackage` sets
@@ -173,19 +177,48 @@ stamps `job.workGiverDef = scanner.def`, and `TryTakeOrderedJobPrioritizedWork`
 stamps it again). Not driven here because phase 2's fixture is an apparel
 order.
 
-**The field name invites the misreading the script made, and renaming it is
-out of scope** (3.4's acceptance asserts on `ordered` by name). A `wear` order
-*was* ordered by the player and `ordered` says false; its honest meaning is
-"this is a prioritized-WORK order", not "the player caused this". Anything
-answering "did my order take?" must read `player_forced` **and**
-`job_giver == "ThinkNode_QueuedJob"`, or the verb's own `action.journal_seq`,
-never `ordered` alone. The recommendation on record instead of a rename: keep
-the field, and publish the pair it is derived from — which
-`PawnActs.JobFacts` already does, `player_forced` and `work_giver` sitting
-beside it on every job line — plus a one-line `note` naming what `ordered`
-means, so a reader who reaches for the wrong field is corrected in the same
-envelope. A rename belongs in whichever spec next revises `pawn`'s state
-section, with 3.4's script amended in the same commit.
+### `order_kind` — 2.2d, added by git-bug ac407f1
+
+The paragraph that used to sit here recommended keeping `ordered` and letting
+readers assemble the answer themselves from `player_forced` + `job_giver`.
+That recommendation is now implemented as a field rather than left as advice.
+`PawnActs.JobFacts` publishes **`order_kind`** beside `ordered`:
+
+| `order_kind` | means | who produces it |
+|---|---|---|
+| `"work"` | the triple — `queuedNode && workGiver != null && playerForced` | `prioritize`, or a right-click work option |
+| `"direct"` | `queuedNode && playerForced`, no WorkGiver | `wear`, `equip`, `move-to`, `tend`, `carry`, … |
+| `null` | no evidence of an order | a think-tree job, **and** the unresolvable-`jobGiver` case |
+
+`ordered == (order_kind == "work")` by construction. `ordered` is *not*
+redefined — 3.4 and 2.2b/2.2c assert it by name and the meaning they assert is
+correct — it simply gains a companion that answers the question the name
+invites. A rename is now unnecessary rather than merely out of scope.
+
+**A source correction the issue got backwards, and it is load-bearing for the
+split.** ac407f1 says the `workGiverDef` clause is what excludes
+`JobGiver_Work`'s autonomous `playerForced`. It is not.
+`RimWorld/JobGiver_Work.cs` `TryIssueJobPackage`'s emergency-prioritized branch
+calls `GiverTryGiveJobPrioritized`, which **sets `workGiverDef` on the job**
+before the branch sets `playerForced = true` and returns
+`new ThinkResult(job, this, tag)`. So that job carries *both* a `workGiverDef`
+and `playerForced`; the only clause that rejects it is
+`jobGiver is ThinkNode_QueuedJob`, because `this` is the `JobGiver_Work` node
+and `Pawn_JobTracker.StartJob` assigns `curJob.jobGiver = jobGiver` from the
+`ThinkResult`'s source node. That is precisely why splitting on `workGiverDef`
+is safe: by the time either kind is decided, the autonomous case is already
+gone, so `"direct"` cannot capture it. **Check 2.6b is the guard**: if
+`order_kind` is ever widened to read off `playerForced` alone, 2.6b is what
+fails.
+
+The `queuedNode` clause carries a second load. `Verse.AI/JobQueue` is enqueued
+by four *non-player* sites — `JobDriver_AttackStatic` and
+`JobDriver_AttackMelee` (a follow-up attack), `JobInBedUtility` (`LayDown`),
+and `Pawn_JobTracker`'s own `resumeCurJobAfterwards` path — so
+`ThinkNode_QueuedJob` alone does not mean "the player asked". Every one of
+those enqueues a job with `playerForced` **false**, so the *pair*
+(`queuedNode && playerForced`) is the discriminator and the WorkGiver split is
+a refinement on top of it.
 
 2.2 degrades to a NOTE rather than a FAIL when `job_giver` is null. That is
 honest, not lenient: `Job.jobGiver` is scribed as an int key resolved against
@@ -203,10 +236,59 @@ this field.
 | # | call | expect |
 |---|---|---|
 | 3.1 | `pawn {id:A, sections:["state"]}` | a `job_queue` block exists |
-| 3.2a | `wear {pawn:A, thing:AP2, queue:true}` then state | `job_queue.total` grew by one |
+| 3.2z | `draft` + `move-to {to:P1}` then state | `job_def == "Goto"` — the stage really staged |
+| 3.2d | `wear {pawn:A, thing:AP2, queue:true}` | the accepted line carries `order_effect` |
+| 3.2e | ″ | `order_effect == "queued"` — measured, not the flag echoed back |
+| 3.2a | ″ then state | `job_queue.total` grew by one |
 | 3.2b | ″ | the queued row has `job_start_tick` **present and null** |
 | 3.2c | ″ | the queued row names its own `job_def`, not the running one |
-| 3.3 | `wear {pawn:A, thing:AP, queue:true}` colliding, then state | `job_queue.total` **unchanged** |
+| 3.3a | `move-to {to:P1, queue:true}` colliding | `gate == "already-doing-it"` |
+| 3.3 | ″ then state | `job_queue.total` **unchanged** |
+
+### The stage was wrong, and it looked like a mod defect — git-bug ac407f1 (c)
+
+This phase used to stage its running job with `wear {thing:AP}`. By the time
+phase 3 runs, phase 2 has ended with `advance {ticks:2500}` — long enough for A
+to **finish** wearing that item — and a worn apparel is unspawned, so it is not
+in `map.listerThings` and `PawnActs.ThingArg` refuses it as "no visible thing".
+The stage did nothing, silently, and left A **idle**.
+
+An idle pawn is exactly the case where `queue:true` does not queue.
+`Verse.AI/Pawn_JobTracker.cs` `TryTakeOrderedJob`:
+
+    bool flag2 = mindState.IsIdle || CurJob == null || CurJob.def.isIdle;
+    isDownEvent = KeyBindingDefOf.QueueOrder.IsDownEvent || requestQueueing;
+    if (num2 && (!isDownEvent || flag2)) { ClearQueuedJobs();
+        EnqueueFirst(job); curDriver.EndJobWith(InterruptForced); }
+
+With `requestQueueing` the `!isDownEvent` half is false, so that branch is
+reached **only** via `flag2` — and it `EnqueueFirst`s and ends the current job
+in the same call, so `ThinkNode_QueuedJob` dequeues the order immediately and it
+*runs*. `job_queue.total` then reads 0 because the order **started**, not
+because it was lost. That is vanilla shift-click behaviour, not a dropped flag,
+and it is the most likely reading of the measured "3.2a — a queued order does
+not appear in the queue".
+
+Two further consequences of the same three branches, both previously invisible
+and both now published on the accepted line (`PawnActs.OrderEffect`):
+
+* **Branches A and C call `ClearQueuedJobs()` first**, so an *unqueued* order
+  silently destroys every order already stacked up — reported as
+  `queue_dropped`.
+* **An order the caller did not ask to queue can still be queued.** Branch C is
+  reached when the current job is not `IsCurrentJobPlayerInterruptible` (or is
+  `forceCompleteBeforeNextJob`): the job goes to the queue and **the pawn keeps
+  doing what it was doing**, while the verb answers `accepted:1`. That is a
+  false "it is doing it now", and `order_effect:"queued"` against
+  `queue:false` is what exposes it.
+
+So the stage is a **drafted Goto**: `JobDefOf.Goto` is not `isIdle` and is
+player-interruptible, so the queued order takes the `EnqueueLast` branch. It
+costs no fixture — a reachable cell, probed rather than assumed, the same idiom
+phase 6C uses — and 3.2z asserts the stage actually staged, so a fixture gap
+can no longer masquerade as a publication bug. The collision (3.3) is driven off
+that same staged Goto rather than off whatever A happened to be doing, which is
+what makes the gate exercised every run instead of most runs.
 
 **3.3 is the sharpest check in the suite.** `requestQueueing` is not read until
 `isDownEvent = isDownEvent || requestQueueing`, eight lines past the early

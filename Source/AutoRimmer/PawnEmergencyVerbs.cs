@@ -112,10 +112,10 @@ namespace AutoRimmer
                 // it is exactly why the order would have been swallowed.
                 if (AlreadyDoing(p, job))
                 { outcome.No(p, GateAlready, AlreadyWhy(queued), AlreadyLine(p, queued)); continue; }
-                if (!p.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
+                if (!TakeOrder(p, job, JobTag.Misc, queued, out var eff))
                 { outcome.No(p, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job"); continue; }
                 ids.Add(p.thingIDNumber);
-                outcome.Ok(p, JobLine(p));
+                outcome.Ok(p, Merge(JobLine(p), eff));
             }
 
             long seq = ExtinguishRow(outcome, V, at, fires.Count, ids);
@@ -241,10 +241,10 @@ namespace AutoRimmer
                 // 4087644 — PawnActs.AlreadyDoing.
                 if (AlreadyDoing(p, job))
                 { outcome.No(p, GateAlready, AlreadyWhy(queued), AlreadyLine(p, queued)); continue; }
-                if (!p.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
+                if (!TakeOrder(p, job, JobTag.Misc, queued, out var eff))
                 { outcome.No(p, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job"); continue; }
                 ids.Add(p.thingIDNumber);
-                outcome.Ok(p, JobLine(p));
+                outcome.Ok(p, Merge(JobLine(p), eff));
             }
 
             long seq = BeatFireRow(outcome, V, target, ids);
@@ -359,12 +359,12 @@ namespace AutoRimmer
                 return outcome.Result(V, TendRow(outcome, V, doctor, patient, medicine),
                     new Dictionary<string, object> { ["target"] = patient.thingIDNumber });
             }
-            if (!doctor.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
+            if (!TakeOrder(doctor, job, JobTag.Misc, queued, out var eff))
             {
                 outcome.No(doctor, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job");
                 return outcome.Result(V, TendRow(outcome, V, doctor, patient, medicine));
             }
-            outcome.Ok(doctor, JobLine(doctor));
+            outcome.Ok(doctor, Merge(JobLine(doctor), eff));
             long seq = TendRow(outcome, V, doctor, patient, medicine);
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
@@ -464,12 +464,12 @@ namespace AutoRimmer
                 return outcome.Result(V, RepairRow(outcome, V, pawn, thing),
                     new Dictionary<string, object> { ["thing"] = thing.thingIDNumber });
             }
-            if (!pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
+            if (!TakeOrder(pawn, job, JobTag.Misc, queued, out var eff))
             {
                 outcome.No(pawn, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job");
                 return outcome.Result(V, RepairRow(outcome, V, pawn, thing));
             }
-            outcome.Ok(pawn, JobLine(pawn));
+            outcome.Ok(pawn, Merge(JobLine(pawn), eff));
             long seq = RepairRow(outcome, V, pawn, thing);
             return outcome.Result(V, seq, new Dictionary<string, object>
             {
@@ -557,10 +557,10 @@ namespace AutoRimmer
                 // 4087644 — PawnActs.AlreadyDoing.
                 if (AlreadyDoing(p, job))
                 { outcome.No(p, GateAlready, AlreadyWhy(queued), AlreadyLine(p, queued)); continue; }
-                if (!p.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
+                if (!TakeOrder(p, job, JobTag.Misc, queued, out var eff))
                 { outcome.No(p, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job"); continue; }
                 ids.Add(p.thingIDNumber);
-                outcome.Ok(p, JobLine(p));
+                outcome.Ok(p, Merge(JobLine(p), eff));
             }
 
             long seq = ManRow(outcome, V, thing, ids);
@@ -650,6 +650,7 @@ namespace AutoRimmer
                 try { inPlace = p.CurJobDef == JobDefOf.LayDown && p.CurJob.GetTarget(TargetIndex.A).Thing == bed; }
                 catch { }
                 bool queued = ctx.Args.Bool("queue", false);
+                Dictionary<string, object> eff = null;
                 if (inPlace)
                 {
                     p.CurJob.restUntilHealed = true;
@@ -669,7 +670,7 @@ namespace AutoRimmer
                     // alone if the target happens to agree.
                     if (AlreadyDoing(p, job))
                     { outcome.No(p, GateAlready, AlreadyWhy(queued), AlreadyLine(p, queued)); continue; }
-                    if (!p.jobs.TryTakeOrderedJob(job, JobTag.Misc, queued))
+                    if (!TakeOrder(p, job, JobTag.Misc, queued, out eff))
                     { outcome.No(p, "refused", "Pawn_JobTracker.TryTakeOrderedJob refused the job"); continue; }
                 }
                 try { p.mindState.ResetLastDisturbanceTick(); } catch { }
@@ -685,6 +686,11 @@ namespace AutoRimmer
                 // audit was looking for. Published rather than assumed.
                 line["queue"] = queued;
                 line["queue_applied"] = !inPlace && queued;
+                // ac407f1 (c). The in-place branch takes no job, so there is no
+                // order to measure and `order_effect` is deliberately ABSENT
+                // rather than invented — `already_in_bed:true` is the whole
+                // story there.
+                Merge(line, eff);
                 outcome.Ok(p, line);
             }
 

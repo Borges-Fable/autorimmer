@@ -681,6 +681,64 @@ namespace AutoRimmer
         // shifts the key. On a 38-mod bench that is a live possibility, which is
         // why these fields are EVIDENCE for a reader to weigh and never a
         // control-flow input.
+        //
+        // ---------------- `ordered` IS NARROW ON PURPOSE, AND `order_kind`
+        // ---------------- IS THE FIELD THAT ANSWERS "DID I CAUSE THIS".
+        //
+        // git-bug ac407f1: `ordered` reads FALSE after a `wear` we issued this
+        // tick, which is the least useful possible answer to the question the
+        // name invites. It is not a bug — the triple is doing exactly what it
+        // says — but the name promises more than the value delivers, so the
+        // value gets a companion rather than a redefinition. `ordered` keeps
+        // its meaning (accept/4087644-order-honesty.py 2.2b/2.2c assert it and
+        // DESIGN's merged prose agrees); `order_kind` splits the ordered space
+        // in two:
+        //
+        //     order_kind == "work"    queuedNode && workGiver != null && forced
+        //                             — identical to `ordered`. A prioritized
+        //                             WORK order: `prioritize`, or a right-click
+        //                             work option (FloatMenuOptionProvider_
+        //                             WorkGivers stamps workGiverDef, and
+        //                             Pawn_JobTracker.TryTakeOrderedJob-
+        //                             PrioritizedWork stamps it again).
+        //     order_kind == "direct"  queuedNode && workGiver == null && forced
+        //                             — a direct order: wear, equip, move-to,
+        //                             tend, carry… No WorkGiver exists for any
+        //                             of them, which is why the triple cannot
+        //                             see them.
+        //     order_kind == null      no evidence of an order. Includes the
+        //                             unresolvable-jobGiver case below: null is
+        //                             "we cannot tell", never "the agent did
+        //                             not order it".
+        //
+        // SOURCE CORRECTION, and it matters because ac407f1 gets it backwards.
+        // The issue says the `workGiverDef` clause is what excludes
+        // JobGiver_Work's autonomous `playerForced`. VERIFIED AGAINST
+        // RimWorld/JobGiver_Work.cs: it is not. That branch reaches
+        // GiverTryGiveJobPrioritized, which sets `job2.workGiverDef = giver.def`
+        // (and `job3.workGiverDef` on the scanCells side) BEFORE
+        // TryIssueJobPackage sets `job.playerForced = true` and returns
+        // `new ThinkResult(job, this, tag)`. So that job carries BOTH
+        // playerForced and a workGiverDef; the only clause that rejects it is
+        // `jobGiver is ThinkNode_QueuedJob`, because `this` is the JobGiver_Work
+        // node and Pawn_JobTracker.StartJob assigns `curJob.jobGiver = jobGiver`
+        // from the ThinkResult's SourceNode.
+        //
+        // That is WHY splitting on workGiverDef is safe: the autonomous case is
+        // already gone by the time either kind is decided, so "direct" cannot
+        // capture it. It is also why `ordered` must NOT be widened by simply
+        // dropping the clause — not because the clause guards anything, but
+        // because `ordered`'s published meaning is prioritized-WORK and two
+        // shipped acceptance checks assert it.
+        //
+        // The queuedNode clause is load-bearing for a second reason. Verse.AI/
+        // JobQueue is enqueued by four non-player sites — JobDriver_AttackStatic
+        // and JobDriver_AttackMelee (EnqueueFirst on a follow-up attack),
+        // JobInBedUtility (LayDown), and Pawn_JobTracker's own
+        // resumeCurJobAfterwards path — so ThinkNode_QueuedJob alone does not
+        // mean "the player asked". Every one of those enqueues a job with
+        // playerForced FALSE, so the PAIR (queuedNode && forced) is the real
+        // discriminator and the workGiver split is a refinement on top of it.
         internal static Dictionary<string, object> JobFacts(Job job)
         {
             if (job == null)
@@ -692,6 +750,7 @@ namespace AutoRimmer
                     ["work_giver"] = null,
                     ["job_start_tick"] = null,
                     ["ordered"] = null,
+                    ["order_kind"] = null,
                 };
             string giver = null;
             bool queuedNode = false;
@@ -721,6 +780,14 @@ namespace AutoRimmer
                 // unknown — read a false as "no evidence", never as "proof the
                 // agent did not order it".
                 ["ordered"] = queuedNode && workGiver != null && forced,
+                // The companion field. `ordered == (order_kind == "work")` by
+                // construction, deliberately: one value, two names, so a reader
+                // who wants "did I cause this at all" asks `order_kind != null`
+                // and a reader who wants "is this prioritized work" asks
+                // `ordered`. Neither has to know the triple.
+                ["order_kind"] = queuedNode && forced
+                    ? (workGiver != null ? "work" : "direct")
+                    : null,
             };
         }
 
@@ -801,6 +868,148 @@ namespace AutoRimmer
             var d = JobLine(pawn);
             d["queue"] = queued;
             return d;
+        }
+
+        // ==================== WHAT THE ORDER ACTUALLY DID ====================
+        // git-bug ac407f1 (c). Every order verb published `queue: <the caller's
+        // own flag>` on its accepted line — an ECHO OF THE REQUEST, not an
+        // observation of the result — so `queue:true, accepted:1` was taken to
+        // mean "queued behind the running job" when the game had three
+        // different branches it might have taken, only one of which does that.
+        // That is 4087644's defect class exactly:
+        // the envelope reporting what was asked for as though it were what
+        // happened.
+        //
+        // WHAT THE GAME ACTUALLY DOES, read off Verse.AI/Pawn_JobTracker.cs
+        // TryTakeOrderedJob after its JobIsSameAs early-out:
+        //
+        //     bool num2  = IsCurrentJobPlayerInterruptible() &&
+        //                  !CurJob.def.forceCompleteBeforeNextJob;
+        //     bool flag2 = mindState.IsIdle || CurJob == null ||
+        //                  CurJob.def.isIdle;
+        //     isDownEvent = KeyBindingDefOf.QueueOrder.IsDownEvent ||
+        //                   requestQueueing;
+        //
+        //     A. if (num2 && (!isDownEvent || flag2))   -> ClearQueuedJobs();
+        //           EnqueueFirst(job); curDriver.EndJobWith(InterruptForced)
+        //           (or CheckForJobOverride when there is no current job)
+        //     B. else if (isDownEvent)                  -> EnqueueLast(job)
+        //     C. else                                   -> ClearQueuedJobs();
+        //           EnqueueLast(job)
+        //
+        // Three consequences the caller could not previously see:
+        //
+        //  1. **A queued order given to an IDLE pawn is not queued.** With
+        //     requestQueueing the `!isDownEvent` half of A is false, so A is
+        //     reached only via `flag2` — idle, no current job, or a current job
+        //     whose def isIdle (Wait_Wander, Wait_MaintainPosture). Then the job
+        //     is EnqueueFirst'd and the current job ended in the same call, so
+        //     ThinkNode_QueuedJob dequeues it immediately and it RUNS. The queue
+        //     is empty afterwards not because the order failed but because the
+        //     order started. This is vanilla shift-click behaviour, not a
+        //     dropped flag — and it is the most likely reading of ac407f1's
+        //     "a queued order does not appear in job_queue.total".
+        //  2. **Branches A and C DESTROY the existing queue.** ClearQueuedJobs
+        //     runs before the enqueue, so an unqueued order silently discards
+        //     every order the agent had already stacked up. Nothing said so.
+        //  3. **An order the caller did NOT ask to queue can still be queued.**
+        //     Branch C is reached when the pawn's current job is not player-
+        //     interruptible (or is forceCompleteBeforeNextJob): the job goes to
+        //     the queue and the pawn KEEPS DOING WHAT IT WAS DOING, while the
+        //     verb answers accepted:1. That is a false "it is doing it now".
+        //
+        // So the take is measured rather than assumed. Three reads, all
+        // side-effect free and all verified against the decompiled source:
+        // `Pawn_JobTracker.curJob` is a plain field; `JobQueue.Count` is
+        // `jobs.Count`; `JobQueue.Contains(Job)` is a reference scan over the
+        // same list (Verse.AI/JobQueue.cs). Reference identity is the right test
+        // — NOT JobIsSameAs, whose GetCachedDriver lazily allocates a driver and
+        // Log.Errors on a pawn mismatch (PawnSafe's Job.JobIsSameAs entry).
+        private static int QueueDepth(Pawn pawn)
+        {
+            try { return pawn?.jobs?.jobQueue?.Count ?? -1; }
+            catch { return -1; }
+        }
+
+        // The block to merge onto an accepted line, after a take that returned
+        // true. `before` is QueueDepth from BEFORE the call.
+        private static Dictionary<string, object> OrderEffect(Pawn pawn, Job job, bool queued, int before)
+        {
+            int after = QueueDepth(pawn);
+            bool running = false, inQueue = false;
+            try { running = pawn?.jobs?.curJob != null && ReferenceEquals(pawn.jobs.curJob, job); }
+            catch { }
+            try
+            {
+                var q = pawn?.jobs?.jobQueue;
+                inQueue = q != null && q.Contains(job);
+            }
+            catch { }
+
+            // "gone" is the honest third answer: TryTakeOrderedJob returned true
+            // and the job is neither running nor waiting. Branch A ends the
+            // current job and lets the think tree re-choose, and the think tree
+            // is free to pick something else (or to throw the queued job away in
+            // ThinkNode_QueuedJob's own CanBeginNow sweep). Rare, but reporting
+            // it as "started" would be the same lie in a new place.
+            string effect = running ? "started" : inQueue ? "queued" : "gone";
+
+            var d = new Dictionary<string, object>
+            {
+                // The REQUEST, kept alongside the result so the pair reads as
+                // one fact. Shipped call sites that already published `queue`
+                // set the identical value; this makes it universal.
+                ["queue"] = queued,
+                ["order_effect"] = effect,
+                ["queue_depth"] = after >= 0 ? (object)after : null,
+            };
+            // How many previously-stacked orders ClearQueuedJobs destroyed.
+            // Computed, not guessed: whatever was there before, minus whatever
+            // is still there that is not this job.
+            if (before >= 0 && after >= 0)
+                d["queue_dropped"] = Math.Max(0, before - (after - (inQueue ? 1 : 0)));
+            // A note ONLY when the effect contradicts the request, because that
+            // is the only case where a reader who trusted `queue` would be
+            // wrong. Silence otherwise; a note on every line is noise.
+            if (queued && effect == "started")
+                d["order_effect_note"] = "queue:true was asked for and the order STARTED anyway. "
+                    + "Pawn_JobTracker.TryTakeOrderedJob's first branch fires when the pawn is idle "
+                    + "(`mindState.IsIdle || CurJob == null || CurJob.def.isIdle`), and it "
+                    + "EnqueueFirsts then ends the current job, so the order runs at once. Vanilla "
+                    + "shift-click does the same. Any orders already queued were cleared.";
+            else if (!queued && effect == "queued")
+                d["order_effect_note"] = "the order was QUEUED even though queue:false was asked for, so "
+                    + "THE PAWN IS STILL DOING WHAT IT WAS DOING. TryTakeOrderedJob only interrupts a "
+                    + "job that IsCurrentJobPlayerInterruptible and is not forceCompleteBeforeNextJob; "
+                    + "otherwise it falls through to EnqueueLast. Read `job_def` before assuming this "
+                    + "order took effect.";
+            else if (effect == "gone")
+                d["order_effect_note"] = "TryTakeOrderedJob returned true but the job is neither running "
+                    + "nor queued — the current job was ended and the think tree chose something else. "
+                    + "Nothing was refused and nothing is pending; re-read state rather than assuming.";
+            return d;
+        }
+
+        // Take the order and measure what it did. The ONE route an order verb
+        // should use, so no call site can go back to publishing the request as
+        // the result. Returns false exactly when TryTakeOrderedJob does.
+        private static bool TakeOrder(Pawn pawn, Job job, JobTag? tag, bool queued,
+            out Dictionary<string, object> effect)
+        {
+            effect = null;
+            int before = QueueDepth(pawn);
+            if (!pawn.jobs.TryTakeOrderedJob(job, tag, queued)) return false;
+            effect = OrderEffect(pawn, job, queued, before);
+            return true;
+        }
+
+        // Merge b into a, b winning. For an accepted line that is built from
+        // JobLine and then annotated.
+        private static Dictionary<string, object> Merge(Dictionary<string, object> a,
+            Dictionary<string, object> b)
+        {
+            if (a != null && b != null) foreach (var kv in b) a[kv.Key] = kv.Value;
+            return a;
         }
 
         // The durable half of a prioritized order (Verse/PriorityWork.cs). It is
