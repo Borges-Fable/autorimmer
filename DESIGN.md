@@ -2863,3 +2863,121 @@ queue by default (an agent flailing mid-experiment must not page triage).
   the reword the issue offered as the alternative fix, and 9.6f/9.6v/9.6w keep
   the pre-fix banked envelopes as the filed evidence rather than rewriting them.
   `9b179ef`, `58794e4`, `6fc75e3`, `40ed42f`.
+- 2026-09-01 (session 21) — **Every letter and every `alert_on` wakes a sleeping
+  advance, and it is NOT a severity filter.** Four halts fired unconditionally
+  (`casualty`, `dialog`, `red_error`, and `NoticeRedError`'s own path upstream of
+  the journal's dedupe cap — the issue's own table wrongly listed a fourth called
+  `thermal`; there is no such halt, the governor only steps the SPEED down).
+  Everything else sat inside `switch (until)`, so `advance {ticks:60000}` slept
+  through a raid landing, a trader arriving and leaving, a quest expiring, an
+  inspiration expiring, `Alert_LowFood`, a fire and a prisoner escaping, unless
+  the agent had GUESSED IN ADVANCE that today was the day. **And it was worse
+  than opt-in: it was MUTUALLY EXCLUSIVE.** `CheckUntilKeys` refuses a second
+  matcher, so an agent already waiting on `until:{condition:{…}}` could not also
+  ask to be woken by a raid — there was no workaround available even to an agent
+  that knew the hazard. I proposed a severity cut (wake on
+  `ThreatBig`/`ThreatSmall`/`Death`/`NegativeEvent` and Critical/High alerts, on
+  the grounds of noise) and **Evan rejected the framing**: "anything neutral or
+  positive should wake you, maybe you want to act on an inspiration, things like
+  that. that's how you get propelled into actually playing the game and having
+  fun." The rule is **"is there something I might act on", not "is this bad"** —
+  an inspiration expires, a trader leaves, a wanderer at the door is a roster
+  decision, and a run that only ever wakes for disasters survives ten days
+  without ever playing. That collapses the letter half to nothing: halt on EVERY
+  letter, no allow-list, because `Verse/LetterStack.ReceiveLetter` is the game's
+  own "the player should look at this" (it is where vanilla decides whether to
+  pause at all, `Prefs.AutomaticPauseMode >= let.def.pauseMode`) and re-filtering
+  it second-guesses the one system that is good at it — while shipping a second
+  source of truth, which this project has been burned by twice (`7382bdd`'s
+  rejected arg whitelist; the `Build:` tally essay in the workspace CLAUDE.md).
+  Noise is smaller than it sounds: on a bench being actively wrecked by an
+  acceptance suite, 13,667 ticks produced 53 journal events, of which 3 letters
+  and 6 `alert_on`. **THE ASKED-FOR HALT WINS THE NAMING, and the matchers are
+  therefore evaluated FIRST.** Both halts fire on the same journal row; what
+  differs is the token the caller gets back, and an advance armed `until:{threat}`
+  that stopped on a `ThreatBig` letter must report `reason:"threat"`. Running the
+  wake first would have renamed every explicit wait to `"letter"` and broken a
+  matcher shipped since 1.3 **invisibly**, since the advance still stops at the
+  same tick on the same event. `halted_on.armed_by` is `"until"` or `"default"`
+  and is present on both, so neither is inferred from an absence — that is the
+  field a suite asserts. `until:{event}` is deliberately NOT stamped with
+  `kind`/`armed_by`: it matches an arbitrary journal type and `downed`/`death`
+  payloads own `kind` themselves (colonist|slave|animal|mech), so stamping would
+  rewrite the caller's data; `letter` and `alert_on` have fixed documented key
+  sets and can be stamped safely. `280fb78`, `722c951`, `1113019`.
+- 2026-09-01 (session 21) — **`alert-mute` is a recorded ACT, permanent until
+  released, and visible in the digest; there is no game-side gate and no lapse
+  rule, and both were checked rather than assumed.** A letter happens ONCE; an
+  alert is a STANDING CONDITION. `alert_on` is already a transition so a chronic
+  alert wakes you once per on-cycle rather than continuously, but a condition the
+  colony has deliberately decided not to fix still flickers off and on and each
+  flicker is a wake for a decision already made. Evan: "the agent should have the
+  ability to blacklist what alerts wake them up, while they're playing" —
+  RUNTIME, mid-run, not static config. This is session 13's `threat-pardon`
+  ruling applied a second time, so the disposition is copied argument for
+  argument: required non-empty `reason`, journalled as an `action` row with its
+  ids, scribed so it survives save/load, `{}` lists the set and the live
+  candidates, `release`/`release_all` are acts too, and a no-op writes no row.
+  **THE GATE, honestly:** DESIGN §Action model says a player verb re-implements
+  its widget's precondition and cites it, and there is no such widget —
+  `RimWorld/AlertsReadout.cs` has no mute, no dismiss and no hide (its only
+  per-alert interaction is `Alert.OnClick`'s jump-to-target) and `Verse/Prefs.cs`
+  carries no alert preference at all. RimWorld has no concept of an alert you
+  have stopped caring about, because a human looks past one. Citing a member
+  would dress our invention as the game's, so the precondition is stated as ours
+  and made narrow: an id must name a real `Alert` subclass in the loaded
+  assemblies (`typeof(Alert).AllSubclassesNonAbstract()`, which covers modded
+  alerts free and — unlike `AlertsReadout.allAlertTypesCached` — does not exclude
+  the `Alert_Custom` subclasses our own fixtures are). A typo is refused with
+  near-misses rather than stored, because a mute that silently matches nothing is
+  worse than no mute: the agent believes it is covered. Liveness is deliberately
+  NOT required — pre-muting before a long build is the normal case. **NOTHING
+  LAPSES IT, and the obvious rule was killed on evidence.** `threat-pardon`
+  lapses because the game reifies "still asleep" twice (`LordToil_Sleep`,
+  `CompCanBeDormant.Awake`); the analogue here would be "un-mute when it comes
+  back at a higher priority", and `Alert.Priority` is
+  `public virtual AlertPriority Priority => defaultPriority` with **exactly one
+  declaration in the whole decompiled 1.6 tree** — no vanilla alert overrides it,
+  so priority is a per-class constant and that rule would never fire once. A
+  TIMED expiry was rejected for the stronger reason: an expiry the agent did not
+  choose is a wake it did not ask for, at a tick it cannot predict, for a
+  decision it already made. **`digest.alerts` publishes `muted` (id, reason,
+  live), `muted_count`, `muted_live` and a `muted` flag on each active row.** The
+  standalone list is OUTSIDE the `AlertCap` truncation on purpose: the cap drops
+  live rows by priority, and a standing decision hidden by a display budget is
+  the `[[seek-off-is-a-decision-to-flee]]` failure that `b1b3060` shipped
+  `digest.posture` to close — an agent that muted `Alert_LowFood` on day 2 must
+  see it on day 8. Uncapped is safe because the list is bounded by what the AGENT
+  muted, one act at a time, not by anything the colony can generate. A mute is
+  consulted only on the WAKE path: `until:{alert:"X"}` halts on X even when X is
+  muted, because "wait FOR this" is a different question from "wake me for this"
+  and the one asked this call outranks a standing decision from an earlier day.
+  Read from `TimeDriver.Notice` through a static volatile mirror rather than
+  `Current.Game.GetComponent`, because that tap is documented "any thread" and
+  may not touch Verse. `280fb78`, `b1b3060`.
+- 2026-09-01 (session 21) — **`through_news` is a THIRD escape, not an extension
+  of `through_casualties`; and the day-long default bound and the wake halts are
+  two halves of one decision.** On the escape: they are different decisions and
+  one reason string cannot honestly cover both — `through_casualties` says "my
+  colonists may fall while this runs and I accept that", `through_news` says "do
+  not wake me for things I might act on" — so a post-mortem grepping for who
+  accepted casualties must not turn up every run that only wanted to sleep
+  through a trade caravan. They are also asymmetric in MECHANISM: one bypasses an
+  ARM-TIME refusal and appears in `escaped`/`bypassed`, the other suppresses a
+  DURING-ADVANCE halt whose cost is only knowable at the end, so it is reported
+  in `news_rode_past` (count kept whole, first 20 events shown) instead. What the
+  MUTE swallowed is reported separately as `muted_alerts`, and unconditionally —
+  regardless of `through_news` — because that is a standing decision doing its
+  work and an agent should be able to watch it happen rather than infer it from
+  an absence. `through_news` does NOT defeat an explicit `until:{letter}`, since
+  the matchers run first. On the dependency: **`1113019` and `280fb78` were ruled
+  together in one conversation on 2026-09-01 and each is the other's
+  precondition.** `1113019` makes an unbounded `until` advance default to 60,000
+  ticks — one in-game day — on Evan's framing that "a full day without doing
+  anything while you're fully set is pretty typical … ideally if something bad
+  happens, you'll be woken up, you won't have to check". That default is only
+  safe BECAUSE the halts wake you, and the halts are only affordable BECAUSE a
+  bound stops a quiet day running forever. `1113019`'s own comment in
+  `TimeDriver.Start` named the open question — "what ELSE should wake the agent"
+  — and now names `280fb78` as its answer. **Neither should be reverted without
+  the other.** `280fb78`, `1113019`.

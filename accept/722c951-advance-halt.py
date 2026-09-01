@@ -168,6 +168,29 @@ def _bound(args):
     a = dict(args)
     if "until" in a and "timeout_ticks" not in a:
         a["timeout_ticks"] = UNTIL_TIMEOUT_TICKS
+    # ---------------------------------------------- git-bug 280fb78 --------
+    #
+    # THE ONE ESCAPE THIS SUITE APPLIES BLANKET, and it is the exception that
+    # proves the header's rule rather than a retreat from it. That rule is that
+    # `unread_ok` and `through_casualties` are NOT wrapped, because the refusal
+    # and the casualty halt are what this file is about and hiding them in a
+    # wrapper would hide the subject.
+    #
+    # The news wake is not this file's subject at all. 280fb78 makes every
+    # letter and every `alert_on` halt an advance unconditionally, so a trade
+    # caravan arriving during check 1.7's `{ticks:600}` — or during phase 4's
+    # `until:{condition}` — would come back `reason:"letter"` and fail a check
+    # about the casualty filter. That is a live colony intruding on an
+    # assertion, not a defect in either change.
+    #
+    # It is safe for the ONE place this suite genuinely wants a letter: phase 1
+    # arms `until:{letter:true}`, and an EXPLICIT matcher is evaluated before
+    # the wake and wins the naming (TimeDriver.Notice), so `through_news` cannot
+    # suppress it. accept/280fb78-wake-halts.py phase 5.4 asserts exactly that.
+    a.setdefault("through_news",
+                 "accept/722c951-advance-halt.py: the news wake (280fb78) is not "
+                 "this suite's subject — the unread refusal and the casualty halt "
+                 "are, and a letter arriving mid-check would mask them")
     return a
 
 

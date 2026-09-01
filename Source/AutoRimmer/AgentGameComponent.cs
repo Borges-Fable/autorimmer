@@ -78,6 +78,13 @@ namespace AutoRimmer
             catch { }
             try { JournalVerbs.TickCasualtyFixture(); }
             catch { }
+            // 280fb78's `alert-at`. Third of the same kind: the wake halt fires
+            // on an `alert_on` that arrives while time runs, and the alert
+            // scanner is a per-FRAME diff — so an alert injected from the
+            // command drain (game paused) is journaled before the advance
+            // starts and halts nothing.
+            try { JournalVerbs.TickAlertFixture(); }
+            catch { }
         }
 
         public override void StartedNewGame() => GameBoundary("newgame");
@@ -103,6 +110,7 @@ namespace AutoRimmer
             JournalVerbs.MainMenuAtTick = -1;
             JournalVerbs.ErrorAtTick = -1;
             JournalVerbs.DownAtTick = -1;
+            JournalVerbs.AlertAtTick = -1;
             var payload = new System.Collections.Generic.Dictionary<string, object>
             {
                 ["kind"] = kind,

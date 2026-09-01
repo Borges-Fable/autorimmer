@@ -42,7 +42,23 @@ namespace AutoRimmer
     {
         // Halt reasons the advance result can carry:
         //   ticks | timeout | interrupted        — the caller's own terms
-        //   letter | threat | alert | event      — the until: matchers
+        //   letter | alert                       — 280fb78. THE WAKE, and it is
+        //                                          NOT opt-in: every letter and
+        //                                          every `alert_on` stops an
+        //                                          advance whether or not the
+        //                                          caller asked. `until:{letter}`
+        //                                          and `until:{alert}` still work
+        //                                          as explicit WAITS and win the
+        //                                          naming when both would fire —
+        //                                          see Notice(), and
+        //                                          `halted_on.armed_by` is which
+        //                                          one it was.
+        //   threat | event                       — the remaining until: matchers,
+        //                                          still opt-in: both are
+        //                                          NARROWINGS of something the
+        //                                          wake already covers (a threat
+        //                                          letter is a letter) or of the
+        //                                          journal at large.
         //   condition | layout                   — 1.6. A halt on STATE rather
         //                                          than on an event: a
         //                                          predicate over the digest's
@@ -152,7 +168,7 @@ namespace AutoRimmer
         //     between a per-call escape and a mode. Only `journal` clears it.
         private static long lastAdvanceEndSeq;
 
-        // The two per-call escapes, each a REQUIRED non-empty reason string.
+        // The THREE per-call escapes, each a REQUIRED non-empty reason string.
         // Null when not passed. Session 13's `threat-pardon` precedent: the
         // decision must be a recorded ACT, not a silent exemption — so these are
         // journaled at arm time and echoed in the result envelope, and a
@@ -160,6 +176,31 @@ namespace AutoRimmer
         private static string unreadOk;
         private static string throughCasualties;
         private static bool haltOnCasualty;
+        // 280fb78's escape. A THIRD argument and deliberately not an extension
+        // of `through_casualties`, because they are two different decisions and
+        // one reason string cannot honestly cover both: `through_casualties`
+        // says "my colonists may fall while this runs and I accept that",
+        // `through_news` says "do not wake me for things I might act on". A
+        // post-mortem grepping for who accepted casualties must not turn up
+        // every run that only wanted to sleep through a trade caravan. They are
+        // also asymmetric in shape — one bypasses an ARM-TIME refusal, the
+        // other suppresses a DURING-ADVANCE halt — so folding them would fold
+        // two mechanisms as well as two meanings.
+        private static string throughNews;
+        private static bool haltOnNews;
+        // What the wake WOULD have stopped for. An escape that hides the count
+        // it bypassed is a silent bypass with a reason string stapled on — the
+        // same argument the `bypassed` block above is built on — and a muted
+        // alert that fires during an advance is a standing decision doing its
+        // work, which the agent should be able to see it doing. Capped, with
+        // the count kept whole, because a three-day advance through a siege
+        // must not return a thousand rows.
+        private const int NewsLogCap = 20;
+        private static readonly object newsLock = new object();
+        private static readonly List<object> rodePast = new List<object>();
+        private static readonly List<object> mutedSeen = new List<object>();
+        private static int rodePastCount;
+        private static int mutedSeenCount;
         // What the refusal WOULD have said, kept for the result envelope when an
         // escape overrode it. An escape that hides the number it bypassed is a
         // silent bypass with a reason string stapled on.
@@ -451,6 +492,14 @@ namespace AutoRimmer
             // issue, because a day of quiet is only safe to sleep through if
             // the halt set is good enough.
             //
+            // THAT ISSUE IS `280fb78` AND IT IS ANSWERED IN THIS FILE (see
+            // Notice()'s wake block): every letter and every `alert_on` now
+            // halts unconditionally. The two were ruled together in one
+            // conversation and each is the other's precondition — a day-long
+            // default is only safe because the halts wake you, and the halts
+            // are only affordable because a bound stops a quiet day running
+            // forever. Neither should be reverted without the other.
+            //
             // `timeoutSource` distinguishes the caller's own bound from ours.
             // It is ONE field with three values rather than a bound plus a
             // boolean, for the same reason 1113019 requires the refusal below to
@@ -542,6 +591,11 @@ namespace AutoRimmer
             unreadOk = args.Has("unread_ok") ? Reason(args, "unread_ok") : null;
             throughCasualties = args.Has("through_casualties") ? Reason(args, "through_casualties") : null;
             haltOnCasualty = throughCasualties == null;
+            // 280fb78. Read HERE with the other two so the read log sees it on
+            // a refused advance too (the block header above), even though what
+            // it suppresses happens later, inside Notice().
+            throughNews = args.Has("through_news") ? Reason(args, "through_news") : null;
+            haltOnNews = throughNews == null;
             bypassed = null;
 
             // REFUSAL 1 — the unread journal delta. Cheapest check first,
@@ -643,7 +697,7 @@ namespace AutoRimmer
             // refused (`cannot-set-speed`) never existed, and a journal row
             // declaring an escape for it would be a confession to a decision
             // nobody got to make.
-            if (unreadOk != null || throughCasualties != null)
+            if (unreadOk != null || throughCasualties != null || throughNews != null)
             {
                 var payload = new Dictionary<string, object>
                 {
@@ -653,6 +707,15 @@ namespace AutoRimmer
                 };
                 if (unreadOk != null) payload["unread_ok"] = unreadOk;
                 if (throughCasualties != null) payload["through_casualties"] = throughCasualties;
+                // NOT in `bypassed` below, and the asymmetry is real rather
+                // than an oversight: `bypassed` names ARM-TIME refusals this
+                // call overrode, and there is no arm-time refusal for news.
+                // What `through_news` actually cost is only knowable at the
+                // END, so it is reported there — `news_rode_past` in the
+                // result envelope — while this row records that the guard was
+                // switched off at all, which is what a grep of `action` rows
+                // is asking.
+                if (throughNews != null) payload["through_news"] = throughNews;
                 var applied = new List<object>();
                 if (bypassed != null) foreach (var kv in bypassed) applied.Add(kv.Key);
                 payload["bypassed"] = applied;
@@ -680,6 +743,13 @@ namespace AutoRimmer
             slowerNow = false;
             watchFrames = 0;
             framesSeen = 0;
+            lock (newsLock)
+            {
+                rodePast.Clear();
+                mutedSeen.Clear();
+                rodePastCount = 0;
+                mutedSeenCount = 0;
+            }
 
             // ARM THE PREDICATE LAST, AND EVALUATE IT ONCE.
             //
@@ -1041,27 +1111,264 @@ namespace AutoRimmer
             // owns the halt, upstream of the journal's dedupe cap. An explicit
             // until:{event:{type:"red_error"}} still works through Until.Event,
             // and it is honestly capped: it is a journal-event matcher.
+            //
+            // ---- THE ASKED-FOR HALT RUNS FIRST (git-bug 280fb78) ------------
+            //
+            // The matchers are evaluated BEFORE the unconditional wake below,
+            // and the order is the whole answer to "`until:{letter}` and
+            // `until:{threat}` must keep working and the two must not collide".
+            //
+            // Both halts fire on the same journal row. What differs is the NAME
+            // the caller gets back, and the caller's name has to win: an
+            // advance armed `until:{threat}` that stopped on a `ThreatBig`
+            // letter must report `reason:"threat"`, because that is the
+            // question it asked and the token its caller is branching on.
+            // Running the wake first would have renamed every explicit wait to
+            // `"letter"` and quietly broken a matcher that has shipped since
+            // 1.3 — and it would have done it INVISIBLY, since the advance
+            // still stops at the same tick on the same event.
+            //
+            // Each arm therefore returns rather than breaking, so the wake
+            // below sees only rows the caller did not ask about.
             switch (until)
             {
                 case Until.Letter:
                     if (type == "letter" && (filterA == null || Str(payload, "def") == filterA))
-                        Halt("letter", payload, seq);
+                    {
+                        Halt("letter", WakeEvent("letter", payload, tick, "until"), seq);
+                        return;
+                    }
                     break;
                 case Until.Threat:
                     if (type == "letter")
                     {
                         string def = Str(payload, "def");
-                        if (def == "ThreatBig" || def == "ThreatSmall") Halt("threat", payload, seq);
+                        if (def == "ThreatBig" || def == "ThreatSmall")
+                        {
+                            Halt("threat", WakeEvent("threat", payload, tick, "until"), seq);
+                            return;
+                        }
                     }
                     break;
                 case Until.Alert:
                     if (type == "alert_on" && (filterA == null || Str(payload, "id") == filterA))
-                        Halt("alert", payload, seq);
+                    {
+                        // A MUTE DOES NOT APPLY HERE, deliberately. "Wake me if
+                        // this happens" and "wait FOR this to happen" are
+                        // different questions, and a caller that names an alert
+                        // in `until` has asked the second one this call — which
+                        // outranks a standing decision it made on some earlier
+                        // day. The mute is consulted only on the wake path.
+                        Halt("alert", WakeEvent("alert", payload, tick, "until"), seq);
+                        return;
+                    }
                     break;
                 case Until.Event:
                     if (type == filterA && (filterB == null || PayloadContains(payload, filterB)))
+                    {
+                        // NOT wrapped in WakeEvent, and this is a real
+                        // constraint rather than an omission: `until:{event}`
+                        // matches an ARBITRARY journal type, and several
+                        // payloads already own the key `kind` — `downed` and
+                        // `death` carry `kind` = colonist|slave|animal|mech.
+                        // Stamping our own `kind` over it would silently
+                        // rewrite the caller's data. The three families above
+                        // have fixed, documented payload key sets (JOURNAL.md:
+                        // letter {def,label,text,target,faction}, alert_on
+                        // {id,label,priority}) and can be stamped safely.
                         Halt("event", payload, seq);
+                        return;
+                    }
                     break;
+            }
+
+            // ================================================ git-bug 280fb78 ==
+            // THE WAKE. EVERY LETTER AND EVERY `alert_on`, WHETHER OR NOT THE
+            // CALLER ASKED — the same disposition as `casualty` and `dialog`
+            // above, and for a sharper version of the same reason.
+            //
+            // Before this, four halts were unconditional (`casualty`, `dialog`,
+            // `red_error`, and `NoticeRedError`'s own path) and EVERYTHING else
+            // sat inside the switch above. So `advance {ticks:60000}` — one
+            // in-game day — slept through a raid landing, a trade caravan
+            // arriving and leaving, a quest expiring, an inspiration expiring,
+            // `Alert_LowFood`, a fire, and a prisoner escaping, unless the
+            // agent had GUESSED IN ADVANCE that today was the day. A raid at
+            // hour 2 was discovered at hour 24, after the colony had fought it
+            // alone. That was coherent while advances were short and
+            // hand-driven; `1113019` makes an unbounded `until` default to a
+            // full in-game day, and the two were ruled together — the day-long
+            // default is only safe BECAUSE these halts exist.
+            //
+            // ---- IT IS NOT A SEVERITY FILTER, AND THAT WAS THE RULING -------
+            //
+            // The obvious design is a severity cut: wake on ThreatBig /
+            // ThreatSmall / Death / NegativeEvent letters and Critical/High
+            // alerts, on the grounds of noise. Evan rejected the framing
+            // outright (2026-09-01): "anything neutral or positive should wake
+            // you, maybe you want to act on an inspiration, things like that.
+            // that's how you get propelled into actually playing the game and
+            // having fun."
+            //
+            // The rule is "IS THERE SOMETHING I MIGHT ACT ON", not "is this
+            // bad". An inspiration expires if you sleep through it. A trader
+            // leaves. A wanderer at the door is a roster decision. A run that
+            // only ever wakes for disasters is one that survives ten days
+            // without ever playing.
+            //
+            // Which collapses the letter half to nothing: HALT ON EVERY LETTER,
+            // NO FILTER. `Verse/LetterStack.ReceiveLetter` is the game's own
+            // "the player should look at this" — it is where vanilla decides
+            // whether to pause the game at all
+            // (`Prefs.AutomaticPauseMode >= let.def.pauseMode`) — so the
+            // filtering has already been done by the one system that is good at
+            // it, and re-filtering it here would second-guess it with a list.
+            // It also avoids shipping an allow-list, which is a second source
+            // of truth this project has been burned by twice (`7382bdd`'s
+            // rejected arg whitelist; the `Build:` tally essay in the workspace
+            // CLAUDE.md).
+            //
+            // Noise is not the problem it sounds like. Measured on a bench
+            // being actively wrecked by an acceptance suite, 13,667 ticks —
+            // about half an in-game day — produced 53 journal events in total,
+            // of which 3 were letters and 6 were `alert_on`.
+            //
+            // ---- ALERTS DIFFER IN ONE WAY, AND THE MUTE IS THE ANSWER -------
+            //
+            // A letter HAPPENS ONCE. An alert is a STANDING CONDITION, and
+            // `alert_on` is already a transition so a chronic one wakes you
+            // once per on-cycle rather than continuously. But a condition the
+            // colony has deliberately decided not to fix still flickers off and
+            // on, and each flicker is a wake for a decision already made. Hence
+            // `alert-mute` — runtime, mid-run, a required reason, journaled as
+            // an act, and published in `digest.alerts.muted` so it cannot be
+            // forgotten. See AlertMuteVerbs.cs for the whole argument.
+            if (type == "letter")
+            {
+                if (!haltOnNews)
+                {
+                    NoteRodePast("letter", Str(payload, "def"), Str(payload, "label"), tick);
+                    return;
+                }
+                Halt("letter", WakeEvent("letter", payload, tick, "default"), seq);
+                return;
+            }
+            if (type == "alert_on")
+            {
+                string id = Str(payload, "id");
+                // The mute is checked BEFORE the escape so the two are
+                // distinguishable in the result: an alert that did not wake
+                // this run because of a standing decision is reported as such,
+                // rather than being folded into "you rode past 7 things".
+                if (AlertMuteComponent.Muted(id))
+                {
+                    NoteMuted(id, Str(payload, "label"), Str(payload, "priority"), tick);
+                    return;
+                }
+                if (!haltOnNews)
+                {
+                    NoteRodePast("alert", id, Str(payload, "label"), tick);
+                    return;
+                }
+                Halt("alert", WakeEvent("alert", payload, tick, "default"), seq);
+            }
+        }
+
+        // The halt event for a journal-tap halt: the journal payload verbatim,
+        // plus the three things a caller needs that the payload does not carry.
+        //
+        //   `kind`      — which halt this was, matching `casualty`/`condition`/
+        //                 `layout`, so `halted_on.kind` is answerable for every
+        //                 halt that publishes an event at all.
+        //   `armed_by`  — "until" when the CALLER asked for this halt,
+        //                 "default" when the 280fb78 wake produced it. Present
+        //                 on BOTH, never inferred from an absence: this is the
+        //                 field that makes "`until:{letter}` still works as an
+        //                 explicit wait" a thing a suite can assert rather than
+        //                 a thing a reader has to take on trust.
+        //   `tick`      — the journal envelope carries it; `halted_on` did not.
+        //
+        // Any thread — a plain dictionary copy, no Verse. The copy matters:
+        // `payload` is the same dictionary the journal writer holds, and
+        // stamping keys into it in place would edit a row that has already been
+        // emitted.
+        private static Dictionary<string, object> WakeEvent(string kind,
+            Dictionary<string, object> payload, int tick, string armedBy)
+        {
+            var evt = new Dictionary<string, object>();
+            if (payload != null)
+                foreach (var kv in payload) evt[kv.Key] = kv.Value;
+            evt["kind"] = kind;
+            evt["armed_by"] = armedBy;
+            evt["tick"] = (double)tick;
+            evt["detail"] = Detail(kind, evt, tick, armedBy);
+            return evt;
+        }
+
+        private static string Detail(string kind, Dictionary<string, object> evt, int tick,
+            string armedBy)
+        {
+            bool asked = armedBy == "until";
+            if (kind == "alert")
+                return (Str(evt, "label") ?? Str(evt, "id") ?? "an alert")
+                    + " (" + (Str(evt, "id") ?? "?") + ", priority "
+                    + (Str(evt, "priority") ?? "?") + ") went ON at tick " + tick
+                    + (asked
+                        ? " — the alert this advance was waiting for."
+                        : " — a standing condition the colony did not have a moment ago, so the "
+                          + "advance stopped rather than running on. If this one should stop "
+                          + "waking the run, `alert-mute {ids:[\"" + (Str(evt, "id") ?? "?")
+                          + "\"], reason:\"<why>\"}` records that decision and `digest.alerts."
+                          + "muted` keeps it visible; `advance {through_news:\"<why>\"}` rides "
+                          + "past every wake for ONE call.");
+            string what = (Str(evt, "label") ?? "a letter")
+                + " (" + (Str(evt, "def") ?? "?") + ")";
+            if (kind == "threat")
+                return what + " arrived at tick " + tick
+                    + " — the threat letter this advance was waiting for.";
+            return what + " arrived at tick " + tick
+                + (asked
+                    ? " — the letter this advance was waiting for."
+                    : " — the advance stopped here because RimWorld only sends a letter when it "
+                      + "thinks the player should look, and that includes the good ones: an "
+                      + "inspiration expires, a trader leaves, a wanderer at the door is a "
+                      + "roster decision. `journal {since_seq:<n>}` has the full text; "
+                      + "`advance {through_news:\"<why>\"}` rides past letters and alerts for "
+                      + "ONE call and is journaled as an act.");
+        }
+
+        // Any thread. Both logs are bounded lists behind one lock, and the
+        // COUNT is kept whole even when the list stops growing — "27 letters,
+        // here are the first 20" is honest; a silently truncated list is not.
+        private static void NoteRodePast(string kind, string id, string label, int tick)
+        {
+            lock (newsLock)
+            {
+                rodePastCount++;
+                if (rodePast.Count >= NewsLogCap) return;
+                rodePast.Add(new Dictionary<string, object>
+                {
+                    ["kind"] = kind,
+                    ["id"] = id,
+                    ["label"] = label,
+                    ["tick"] = (double)tick,
+                });
+            }
+        }
+
+        private static void NoteMuted(string id, string label, string priority, int tick)
+        {
+            lock (newsLock)
+            {
+                mutedSeenCount++;
+                if (mutedSeen.Count >= NewsLogCap) return;
+                mutedSeen.Add(new Dictionary<string, object>
+                {
+                    ["id"] = id,
+                    ["label"] = label,
+                    ["priority"] = priority,
+                    ["tick"] = (double)tick,
+                });
             }
         }
 
@@ -1535,7 +1842,37 @@ namespace AutoRimmer
             // ran".
             if (unreadOk != null) data["unread_ok"] = unreadOk;
             if (throughCasualties != null) data["through_casualties"] = throughCasualties;
+            if (throughNews != null) data["through_news"] = throughNews;
             if (bypassed != null) data["escaped"] = bypassed;
+            // 280fb78. WHAT THE ESCAPE AND THE MUTE LIST ACTUALLY COST, on the
+            // envelope, so a transcript-only audit sees it without joining to
+            // the journal. Present ONLY when non-empty, so silence means "the
+            // wake had nothing to suppress" and never "nobody counted".
+            //
+            // `muted_alerts` is published REGARDLESS of `through_news`: it is
+            // the standing decision doing its work, and an agent that muted
+            // `Alert_LowFood` on day 2 should be able to watch it swallow a
+            // wake on day 8 rather than infer it from an absence.
+            lock (newsLock)
+            {
+                if (rodePastCount > 0)
+                    data["news_rode_past"] = new Dictionary<string, object>
+                    {
+                        ["count"] = (double)rodePastCount,
+                        ["shown"] = (double)rodePast.Count,
+                        ["events"] = new List<object>(rodePast),
+                    };
+                if (mutedSeenCount > 0)
+                    data["muted_alerts"] = new Dictionary<string, object>
+                    {
+                        ["count"] = (double)mutedSeenCount,
+                        ["shown"] = (double)mutedSeen.Count,
+                        ["events"] = new List<object>(mutedSeen),
+                        ["detail"] = "these `alert_on` transitions did NOT stop the advance "
+                            + "because `alert-mute` holds a recorded decision for them. "
+                            + "`digest.alerts.muted` carries the list and the reasons.",
+                    };
+            }
             if (Target >= 0) data["overshoot"] = Math.Max(0, ticks - Target);
             if (speedClamp != null) data["speed_clamped"] = speedClamp;
             // Present ONLY when the caller's number was moved, so silence means

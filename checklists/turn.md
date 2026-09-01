@@ -146,3 +146,23 @@ colony start; treat an empty list before tick 600 as no information.
 
 **Silence from a scoped or time-limited alert is not safety.** That sentence
 is the whole reason `daily.md` exists.
+
+**Every alert on that list now WAKES you (git-bug 280fb78).** An `alert_on`
+transition halts an `advance` whether or not it asked, exactly like a letter, on
+Evan's rule — "is there something I might act on", not "is this bad". So a
+chronic alert the colony has deliberately decided not to fix will flicker off and
+on and wake the run each time for a decision already made. `alert-mute
+{ids:["Alert_X"], reason:"…"}` is the answer, and it is a JOURNALLED ACT with a
+required reason, not a filter: `digest.alerts` still lists every active alert,
+and the mute itself shows up as `digest.alerts.muted` with the reason attached,
+so day 8 can read what day 2 decided. Two things to hold:
+
+- **Read `digest.alerts.muted` before trusting silence.** A muted alert is a
+  standing decision, and one you have forgotten you made is the
+  `[[seek-off-is-a-decision-to-flee]]` failure with a different subject. Release
+  it — `alert-mute {ids:[…], release:true}` — the moment the reason expires;
+  nothing lapses it for you, deliberately (DESIGN, 2026-09-01).
+- **Mute the row, not the wake.** `advance {through_news:"<why>"}` rides past
+  EVERY letter and alert for one call, which is the right tool for a deliberate
+  three-day burn and the wrong one for a noisy alert. The first is a
+  journalled admission per call; the second is a decision you can look up.
