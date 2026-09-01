@@ -1206,3 +1206,35 @@ queue by default (an agent flailing mid-experiment must not page triage).
   re-runs the validator over every player building in a rect, which is how
   "instant ≡ built-blueprint" on 3.3 becomes a provable bullet instead of an
   undefined diff. `3a5ff6c`.
+- 2026-09-01 (session 14) — **A build's identity is its placement id, because
+  completion is an ABSENCE.** A finished build leaves no blueprint and no
+  frame: `Blueprint.TryReplaceWithSolidThing` turns the blueprint into a
+  `Frame` (`Blueprint_Build.MakeSolidThing`, which also calls
+  `Map.enrouteManager.SendReservations`), and `Frame.CompleteConstruction`
+  turns the frame into the building and destroys itself. So any read that only
+  enumerates live blueprints and frames reports "finished" and "cancelled"
+  identically, as nothing — and an agent that asked for a wall cannot tell
+  that it got one from the fact that something deconstructed it. 3.3's "every
+  placement journaled with a placement id" was written as bookkeeping; it is
+  in fact the only handle the completion answer can hang on, and it is
+  promoted here to an invariant: **a placement verb publishes an id, and the
+  construction read answers `blueprint | frame | built | cancelled` for that
+  id, by field and never by parsing a sentence.** The two transitions are
+  journaled as positive events via Harmony postfixes on
+  `Frame.CompleteConstruction` and `Frame.FailConstruction`, in
+  `JournalHooks.cs`'s existing read-only idiom, rather than inferred from two
+  absences. `d7c8088`, `1adc737`.
+- 2026-09-01 (session 14) — **An issue that cites a path under the bench's
+  protocol root cites a file with a lifetime shorter than the issue.** Three
+  open issues (`8b4839f`, `c718e4a`, `3a5ff6c`) named response envelopes
+  (`results/accs13-026-devspawnthing.json` and four more) and journal seqs as
+  their evidence. None of it was in the repo; it lived only in
+  `_RimWorld-Agent`'s protocol root, which is the working directory of
+  whatever bench runs next — and the round those issues exist to drive
+  launches benches repeatedly. What the repo did hold was
+  `transcripts/<sid>/`, which carries a `cmd.json` per call and **no
+  responses**, so the claims were banked on the ask side and nowhere on the
+  answer side. A transcript proves what was asked; it does not prove what the
+  game answered, and the answers are the findings. **Bank the envelope beside
+  the claim** — `accept/runs/<session>/results/` — at the time the issue is
+  filed, not at the time someone needs it.
