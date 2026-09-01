@@ -1,0 +1,1 @@
+{"id":"accfc287ba-054-devsetskill","op":"dev:set-skill","ok":false,"error":{"code":"bad-args","detail":"missing required arg 'pawn' (pawn id or name)"},"state":{"gameLoaded":true,"tick":2543,"paused":true},"sid":"20260901T193119","ts":"2026-09-01T19:33:05.6054660Z"}

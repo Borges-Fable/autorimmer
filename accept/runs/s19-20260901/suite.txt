@@ -1,0 +1,210 @@
+AutoRimmer acceptance - advance until:{condition|layout} (fc287ba),
+                        construction --layout_id (36999fd),
+                        short_by from availability (54b0c9a)
+protocol root: /home/dorian/projects/rimworld/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer
+phases: 0 + 1, 2, 3, 4, 5
+
+==============================================================================
+PHASE 0 - the bench, the verbs, and THE SHAPE CONTRACT
+==============================================================================
+  0.1     OK      precondition: the bench answers `status`
+  0.2     PASS    `journal` publishes data.last_seq
+  journal watermark: seq0=13
+  0.3a    PASS    `digest` publishes data.time.hour
+  0.3b    PASS    `digest` publishes data.time.tick
+  0.3c    PASS    `digest` publishes data.construction.frames
+  0.3d    PASS    `digest` publishes data.construction.blueprints
+  0.3e    PASS    `digest` publishes data.resources.food_days
+  0.3f    PASS    `digest` publishes data.colonists.list
+  0.3g    PASS    `digest` publishes data.power.gen_w
+  0.4z    PASS    `status` publishes the registry
+  0.4a    PASS    the registry lists advance
+  0.4b    PASS    the registry lists construction
+  0.4c    PASS    the registry lists place-layout
+  0.4d    PASS    the registry lists cancel-layout
+
+==============================================================================
+PHASE 0b - THE REFUSALS: an ignored argument is the bug being fixed
+==============================================================================
+  0.5a    PASS    construction refuses an unknown layout id
+  0.5b    PASS    …and names what this session DOES know (error.detail)
+  0.5c    PASS    layout_id beside rect is a refusal, not a precedence rule
+  0.5d    PASS    the near-miss spelling `layout` is refused
+  0.6a    PASS    a MISSPELLED matcher is refused, not silently ignored
+  0.6b    PASS    two matchers in one advance is a refusal
+  0.6c    PASS    a path that does not resolve is refused AT ARM TIME
+  0.6d    PASS    …and names the keys that section really publishes (error.detail)
+  0.6e    PASS    `changed` is not a predicate section
+  0.6f    PASS    the issue's own example path is refused, because it is wrong
+  0.6g    PASS    `<` on a string is refused rather than coerced
+  0.6h    PASS    an unknown layout id is refused before the clock is touched
+  0.6i    PASS    an out-of-range cadence is refused
+  0.7a    PASS    every refusal left the game PAUSED (data.time.paused)
+  0.7b    PASS    …at speed Paused, not merely force-paused (data.time.speed)
+  0.7c    PASS    …and the tick did not advance across nine refusals
+
+==============================================================================
+PHASE 1 - 36999fd: a layout is a SCOPE, and three of them prove it
+==============================================================================
+  1.0     OK      precondition: three non-overlapping sites for three layouts
+  3 sites: [[124, 124], [139, 121], [121, 139]]
+  1.1a    PASS    the instant layout placed all four (data.placed_count)
+  1.1b    OK      precondition: the instant layout has an id
+  1.2a    PASS    the second layout placed all four (data.placed_count)
+  1.2b    PASS    and cancel-layout took all four (data.cancelled)
+  1.3a    PASS    the third layout placed all four (data.placed_count)
+  1.4a    PASS    `construction` publishes data.layout_id
+  1.4b    PASS    `construction` publishes data.rect_source
+  1.4c    PASS    `construction` publishes data.elements
+  1.4d    PASS    `construction` publishes data.built
+  1.4e    PASS    `construction` publishes data.cancelled
+  1.4f    PASS    `construction` publishes data.resolved
+  1.4g    PASS    `construction` publishes data.unresolved
+  1.4h    PASS    `construction` publishes data.done
+  1.4i    PASS    `construction` publishes data.by_state
+  1.4j    PASS    `construction` publishes data.items
+  1.4k    PASS    `construction` publishes data.items.0.placement_id
+  1.4l    PASS    `construction` publishes data.items.0.state
+  1.4m    PASS    `construction` publishes data.items.0.resolved
+  1.4n    PASS    the answer NAMES the question it answered (data.rect_source)
+  1.5a    PASS    the instant layout reads DONE (data.done)
+  1.5b    PASS    with four built (data.built)
+  1.5c    PASS    and none cancelled (data.cancelled)
+  1.5d    PASS    and nothing outstanding (data.unresolved)
+  1.6a    PASS    the cancelled layout ALSO reads done (data.done)
+  1.6b    PASS    …but with four CANCELLED (data.cancelled)
+  1.6c    PASS    …and zero built (data.built)
+  1.6d    NOTE    built vs cancelled is the pair a rect-scoped read cannot tell apart at all: both are empty ground
+  1.7a    PASS    the live layout is NOT done (data.done)
+  1.7b    PASS    with four unresolved (data.unresolved)
+  1.7c    PASS    and zero built (data.built)
+  1.7d    PASS    …and its blueprints are counted (data.blueprints)
+  1.8a    PASS    whole-map still says whole-map (data.rect_source)
+  1.8b    PASS    the layout read is a SUBSET of the whole-map read
+  1.8c    PASS    and the BUILT layout reports no blueprints of its own (data.blueprints)
+
+==============================================================================
+PHASE 2 - 54b0c9a: short_by is the BUILDER's question
+==============================================================================
+  2.0     OK      precondition: a clear box for the bill rehearsal
+  site: rect at [126, 120], layout origin [128, 122]
+  WoodLog on the map: 300 in 5 stacks, 300 forbidden · stockpile zones: 0
+  2.1a    OK      precondition: there is loose WoodLog on this map
+  2.1b    OK      precondition: this map has NO stockpile zone, as the M2 run's did not
+  2.2z    OK      precondition: `things --def WoodLog` returns addressable ids
+  2.2y    PASS    every stack of WoodLog is now forbidden
+  2.2a    PASS    `place-layout` publishes data.materials
+  2.2b    PASS    `place-layout` publishes data.materials.0.count
+  2.2c    PASS    `place-layout` publishes data.materials.0.available
+  2.2d    PASS    `place-layout` publishes data.materials.0.in_stockpiles
+  2.2e    PASS    `place-layout` publishes data.materials.0.availability_basis
+  2.2f    PASS    `place-layout` publishes data.materials_basis.gate
+  2.2g    PASS    the bill cites the vanilla member it reproduces (data.materials_basis.gate)
+  2.2h    PASS    …and names how many builders it asked (data.materials_basis.builders)
+  2.3a    PASS    wood that is all FORBIDDEN is a shortfall
+  2.3b    PASS    …and it says how much is forbidden (data.shortfall.0.forbidden)
+  2.3c    PASS    …and available is zero (data.shortfall.0.available)
+  2.3d    PASS    …and the hint names `unforbid`, not mining (data.shortfall.0.hint)
+  2.4b    PASS    the wood is unforbidden again (data.totals.forbidden)
+  bill: needed=185 available=300 in_stockpiles=0
+  2.5a    PASS    the availability count now SEES the loose wood (data.materials.0.available)
+  2.5b    PASS    …while the stockpile count is zero, as it was on the M2 run (data.materials.0.in_stockpiles)
+  2.5c    PASS    the two numbers are DIFFERENT, which is the whole finding
+  2.5d    PASS    …and the basis says it asked a colonist, not a stockpile (data.materials.0.availability_basis)
+  2.5e    PASS    with enough reachable wood, shortfall[] is EMPTY — the M2 case (data.shortfall)
+  2.6a    PASS    a material with none on the map IS a shortfall
+  2.6b    PASS    …and available is zero (data.shortfall.0.available)
+  2.6c    PASS    …and short_by is the WHOLE bill (data.shortfall.0.short_by)
+  2.6d    PASS    …and the hint says genuinely short (data.shortfall.0.hint)
+  2.6e    PASS    …and it is NOT reported as forbidden or unreachable
+  place-layout shortfall: [] · construction missing: [{"def":"WoodLog","count":185,"available":300,"in_stockpiles":0,"availability_basis":"reachable-unforbidden-by-a-colonist"}]
+  2.7a    PASS    `construction` publishes data.missing.0.available
+  2.7b    PASS    `construction` publishes data.missing.0.in_stockpiles
+  2.7c    PASS    `construction` publishes data.materials_basis.gate
+  2.7d    PASS    construction's missing[] agrees with place-layout's shortfall[]
+
+==============================================================================
+PHASE 3 - fc287ba: the CLOCK, and the edge
+==============================================================================
+  3.0     OK      precondition: the digest publishes an hour
+  clock: hour=6 tick=1118
+  3.1a    PASS    `advance` publishes data.until
+  3.1b    PASS    `advance` publishes data.until.path
+  3.1c    PASS    `advance` publishes data.until.true_when_armed
+  3.1d    PASS    `advance` publishes data.until.evaluations
+  3.1e    PASS    `advance` publishes data.until.eval_ms_avg
+  3.1f    PASS    `advance` publishes data.until.eval_ms_per_frame
+  3.1g    PASS    `advance` publishes data.until.every_frames
+  3.1h    PASS    an always-true predicate with the edge required does NOT halt on it (data.reason)
+  3.1i    PASS    …and says it was already true when it was armed (data.until.true_when_armed)
+  3.1j    PASS    …and that it never saw a false reading (data.until.saw_false)
+  3.1k    PASS    …having actually evaluated it (data.until.evaluations)
+  eval cost: 0.0219 ms/eval, 0.0015 ms/frame over 135 frames
+  3.2a    PASS    …and with edge:false the same predicate halts immediately (data.reason)
+  3.2b    PASS    …naming the path that tripped it (data.halted_on.path)
+  3.2c    PASS    `advance` publishes data.halted_on.observed
+  3.2d    PASS    …and identifying itself as a state halt (data.halted_on.kind)
+  3.2e    PASS    a state halt publishes NO halted_seq (it names no journal line)
+  3.2f    PASS    …and it halted at once, not after the timeout
+  advancing until hour 7 (it is 6) — no tick count is passed
+  3.3a    PASS    the clock predicate halts on the crossing (data.reason)
+  3.3b    PASS    …reporting the value that tripped it (data.halted_on.observed)
+  3.3c    PASS    …and the operator it was asked with (data.halted_on.op)
+  3.3d    PASS    …and it had to see a false reading first (data.until.saw_false)
+  3.3e    PASS    the game's own clock agrees it is that hour (data.time.hour)
+  3.3f    PASS    …and the advance left the game paused (data.time.paused)
+  it took 983 ticks. THE SUITE NEVER NAMED THAT NUMBER.
+
+==============================================================================
+PHASE 4 - fc287ba: advance until the ROOM IS BUILT
+==============================================================================
+  4.0     OK      precondition: there are colonists on this map
+  colonists: Sai, Maldonado, Hunt
+  starter kit: ok=True
+  4.1     OK      precondition: a clear box for the room
+  site: rect at [126, 120], layout origin [128, 122]
+  4.2a    PASS    the bedroom went down as 22 blueprints (data.placed_count)
+  4.2b    OK      precondition: the layout has an id
+  4.2c    PASS    …with an empty shortfall, so it CAN be built (data.shortfall)
+  4.3a    PASS    RIGHT NOW `construction.frames == 0` is TRUE — the false-at-start case (data.construction.frames)
+  4.3b    PASS    …while 22 blueprints stand on the map (data.construction.blueprints)
+  4.3c    PASS    …and the layout scope is NOT fooled: nothing is resolved (data.unresolved)
+  4.3d    PASS    …and it is not done (data.done)
+  4.3e    NOTE    a `condition` on construction.frames would halt HERE, on a room that does not exist. The layout scope is monotone; that path is not.
+  advancing until ly=ly-5 is built. NO TICK COUNT IS PASSED — only a timeout bound.
+  4.4a    PASS    the advance halted on the LAYOUT, not on a timeout (data.reason)
+  4.4b    PASS    …and says which kind of halt it was (data.halted_on.kind)
+  4.4c    PASS    …with every element resolved (data.halted_on.done)
+  4.4d    PASS    …and all 22 of them BUILT (data.halted_on.built)
+  4.4e    PASS    …none cancelled (data.halted_on.cancelled)
+  4.4f    PASS    …and it did NOT halt at t=0 (data.ticks_elapsed)
+  4.4g    PASS    `advance` publishes data.until.eval_ms_per_frame
+  built in 10255 ticks / 29.1s wall · predicate cost 0.0008 ms/frame over 114 evaluations
+  4.5a    PASS    an independent read agrees the layout is done (data.done)
+  4.5b    PASS    …with 22 built (data.built)
+  4.5c    PASS    …and nothing outstanding (data.unresolved)
+  4.5d    PASS    …and no blueprints of its own left (data.blueprints)
+  4.6     NOTE    the room the colonists built: role=Bedroom proper=True cells=15 open_roof_cells=0
+
+==============================================================================
+PHASE 5 - fc287ba: a layout that CANNOT finish, and what it says
+==============================================================================
+  5.0     OK      precondition: there is no Plasteel on this map
+  5.1     OK      precondition: a clear box for the impossible room
+  site: rect at [122, 118], layout origin [124, 120]
+  5.2a    PASS    the blueprints go down anyway — placement does not gate on material (data.placed_count)
+  5.2b    PASS    …but the bill says it is short
+  advancing until ly=ly-6 finishes, which it never will
+  5.3a    PASS    a predicate that is never true exits on the TIMEOUT, not by hanging (data.reason)
+  5.3b    PASS    …having run the full budget (data.ticks_elapsed)
+  5.4a    PASS    `advance` publishes data.until.unresolved_items
+  5.4b    PASS    …naming the elements that are still outstanding (data.until.unresolved)
+  5.4c    PASS    `advance` publishes data.until.unresolved_items.0.placement_id
+  5.4d    PASS    `advance` publishes data.until.unresolved_items.0.state
+  5.4e    PASS    …and each one says WHY: it is waiting for materials (data.until.unresolved_items.0.state)
+  5.4f    PASS    …and nothing was built (data.until.built)
+  unresolved: [{"placement_id":"pl-57","def":"Wall","stuff":"Plasteel","at":[124,121],"kind":"blueprint","state":"awaiting-materials"},{"placement_id":"pl-58","def":"Wall","stuff":"Plasteel","at":[125,121],"kind":"blueprint","state":"awaiting-materials"},{"placement_id":"pl-59","def":"Wall","stuff":"Plasteel","at":[124,120],"kind":"blueprint","state":"awaiting-materials"},{"placement_id":"pl-60","def":"Wall","s
+  5.5     PASS    no red errors across the whole run (data.count)
+
+==============================================================================
+RESULT: all 140 checks passed

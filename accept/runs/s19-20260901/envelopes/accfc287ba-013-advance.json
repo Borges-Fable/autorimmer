@@ -1,0 +1,1 @@
+{"id":"accfc287ba-013-advance","op":"advance","ok":false,"error":{"code":"bad-args","detail":"'time.season' read \"Spring\", which is not a number, and the value is 3. A number was expected because the value is one."},"state":{"gameLoaded":true,"tick":1118,"paused":true},"sid":"20260901T193119","ts":"2026-09-01T19:32:19.4418170Z"}
