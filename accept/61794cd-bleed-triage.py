@@ -610,10 +610,16 @@ def bed_count():
     """How many beds are on the map, from the game rather than from memory.
 
     `TakeToBedGate("rescue", …)` ends in `RestUtility.FindBedFor`, and with NO
-    bed on the map every candidate is refused `no-bed`, every verdict is
-    `no-rescuer` and `act` is never published — measured on the s21 bench, and
-    the fixture requirement that would otherwise cost a session (40ed42f #3). A
-    bare `--quicktest` map has no buildings at all."""
+    bed on the map every verdict is `no-rescuer` and `act` is never published —
+    measured on the s21 bench, and the fixture requirement that would otherwise
+    cost a session (40ed42f #3). A bare `--quicktest` map has no buildings at
+    all.
+
+    WHICH REFUSAL a candidate gets depends on the PATIENT, not on the bed:
+    `no-bed` is the LAST clause of the rescue branch and only a DOWNED,
+    not-in-bed patient reaches it, because `HealthAIUtility.CanRescueNow` ->
+    `WantsToBeRescued` opens on `!pawn.Downed` and answers `cannot-rescue`
+    first. Phase 6 asserts both halves against the row each one belongs to."""
     e = send("things", {"def": "Bed"})
     have = dig(e, "data.total")
     if not num(have):
@@ -635,9 +641,10 @@ def spawn_bed(num_, near_pawn):
     precondition(num_, "a bed for RestUtility.FindBedFor to find",
                  ARGS.dry_run or dig(e, "ok") is True,
                  "dev:spawn-thing could not stage a bed (%s). Place one by hand "
-                 "beside the casualty and re-run — with no bed the last clause "
-                 "of the rescue gate refuses every rescuer `no-bed` and this "
-                 "whole phase proves nothing." % show(dig(e, "error")))
+                 "beside the casualty and re-run — with no bed the rescue gate "
+                 "refuses every rescuer (`no-bed` for a downed patient, "
+                 "`cannot-rescue` for a standing one) and this whole phase "
+                 "proves nothing." % show(dig(e, "error")))
     return e
 
 
@@ -1723,22 +1730,78 @@ def phase6():
     # `no-rescuer` and `act` is absent. That is not a bug and it is not a
     # fixture accident — it is the answer to "why is nobody coming", which is
     # the question the M1 run never got to ask. So it is asserted FIRST.
+    #
+    # ============ WHICH ROW CAN REACH `no-bed`, AND WHICH CANNOT =============
+    # THIS BLOCK USED TO ASSERT `no-bed` ON `cas[0]` AND WAS WRONG TO. Measured
+    # on the s21 bench, 2026-09-01: `cas[0]` is the BLEEDER, who is STANDING,
+    # and `TakeToBedGate("rescue", …)` opens on
+    # `HealthAIUtility.CanRescueNow` -> `WantsToBeRescued`, whose FIRST clause is
+    # `!pawn.Downed`. `no-bed` (`RestUtility.FindBedFor`) is its LAST. So for a
+    # standing patient every candidate that clears `ProviderGate` is refused
+    # `cannot-rescue` and the bed clause is unreachable BY CONSTRUCTION — no
+    # amount of staging produces `no-bed` there, and the mod is right about it
+    # (TriageVerbs.cs's "THE OTHER BOUNDARY, STATED" says so in the source).
+    #
+    # `no-bed` belongs to a DOWNED, not-yet-in-bed patient, which is exactly
+    # what the anaesthetised one staged at 6.0a is. The banked bench envelope
+    # `18-triage-downed.json` is that row and phase 9's 9.6i-9.6k assert it.
+    #
+    # The other refusal on `cas[0]` — `manipulation` on the handless pawn — is
+    # NOT fixture leakage either: 6.8d requires phase 4's handless doctor to be
+    # in the gated list on purpose. The wreckage is carried between phases
+    # deliberately; only this assertion picked the wrong row to read it off.
     if not ARGS.dry_run and S.get("beds0", 0) == 0 and cas:
         row = cas[0]
         gated = as_list(row.get("rescuers_gated_out"))
-        eq_val("6.4a", "with NO bed on the map every casualty reads `no-rescuer`",
-               row.get("verdict"), "no-rescuer")
+        verdicts = [r.get("verdict") for r in cas if isinstance(r, dict)]
+        check("6.4a", "with NO bed on the map EVERY casualty reads `no-rescuer` "
+                      "— with no bed to carry anyone to, nobody clears the gate "
+                      "on anybody",
+              verdicts == ["no-rescuer"] * len(verdicts),
+              "every verdict no-rescuer", verdicts)
         eq_val("6.4b", "…with nothing pathed, because nothing survived the gate",
                (row.get("candidates_total"), row.get("candidates_pathed")), (0, 0))
-        check("6.4c", "…and a refusal names `no-bed`, the last clause of "
-                      "TakeToBedGate",
-              bool(gated) and any(g.get("gate") == "no-bed" for g in gated
-                                  if isinstance(g, dict)),
-              "a gated-out row with gate no-bed", gated[:2])
-        check("6.4d", "…in the GAME's own words, not ours",
-              any("bed" in (g.get("reason") or "").lower() for g in gated
-                  if isinstance(g, dict)),
-              "a reason naming a bed", [g.get("reason") for g in gated[:2]])
+        # THE STANDING CASE, NAMED. This is the half that used to be asserted as
+        # `no-bed` and is not: it is the gate order, measured. The row is chosen
+        # by `downed:false` rather than by index, because casualty order follows
+        # `FreeColonistsSpawned` and is not this suite's to predict.
+        std = [r for r in cas if isinstance(r, dict) and r.get("downed") is not True]
+        if std:
+            sgates = {g.get("gate") for g in as_list(std[0].get("rescuers_gated_out"))
+                      if isinstance(g, dict)}
+            check("6.4b2", "a STANDING casualty's candidates stop at "
+                           "`cannot-rescue`, not at `no-bed`: WantsToBeRescued's "
+                           "first clause is `!pawn.Downed` and the bed lookup is "
+                           "TakeToBedGate's last",
+                  "cannot-rescue" in sgates and "no-bed" not in sgates,
+                  "cannot-rescue present and no-bed absent on standing pawn %s"
+                  % std[0].get("pawn"), sorted(sgates))
+        else:
+            note("6.4b2", "every casualty on this read is DOWNED, so the "
+                          "`cannot-rescue` half of the gate order could not be "
+                          "shown against a standing patient.")
+        # …and the DOWNED one, which is where `no-bed` lives.
+        dwn = [r for r in cas if isinstance(r, dict) and r.get("downed") is True]
+        if dwn:
+            drow = dwn[0]
+            dgated = as_list(drow.get("rescuers_gated_out"))
+            check("6.4c", "…while a DOWNED casualty's refusal names `no-bed`, the "
+                          "last clause of TakeToBedGate",
+                  any(g.get("gate") == "no-bed" for g in dgated
+                      if isinstance(g, dict)),
+                  "a gated-out row with gate no-bed on pawn %s" % drow.get("pawn"),
+                  dgated[:3])
+            check("6.4d", "…in the GAME's own words, not ours "
+                          "(NoNonPrisonerBed.Translate)",
+                  any("bed" in (g.get("reason") or "").lower() for g in dgated
+                      if isinstance(g, dict)),
+                  "a reason naming a bed", [g.get("reason") for g in dgated[:3]])
+        else:
+            note("6.4c", "no casualty is DOWNED on this read, so the `no-bed` "
+                         "clause could not be reached live — it is the last "
+                         "clause of TakeToBedGate and CanRescueNow refuses a "
+                         "standing patient before it. 9.6i-9.6k assert it from "
+                         "the banked bench envelope instead.")
         check("6.4e", "…and NO `act` is published, because there is nobody to "
                       "name in it",
               all("act" not in r for r in cas if isinstance(r, dict)),

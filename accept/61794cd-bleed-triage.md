@@ -127,6 +127,23 @@ s21 bench (`accept/runs/s21-20260901/18-triage-downed.json`), and it would cost
 a session to discover from inside a suite. The driver asserts that state
 deliberately at 6.4, THEN spawns one bed.
 
+**`no-bed` is not what EVERY candidate reads, and 6.4 used to assume it was.**
+`TakeToBedGate("rescue", …)` opens on `HealthAIUtility.CanRescueNow` ->
+`WantsToBeRescued`, whose FIRST clause is `!pawn.Downed`; the bed lookup is its
+LAST. So the refusal depends on the PATIENT:
+
+| patient | what every candidate that clears `ProviderGate` reads |
+|---|---|
+| DOWNED, not in bed (the anaesthetised one) | `no-bed` — the sentence above |
+| STANDING (the bleeder, the sick one) | `cannot-rescue` — nobody carries a pawn who is on their feet |
+
+Both are `no-rescuer` verdicts and both are honest answers to "why is nobody
+coming"; they are simply different answers. 6.4a asserts the verdict across
+**every** casualty, 6.4b2 asserts the standing half by name, and 6.4c/6.4d pick
+the DOWNED row rather than `casualties[0]` — which this fixture makes the
+standing bleeder, and which is how the pair failed on the s21 bench while the
+mod was correct.
+
 The bed goes on the **bleeder's** cell (`pos:"pawn:<id>"`, `mode:"direct"`),
 because `in-time` is only an honest verdict when the carry leg is real, and
 `mode:"near"` would slide the bed somewhere nobody asked about (GenPlace's
@@ -148,7 +165,7 @@ radial search).
 | a roster change below the floor promotes the best capable pawn, journalled as an act | 40ed42f | 5 | 5.3a–5.3h for the promotion and the independent digest; **5.4a–5.4d read the act out of the LEDGER**, not out of the verb's own stamp |
 | when NO capable pawn remains the verb refuses explicitly | 40ed42f | 7 | 7.2 (`too-few-candidates`) and 7.3 (`no-candidate`), each with the counts that decide the follow-up |
 | a downed colonist with a capable rescuer causes a forced `rescue`, journalled, not a priority change | 40ed42f | 6 | 6.9 asserts `act`'s shape, **6.10 SENDS IT VERBATIM** and asserts `job_def:"Rescue"` and a journal seq |
-| no capable rescuer: the procedure says so explicitly | 40ed42f | 6 | 6.4a–6.4f, the `no-bed` case, in the game's own sentence |
+| no capable rescuer: the procedure says so explicitly | 40ed42f | 6 | 6.4a–6.4f — `no-bed` on the downed row in the game's own sentence, `cannot-rescue` on the standing one |
 | `checklists/` item 7 shrinks; `[[one-doctor-is-zero-doctors]]` keeps only the WHY | 40ed42f | — | done in this branch, not by the suite |
 | the advance refusal when travel exceeds the clock | 40ed42f | — | **not built** — `52606d1` deliberately left part 3 to `722c951`'s machinery. `triage` publishes both numbers and the verdict; phase 6.7 asserts the comparison |
 | replay tick 231,968 and show the procedure reaches for `rescue` | 40ed42f | 6 | reconstructed, not replayed — same reason as 61794cd's replay bullet |
