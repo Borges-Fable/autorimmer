@@ -329,7 +329,14 @@ namespace AutoRimmer
             }
             else
             {
-                sb.Append(",\"error\":{\"code\":").Append(MiniJson.J(r.ErrorCode))
+                // git-bug e440676. `class` is READ OFF THE CODE, which carries
+                // it (Runtime.ErrCode), rather than looked up here — a lookup
+                // at the serializer is the table that drifts, because a new
+                // code falls through its default and the default reads as an
+                // answer. Every failure has one; there is no unclassified
+                // branch to hit.
+                sb.Append(",\"error\":{\"code\":").Append(MiniJson.J(r.ErrorCode.Code))
+                  .Append(",\"class\":").Append(MiniJson.J(r.ErrorCode.Class))
                   .Append(",\"detail\":").Append(MiniJson.J(r.ErrorDetail))
                   .Append('}');
             }
@@ -362,7 +369,8 @@ namespace AutoRimmer
             var sb = new StringBuilder(384);
             sb.Append("{\"id\":").Append(MiniJson.J(r.Id))
               .Append(",\"op\":").Append(MiniJson.J(r.Op))
-              .Append(",\"ok\":false,\"error\":{\"code\":").Append(MiniJson.J(Err.Exception))
+              .Append(",\"ok\":false,\"error\":{\"code\":").Append(MiniJson.J(Err.Exception.Code))
+              .Append(",\"class\":").Append(MiniJson.J(Err.Exception.Class))
               .Append(",\"detail\":").Append(MiniJson.J(
                   "result serialization failed; the result data is lost but the command is answered: "
                   + Journal.Truncate(e.ToString(), 1500)))

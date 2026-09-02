@@ -179,6 +179,29 @@ rwa-usage        bad invocation (e.g. an id the mod would rewrite)
 rwa-io           a filesystem failure on our side
 ```
 
+Every failure envelope also carries **`error.class`** beside the code, saying
+what KIND of thing happened, because a correct refusal and a real fault used to
+be the same shape (git-bug `e440676` — 53% of run m1-20260901's 691 failures
+were the protocol working). Four values, and the first three come from the mod:
+
+```
+refused   the bench said no and the answer is actionable — bad-args,
+          unknown-op, unread-journal, bleedout-deadline, unreachable-halt.
+          Your next call must DIFFER from the one you just made.
+flow      nothing is wrong; ask again — busy, no-active-game,
+          cannot-set-speed, stale-on-restart. The SAME call is correct later.
+fault     something broke inside the bench — exception. Repeating will not
+          help.
+client    every `rwa-…` code above: this side of the bridge failed and the mod
+          never saw the command.
+```
+
+```bash
+# a run's failures, split by what they actually were
+cat transcripts/<run>/*/result.json |
+  jq -r 'select(.ok==false) | "\(.error.class)\t\(.error.code)"' | sort | uniq -c
+```
+
 Pretty mode is a **generic** JSON tree renderer. It has no verb-specific
 formatting, on purpose: a per-verb formatter would be game semantics on the
 client, which this spec forbids, and it would silently hide any field a later
@@ -367,6 +390,11 @@ of `until`; the fourth is a refusal to arm an `until` whose halt cannot fire.
 | refusal | `error.code: "bleedout-deadline"` | a bleeding own-faction pawn dies sooner than the nearest capable rescuer can reach them. No ticks ran. |
 | refusal | `error.code: "unreachable-halt"` | an `until.condition` that was ALREADY TRUE when armed, with the edge required and no positive `timeout_ticks`. The halt cannot fire. No ticks ran. |
 | halt | `data.reason: "casualty"` | an own-faction pawn went DOWN or DIED while time ran; the advance stopped at that tick. `halted_on` names the pawn, `pawn_id`, the event class and the tick. |
+
+All three carry `error.class: "refused"`, which is the machine-readable form of
+the paragraph below: an `advance` that comes back `flow` (`busy`,
+`cannot-set-speed`) may be retried unchanged, and one that comes back `refused`
+may not.
 
 The refusals are `ok:false` deliberately, and that is not the same call as a
 refused `dev:spawn-thing` returning `ok:true`: a spawn refusal is an ANSWER

@@ -109,6 +109,12 @@ ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 # Client-side failures wear the same envelope as the mod's, so a jq pipeline
 # never has to branch on where the failure came from. The `rwa-` prefix is the
 # discriminator; the mod's taxonomy (Runtime.cs `Err`) uses none.
+#
+# git-bug e440676: every failure envelope carries `error.class` beside the
+# code, and every code below is `client` — the failure is on this side of the
+# bridge and the mod never saw the command. That is one constant and not a
+# per-code table, which is the point: there is nothing here to keep in step.
+E_CLASS = "client"
 E_TIMEOUT = "rwa-timeout"
 E_DOWN = "rwa-game-down"
 E_NO_ROOT = "rwa-no-root"
@@ -574,7 +580,7 @@ def envelope(op, ok, data=None, code=None, detail=None, cid=None, extra=None):
     if ok:
         env["data"] = data if data is not None else {}
     else:
-        env["error"] = {"code": code, "detail": detail}
+        env["error"] = {"code": code, "class": E_CLASS, "detail": detail}
     env["rwa"] = dict(extra or {})
     env["rwa"].setdefault("client", VERSION)
     return env

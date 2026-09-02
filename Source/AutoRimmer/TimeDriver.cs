@@ -680,7 +680,7 @@ namespace AutoRimmer
             fastestSpeed = TimeSpeed.Paused;
             activeSpeed = tm.CurTimeSpeed;
             if (!SetSpeed(tm, want, "advance start"))
-                return Result.Fail(command.Id, command.Op, "cannot-set-speed",
+                return Result.Fail(command.Id, command.Op, ErrCannotSetSpeed,
                     $"the game refused {want} and stayed at {tm.CurTimeSpeed}: PlayerCanControl is "
                     + "false (screen fade, gravship cutscene, or landing-area confirmation). "
                     + "Nothing was armed; retry when the game hands control back.");
@@ -814,11 +814,18 @@ namespace AutoRimmer
         // `data` on a failure (Poller.BuildResultJson). The detail is written so
         // it can be parsed as well as read: `key=value` tokens for every number,
         // prose for the human.
-        public const string ErrUnreadJournal = "unread-journal";
-        public const string ErrBleedoutDeadline = "bleedout-deadline";
+        //
+        // Both are `refused` in git-bug e440676's vocabulary, and the paragraph
+        // above is the argument for it in full: the caller's next move must
+        // DIFFER from the one it just made, which is exactly what separates
+        // `refused` from `flow`. 164 of run m1-20260901's 691 failures were
+        // this one code, and reading them as faults is what made a protected
+        // run look like a broken one.
+        public static readonly ErrCode ErrUnreadJournal = ErrCode.Refused("unread-journal");
+        public static readonly ErrCode ErrBleedoutDeadline = ErrCode.Refused("bleedout-deadline");
 
-        // git-bug 1113019. The third refusal, and it is the same class as the
-        // two above rather than `bad-args`: every argument is individually
+        // git-bug 1113019. The third refusal, and it is the same kind of thing
+        // as the two above rather than `bad-args`: every argument is individually
         // well-formed, and THE IDENTICAL CALL IS VALID ON A DIFFERENT WORLD
         // STATE. That is what makes it an answer about the world — the same
         // reason `unread-journal` and `bleedout-deadline` have their own codes
@@ -828,7 +835,15 @@ namespace AutoRimmer
         // at a 0.25-1 s floor each (rwa/README.md). A caller branching on
         // `bad-args` would conclude its call was malformed, which is the one
         // thing it is not.
-        public const string ErrUnreachableHalt = "unreachable-halt";
+        public static readonly ErrCode ErrUnreachableHalt = ErrCode.Refused("unreachable-halt");
+
+        // The one arm-time failure that is `flow` rather than `refused`, and
+        // its own detail says why: "Nothing was armed; retry when the game
+        // hands control back." PlayerCanControl is false during a screen fade,
+        // a gravship cutscene or a landing-area confirmation, all of which
+        // end on their own. The IDENTICAL call is correct a moment later,
+        // which is the whole of the flow/refused distinction (git-bug e440676).
+        public static readonly ErrCode ErrCannotSetSpeed = ErrCode.Flow("cannot-set-speed");
 
         // A per-call escape's reason. Required, non-empty, a string — a blank
         // one would let "unread_ok" become a bare boolean by another name.
@@ -856,7 +871,7 @@ namespace AutoRimmer
         // invariant `accept/fc287ba-until-state.py` 0.7a-c assert across every
         // refusal in one go. (The `cannot-set-speed` refusal does not route
         // through here only because it returns before the claim.)
-        private static Result UnarmAndFail(PendingCommand command, string code, string detail)
+        private static Result UnarmAndFail(PendingCommand command, ErrCode code, string detail)
         {
             System.Threading.Interlocked.Exchange(ref cmd, null);
             watch = null;
@@ -1422,7 +1437,7 @@ namespace AutoRimmer
         // colony would carry on playing itself into whatever game comes next.
         // We cannot pause from here (wrong thread, possibly no Game), so we arm
         // pendingPause and the next main-thread FrameStep discharges it.
-        public static bool Abandon(string code, string detail)
+        public static bool Abandon(ErrCode code, string detail)
         {
             // Interlocked because the poller's unload edge and the main
             // thread's lifecycle virtual can both fire for one boundary, and
@@ -1469,7 +1484,7 @@ namespace AutoRimmer
                 // The body throwing used to cost a frame of ticking. Now it
                 // would leave the game RUNNING, so it ends the advance — and
                 // Teardown's restore is what actually stops the clock.
-                FinishFailed("exception", e.ToString());
+                FinishFailed(Err.Exception, e.ToString());
             }
         }
 
@@ -1667,7 +1682,7 @@ namespace AutoRimmer
             Runtime.Outgoing.Enqueue(Result.Success(c.Id, c.Op, BuildData(reason)));
         }
 
-        private static void FinishFailed(string code, string detail)
+        private static void FinishFailed(ErrCode code, string detail)
         {
             var c = System.Threading.Interlocked.Exchange(ref cmd, null);
             Teardown();

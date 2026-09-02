@@ -233,8 +233,15 @@ def head_rows(step, run=None, i=None):
     elif step.ok is True:
         rows.append(Row("result", "ok", False))
     elif step.ok is False:
-        rows.append(Row("result", "error · "
-                        + str(((step.result or {}).get("error") or {}).get("code", "?")), True))
+        err = (step.result or {}).get("error") or {}
+        cls = err.get("class")
+        # git-bug e440676. A `refused` and a `flow` are the protocol working —
+        # 364 of run m1-20260901's 691 red steps were one of the two — so the
+        # class LEADS the line and only a `fault` (or an envelope from before
+        # the class shipped, which has none) keeps the warning colour. The
+        # renderer owns the palette; `warn` is the only thing said here.
+        rows.append(Row("result", f"{cls or 'error'} · {err.get('code', '?')}",
+                        cls not in ("refused", "flow")))
     else:
         rows.append(Row("result", "unreadable envelope", True))
     if step.tick is not None:
@@ -255,10 +262,14 @@ def sections(step, prev):
 
     if res.get("ok") is False:
         err = res.get("error") or {}
-        out = [Section("error.code", str(err.get("code", DASH)), None, False, True)]
+        # Same rule as head_rows: red is for a fault. A refusal is legible
+        # without being alarming, and painting 691 of them red is what made a
+        # protected run look like a broken one.
+        red = err.get("class") not in ("refused", "flow")
+        out = [Section("error.code", str(err.get("code", DASH)), None, False, red)]
         for k, v in err.items():
             if k != "code":
-                out.append(Section(f"error.{k}", brief(v), raw(v), False, True))
+                out.append(Section(f"error.{k}", brief(v), raw(v), False, red))
         return out
 
     data = res.get("data")

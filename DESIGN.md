@@ -74,12 +74,19 @@ AnalyzerBridge's, generalized:
   execution; `results/<id>.json` one per command, always written, never dropped;
   `status.json` ~1Hz heartbeat; `journal/` event stream.
 - Envelope: `{"id","op","args":{…}}` → `{"id","op","ok":true,"data":{…}}` or
-  `{"id","op","ok":false,"error":{"code","detail"}}`.
+  `{"id","op","ok":false,"error":{"code","class","detail"}}`.
 - Background thread touches files only, never Verse. Main thread
   (`GameComponentUpdate`, runs while paused) drains the pending queue.
 - Error taxonomy: `bad-json | unknown-op | bad-args | no-active-game | busy |
   exception | stale-on-restart` + per-verb codes. Stale inbox files on relaunch
   are answered with `stale-on-restart`, never replayed.
+- **Error class** (git-bug e440676): every failure states what KIND of thing it
+  is — `refused` (the bench said no, the answer is actionable, your next call
+  must differ) · `flow` (nothing is wrong, ask again, the same call is correct
+  later) · `fault` (something broke inside the bench) · `client` (`rwa-…`; the
+  mod never saw the command). The class is carried BY the code
+  (`Runtime.ErrCode`), so a code cannot be declared without one and there is no
+  lookup table to drift.
 
 ## Time model
 
@@ -3882,3 +3889,68 @@ queue by default (an agent flailing mid-experiment must not page triage).
   invariant and this is not an observer — a save is a real side effect on disk,
   so the transcript shows when the run took one, with the path, the tick and the
   byte count on the row.
+
+- 2026-09-02 (repair round, worker; git-bug e440676) — **The class is carried by
+  the CODE, not derived at the serializer, because "derived at the serializer"
+  is the table that drifts.** The issue asked for the class to be derived where
+  envelopes are built rather than "maintained as a table beside the codes". Both
+  shapes were written out before either was committed, and the serializer one
+  loses on a property the other has:
+
+  | | `switch (code)` in `Poller.BuildResultJson` | `ErrCode` (shipped) |
+  |---|---|---|
+  | a new code with no class | falls through to a default | **does not compile** |
+  | where the class is stated | at the serializer, far from the code | on the code's own declaration line |
+  | number of edit sites for a new code | 2 | 1 |
+  | drift mode | silent, and the default reads as an answer | none available |
+
+  A `default:` arm has to answer something. Whatever it answers — `fault`,
+  `refused`, `unknown` — is a claim about a code nobody classified, and it is
+  indistinguishable from a claim somebody made on purpose. That is exactly
+  `927be4f`'s failure mode one layer down, and `927be4f` is *this round*. So
+  `Result.Fail` takes a `Runtime.ErrCode` — a readonly struct of `(Code,
+  Class)` — and there is **no string overload**, which makes the compiler ask
+  the question at every site that could invent a code. `Poller.BuildResultJson`
+  then does the derivation the issue asked for, in one line
+  (`r.ErrorCode.Class`), with no branch to get wrong.
+
+  **Four names, and `client` is the fourth for a reason.** `refused` (the bench
+  said no and the answer is actionable — your next call must DIFFER), `flow`
+  (nothing is wrong, ask again — the SAME call is correct later), `fault`
+  (something broke inside the bench), `client` (`rwa-…`; the mod never saw the
+  command). The three-way split was the requirement; the fourth exists because
+  a consumer reading a transcript sees all four and `rwa` had to stamp its own
+  side anyway — as **one constant**, `E_CLASS = "client"`, since every `rwa-…`
+  code is client-side by construction and a per-code map there would be the
+  same drift with a different accent.
+
+  **The hard classifications, and the one that is not obvious.**
+  `stale-on-restart` is `flow`, not `refused`: the command file predates this
+  session and was answered rather than replayed, so the caller resends it
+  UNCHANGED if it still wants it — which is the flow test exactly.
+  `cannot-set-speed` is `flow` on the strength of its own detail string, which
+  already said "Nothing was armed; retry when the game hands control back".
+  `bad-json` is `refused` even though nothing was parsed, because the fix is on
+  the caller's side and is not "wait".
+
+  **What this buys, measured on run m1-20260901 rather than argued.** 691
+  `ok:false` steps: 325 `bad-args`, 200 `busy`, 164 `unread-journal`, 2
+  `rwa-game-down`. 364 of them — 53% — are `flow` or an obeyed `refused`. The
+  guard firing 164 times is the strongest evidence `722c951` was worth
+  building, and it was filed under the same heading as things that broke.
+
+  **`accept/4.2-play-loop.py` changes its VERDICT, not its detection.** It
+  FAILed on every `unread-journal` refusal. Measured across the run: 159 of the
+  164 were answered — a `journal` call (or a declared `unread_ok`) before the
+  loop asked for time again — and 5 were not. The 5 are `m1-20260831`'s exact
+  shape and still FAIL; the 159 are now an `INFO` line naming the guard. The
+  scan is deliberately not "the next command", because the loop's turn is
+  `things → build → journal → advance` and 86 of the 164 were followed by a
+  `digest` that went on to journal.
+
+  **The cockpit spends red on `fault` only.** `ui.py`'s palette rule is one
+  warning colour and one accent; a class word leading the line
+  (`flow · busy`, `refused · unread-journal`) is the distinction, and an
+  envelope from before this shipped has no class, keeps today's red, and reads
+  as `error · <code>` exactly as it did. No new palette tier — a cockpit that
+  colours every kind is the christmas tree that file's header refuses.

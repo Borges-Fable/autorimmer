@@ -44,7 +44,10 @@ Checks (PASS/FAIL/WARN per check, exit 0 iff no FAIL):
                       (ok:true, reason:"casualty") from a BLEEDOUT REFUSAL
                       (ok:false, bleedout-deadline) from any other early
                       return, and audits what the loop did about each:
-                      any blind-advance refusal FAILs, advancing with zero
+                      a blind-advance refusal the loop RODE PAST FAILs and one
+                      it obeyed is reported as a fact (git-bug e440676 — the
+                      guard firing is 722c951 working, and `busy` is never a
+                      failure of anything), advancing with zero
                       `journal` ops FAILs (m1-20260831's 27-to-0 shape),
                       re-advancing straight off a casualty halt FAILs, and
                       every escape (`unread_ok` / `through_casualties` /
@@ -214,6 +217,28 @@ def transcript_steps(segments):
     return out
 
 
+def answered_the_guard(steps, i):
+    """Did the loop READ before it asked for time again? git-bug e440676.
+
+    Scans forward from the blind-advance refusal at `steps[i]` for a `journal`
+    call. Reaching another `advance` first means the loop retried the refused
+    call with nothing read in between — the thing 722c951 exists to prevent —
+    unless that advance declares `unread_ok`, which is a journalled admission
+    and therefore an answer. A run that ENDS on the refusal never answered it.
+
+    Deliberately not "the very next command": the loop's turn is
+    `things -> build -> journal -> advance`, so the command after a refusal is
+    routinely a read of something else. 86 of run m1-20260901's 164 refusals
+    were followed by a `digest`, and every one of those went on to journal.
+    """
+    for _, op, cmd, _ in steps[i + 1:]:
+        if op == "journal":
+            return True
+        if op == "advance":
+            return bool(((cmd or {}).get("args") or {}).get("unread_ok"))
+    return False
+
+
 def advance_discipline(segments):
     """git-bug 722c951 — THE DISCRIMINATOR.
 
@@ -223,9 +248,15 @@ def advance_discipline(segments):
 
       * BLIND-ADVANCE REFUSAL — ok:false, error.code "unread-journal". NO TICKS
         RAN. The loop tried to advance while the previous advance's journal
-        delta was unread. This is m1-20260831's exact failure and it is a
-        compliance FAIL of the loop, not of the mod: PLAY-LOOP §read step 1 is
-        unconditional, and the mod is only saying so out loud.
+        delta was unread. **What FAILs is riding past it, not tripping it**
+        (git-bug e440676): the refusal is `error.class: "refused"`, the guard
+        doing exactly the job it was built for, and run m1-20260901 tripped it
+        164 times while answering it — a `journal` call before the next
+        `advance`, or a declared `unread_ok` — 159 of them. Counting all 164 as
+        compliance FAILs made a protected run read as a broken one, and put the
+        strongest evidence that 722c951 was worth building under the same
+        heading as things that broke. The 5 that were NOT answered are
+        m1-20260831's exact shape and still FAIL.
       * BLEEDOUT REFUSAL — ok:false, error.code "bleedout-deadline". NO TICKS
         RAN. WARN, not FAIL, and the split is deliberate: the loop could not
         have known this without running a pathfinder itself, so being told is
@@ -254,6 +285,10 @@ def advance_discipline(segments):
     swallowed = []
     journal_ops = sum(1 for _, op, _, _ in steps if op == "journal")
     n_adv = 0
+    # git-bug e440676: the guard firing and being obeyed. A count, reported as
+    # a fact, so a post-mortem can see how often the mod saved the run — the
+    # number that is the evidence FOR 722c951 rather than against the loop.
+    guard_obeyed = 0
 
     for i, (name, op, cmd, res) in enumerate(steps):
         if op != "advance":
@@ -281,9 +316,12 @@ def advance_discipline(segments):
             kinds[f"refused:{code}"] = kinds.get(f"refused:{code}", 0) + 1
             detail = ((res.get("error") or {}).get("detail")) or ""
             if code == "unread-journal":
-                problems.append(
-                    f"{name}: ADVANCED BLIND — the mod refused with unread-journal "
-                    f"({detail[:160]})")
+                if answered_the_guard(steps, i):
+                    guard_obeyed += 1
+                else:
+                    problems.append(
+                        f"{name}: RODE PAST THE GUARD — refused with unread-journal and "
+                        f"asked for time again with nothing read ({detail[:160]})")
             elif code == "bleedout-deadline":
                 report("WARN", "advance-discipline",
                        f"{name}: bleedout-deadline refusal — {detail[:200]}")
@@ -356,6 +394,22 @@ def advance_discipline(segments):
         report("INFO", "advance-wakes", f"…and {len(wakes) - 20} more wakes")
     for m in swallowed[:10]:
         report("WARN", "advance-wakes", "a standing `alert-mute` swallowed a wake — " + m)
+
+    # git-bug e440676. The guard obeyed, and every `flow` refusal (`busy`,
+    # `cannot-set-speed`) an advance collected, said out loud as FACTS. Neither
+    # is a failure of anything: `busy` means an advance was already in flight
+    # and the call may be repeated verbatim, and an obeyed guard is the mod
+    # doing its job. They are here so they stop being counted as errors
+    # somewhere else.
+    if guard_obeyed:
+        report("INFO", "advance-discipline",
+               f"{guard_obeyed} unread-journal refusal(s) OBEYED — the guard fired and the "
+               "loop read before advancing; this is 722c951 working, not a defect")
+    n_flow = sum(v for k, v in kinds.items()
+                 if k in ("refused:busy", "refused:cannot-set-speed"))
+    if n_flow:
+        report("INFO", "advance-discipline",
+               f"{n_flow} flow refusal(s) (busy / cannot-set-speed) — retryable verbatim")
 
     tally = ", ".join(f"{k} {v}" for k, v in sorted(kinds.items())) or "none"
     if problems:
