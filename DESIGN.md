@@ -3420,3 +3420,46 @@ queue by default (an agent flailing mid-experiment must not page triage).
   B-3's bar is that the agent is told *without asking cell by cell*; a key only
   `construction {layout_id}` carried would have needed the agent to already
   suspect the layout, which is exactly what run `m1-20260901` never did.
+
+- 2026-09-02 (repair round) — **CORRECTION to `f1a1700`'s filed premise, which
+  the orchestrator wrote and which was wrong.** The issue said `Room.ID` "is
+  assigned on rebuild, and `Map.MapUpdate` calls
+  `TryRebuildDirtyRegionsAndRooms` every frame, so 'room 52' is not the same
+  handle across days." The call happens every frame; the rebuild does not.
+  `Verse/RegionAndRoomUpdater.cs`:
+
+  ```csharp
+  public void TryRebuildDirtyRegionsAndRooms() {
+    if (working || !Enabled) return;
+    working = true;
+    if (!initialized) RebuildAllRegionsAndRooms();
+    if (!map.regionDirtyer.AnyDirty) { working = false; return; }
+    ...
+  }
+  ```
+
+  `RegionDirtyer.AnyDirty` is `dirtyCells.Count > 0`, so an undisturbed map
+  early-returns, and where cells ARE dirty `CreateOrAttachToExistingRooms`
+  reuses the existing `Room` via `FindCurrentRoomNeighborWithMostRegions`.
+  **`Room.ID` is therefore stable across ordinary play.** What destroys it is a
+  LOAD — `!initialized` takes `RebuildAllRegionsAndRooms()`, every room is
+  re-made and `nextRoomID` is not scribed. Run `m1-20260901` spanned bench
+  relaunches, which is why its room ids moved.
+
+  The conclusion (park `f1a1700`) survives, but for a different and narrower
+  reason, and one branch of it is now cheap:
+
+  1. A **durable handle already ships**: `Spatial.cs`'s `LandmarkComponent` is a
+     `GameComponent` WITH `ExposeData`, scribing named cells, and
+     `templates/freezer-kitchen.md` already instructs the agent to register one.
+     The handle was never the missing piece.
+  2. The genuinely open question is the **BASELINE** — "this room used to be a
+     Barracks" is new scribed state, which `d16a463` and this round's `f9dadc7`
+     ruling both rule out without Evan.
+  3. `f1a1700` item 2 (a destroyed building of consequence is reported) needs
+     **no room identity at all** — a Harmony destruction postfix of the same
+     shape as the five already in `JournalHooks.cs` closes it with zero
+     persistence. That half is separable and cheap.
+
+  Recorded because the wrong version was filed on an issue and would have sent
+  the next reader hunting for a stable handle that already exists.
