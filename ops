@@ -1,1 +1,1 @@
-{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":5,"timestamp":1788352977,"nonce":"ph8tditbKFlPLFZNTIyb0q3/Yo4=","added":["state:doing"],"removed":null}]}
+{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":3,"timestamp":1788352977,"nonce":"N1rRYXJWSCwP49W3pHKEUnNW8Yk=","message":"dispatched with a1644d6 (B-3) on branch fix/a1644d6-enclosure — same file. Root cause already settled: see the orchestrator comment above and DESIGN.md c901f5b.","files":null}]}
