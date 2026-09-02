@@ -322,10 +322,40 @@ ticks while a build queue settles are normal.
     RUNS/<run>/digests/day-<N>.json   the digest at each day boundary
     RUNS/<run>/digests/final.json     the digest at session end
     RUNS/<run>/summary.md             always written, last act of the session
+    RUNS/<run>/saves/<label>.rws      checkpoints — `save {name}` writes into the
+                                      BENCH's Saves/; the driver copies them here
     RUNS/<colony>.colony.md           colony notes, updated at session end
 
 - **The ledger** is 4.1's schema (`checklists/README.md` §run ledger),
   appended from the first evaluation on. A silent skip is a missing line.
+- **The saves** are `save {name}` (git-bug `bb931b9`), and they are owed at
+  three moments in an unattended run: **every threat halt**, **every casualty
+  halt**, and **every day boundary**. The loop is `halt -> save -> read -> act`,
+  in that order, because the point of the checkpoint is the state BEFORE the
+  decision. Name them for the moment — `threat-t<tick>-<label>`,
+  `death-t<tick>-<name>`, `day-<N>` — and read `path` and `tick` back off the
+  envelope rather than guessing where it went. The verb writes into the BENCH's
+  `Saves/` (`GenFilePaths.FilePathForSavedGame`), which is the only directory
+  the game will write a save to; copying it into `RUNS/<run>/saves/` is still
+  the driver's job, and `path` is what to copy from.
+  - **The verb refuses rather than overwriting**; pass `overwrite:true` only
+    when you mean to replace a checkpoint you took yourself.
+  - **It will not write an autosave slot** — a name starting `Autosave` is
+    refused at argument time, because `Autosaver` rotates over exactly those
+    names and would eat the file.
+  - **Check `written`.** `GameDataSaveLoader.SaveGame` is `void` and swallows
+    its own exception, so a failed save is invisible except that
+    `Verse/SafeSaver` pops an error dialog — which sets `forcePause` and wedges
+    every later `advance` on reason `"dialog"`. `written:false` arrives with
+    `force_pause` in the same envelope; treat it as an escalation, not a retry.
+  - **There is no load verb, deliberately** — loading is the LAUNCHER's job
+    (position 6 above). The agent may write a save; only the launcher may load
+    one. A protocol that could rewind is a protocol whose record is not what
+    happened.
+  - Before this verb the driver copied the newest `Autosave-N.rws` out of
+    `Saves/` instead, which on a one-day interval is up to 60,000 ticks stale —
+    m1-20260901's saves are labelled `nearest autosave; no save verb exists`
+    for that reason. Copying an autosave is now the FALLBACK, not the method.
 - **The summary** states, minimum: colony + save name, session tick span,
   the last journal seq read (the next session's `since_seq`), turns taken,
   letters/threats handled, checklist `action` lines and what was done,

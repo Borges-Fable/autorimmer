@@ -3808,3 +3808,77 @@ queue by default (an agent flailing mid-experiment must not page triage).
   block `Spatial.Render` publishes — because the channel block is what the agent
   is actually holding at the moment it chooses a rect, and a lesson it did not
   reload is not a control.
+
+- 2026-09-02 (repair round, worker; git-bug bb931b9) — **`save {name}` ships,
+  and the read half stays out of the protocol on purpose.** The bench's only
+  save artifact was the game's own rotating autosave, so the driver copied the
+  newest `Autosave-N.rws` out of `Saves/` before it rotated away — *the nearest
+  autosave PRECEDING the event*, up to 60,000 ticks stale on a one-day interval,
+  which is exactly not "the base at its peak immediately before the fight".
+  Run m1-20260901's saves are labelled `nearest autosave; no save verb exists`
+  for that reason.
+
+  **The asymmetry is the design, not an omission**: the agent may WRITE a save;
+  only the launcher may load one (`PLAY-LOOP.md` position 6). A protocol that
+  could rewind is a protocol whose record is not what happened, and the whole
+  value of an unattended run is that its record is. Stated in the verb's own
+  header and in the envelope's `note`, because an agent reading the result back
+  is the audience for it.
+
+  **Four widget gates, all reproduced and cited**, because
+  `GameDataSaveLoader.SaveGame` checks nothing — the usual shape the
+  gate-lives-in-the-widget rule exists for. Three are the ESC menu's Save
+  option (`RimWorld/MainMenuDrawer.MainMenuOnGUI`: `ProgramState.Playing &&
+  !GameDataSaveLoader.SavingIsTemporarilyDisabled && !Info.permadeathMode`) and
+  one is the save dialog's type-in field (`RimWorld/Dialog_FileList
+  .DoTypeInField`: non-empty, and `Verse/GenText.IsValidFilename` — 40
+  characters, and none of `Path.GetInvalidFileNameChars()` plus
+  `/\{}<>:*|!@#$%^&*?`). **The permadeath clause gets no bypass**: the player
+  cannot manually save in permadeath either, and `dev:*` is the layer that may
+  cheat.
+
+  **The name is REFUSED, not sanitised.** Vanilla's
+  `Dialog_SaveFileList_Save.DoFileInteraction` calls `GenFile.SanitizedFileName`
+  and silently writes a different file — fine for a human looking at a file
+  list, wrong for a program that will go looking for the path it asked for
+  (`acee526`'s exact-or-refuse rule). The illegal set contains `/` and `\`,
+  which is also what makes `../escape` unrepresentable.
+
+  **Two rules that are OURS and are named as such.** (a) A name the game's own
+  `Verse/SaveGameFilesUtility.IsAutoSave` would classify as an autosave is
+  refused — `RimWorld/Autosaver.NewAutosaveFileName` rotates over exactly
+  `Autosave-<1..Prefs.AutosavesCount>`, so refusing those names is what makes a
+  slot unconsumable; `SaveGame` itself has no autosave awareness at all. (b) An
+  existing name is refused unless `overwrite:true` — vanilla overwrites
+  silently because the file list in front of the player IS the confirmation,
+  and a program has no such list.
+
+  **`SaveGame` RETURNS VOID and eats its own exception into a `Log.Error`**, so
+  there is no success signal to return. The verb stats the file afterwards and
+  publishes `written`/`bytes`; on a FRESH name a non-empty file is proof, on an
+  OVERWRITE it is not, and `overwrote`/`bytes_before` are published rather than
+  a success being invented. Worse, `Verse/SafeSaver.Save` pops
+  `GenUI.ErrorDialog` before rethrowing — a `Dialog_MessageBox`, hence
+  `forcePause`, hence (spec 1.7) every subsequent `advance` halts on reason
+  `"dialog"` and cannot be closed from here. Same hazard class as
+  `FlickUtility.UpdateFlickDesignation`'s tutorial modal. So `force_pause`
+  (`TimeDriver.ForcePausePayload`, the payload `status.json` already carries)
+  rides in the same envelope: "the save did not land" and "the run is now
+  wedged" arrive together instead of the second being found three advances
+  later.
+
+  **Not queued through `LongEventHandler`**, which is what vanilla does purely
+  for the progress screen: a queued call returns BEFORE the write, so the verb
+  could not report the tick the snapshot captured — and the tick is the point of
+  a checkpoint. It runs synchronously on the main thread at the
+  `GameComponentUpdate` safe point, where `Autosaver.DoAutosave` ends up too.
+
+  **`busy` needed no code**: `AgentGameComponent.DrainCommands` already answers
+  `Err.Busy` to every main-thread verb except `pause` while `TimeDriver.Active`.
+  Asserted anyway, because an unasserted claim about a refusal path is how
+  refusal paths rot.
+
+  **And it journals as an `action`.** "Observers never mutate" is the standing
+  invariant and this is not an observer — a save is a real side effect on disk,
+  so the transcript shows when the run took one, with the path, the tick and the
+  byte count on the row.
