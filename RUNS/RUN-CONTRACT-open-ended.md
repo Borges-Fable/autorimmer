@@ -112,6 +112,51 @@ Read these; they exist because they killed people.
 
 ---
 
+## Bench setup — do this before you start playing, and say in the ledger that you did
+
+The run is watched. Two surfaces, two workspaces:
+
+**Workspace 2 — the cockpit.** Read-only; it sends nothing and cannot disturb
+your run.
+
+```
+./cockpit/launch-cockpit.sh <your-run-name> --follow
+```
+
+Launch it into workspace 2:
+
+```
+hyprctl dispatch exec "[workspace 2] kitty --title autorimmer-cockpit --hold \
+  /home/dorian/projects/rimworld/autorimmer/cockpit/launch-cockpit.sh <run> --follow"
+```
+
+Use `--follow` so it tracks the tail of the run as you play. It reads the
+transcript and the journal **as files** — it never issues a verb, so it cannot
+move the journal watermark or claim a step in your run.
+
+**Workspace 3 — the game.** `run-agent.sh` parks the window on the hidden
+special workspace, which is right for unattended runs and wrong here.
+
+```
+./profile/show-bench.sh --wait 90       # moves it and follows
+hyprctl dispatch movetoworkspacesilent "3,address:<the RimWorldLinux window>"
+```
+
+**For a watched run, fix the resolution first.** The bench ships
+`<screenWidth>640</screenWidth>`, `<screenHeight>480</screenHeight>`,
+`<fullscreen>False</fullscreen>`, which Unity draws as a small viewport
+letterboxed inside a large window — it looks broken and is not. Set the two
+dimensions to the monitor size with `<fullscreen>True</fullscreen>` in
+`_RimWorld-Agent/.../Config/Prefs.xml` **before launching** (RimWorld reads
+these only at startup). A backup of the small values is at
+`Prefs.xml.bak-640x480`; **restore it when the run ends**, since the large
+surface costs throughput on a bench rendering to nobody.
+
+`rwa watch on` reveals the window and unthrottles it from 30 to 60 fps if you
+need that later.
+
+---
+
 ## The ledger
 
 One line per decision, with the reason. Every letter answered or declined on
