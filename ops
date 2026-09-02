@@ -1,1 +1,1 @@
-{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":5,"timestamp":1788350836,"nonce":"oWOJ2QcEk7ZxJiGS6/FI7eR5BV8=","added":["state:doing"],"removed":null}]}
+{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":3,"timestamp":1788350836,"nonce":"GhUd/Hn3GwitQR/Xyly0tmlf/L8=","message":"dispatched to a worker (repair round, session 22). Branch fix/5eba561-transcript-rotate, own worktree. Orchestrator runs all bench acceptance.","files":null}]}
