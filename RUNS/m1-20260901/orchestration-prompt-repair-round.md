@@ -50,6 +50,18 @@ section before dispatching it**, per the repo's standing rule):
 6. a bill asleep (`next_ingredient_search_tick` in the future)
 7. `resources.*` has no map-wide twin the way `food_rot` does
 
+Also in scope, and currently living only as **comments on `d2e1229`** rather than
+as issues of their own — promote each to a spec issue with an Acceptance section
+if you judge it clean, or park it:
+
+8. **Nothing requires a VERDICT on an active alert.** `Alert_ChessTableNoChairs`
+   sat live for 13 in-game days, printed in every day snapshot, neither fixed
+   nor muted. Wanted: a `turn.md` trip-wire — an `alerts.active` id that is
+   neither muted nor named in a ledger `action` within N day boundaries.
+9. **Colony start has an unwritten step: the colony must be NAMED**, and it
+   falls due days after the colony-start section is logged complete. Related to
+   `5cb1f9f` but separately a `triggered.md` gap.
+
 Section C is **not** in scope for code. It is agent behaviour and belongs in
 `playbook/` and `checklists/`. Where a section-C failure has a mechanical
 counterpart in section B, the code fix is the deliverable and the checklist
