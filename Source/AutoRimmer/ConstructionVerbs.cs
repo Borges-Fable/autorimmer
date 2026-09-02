@@ -325,6 +325,24 @@ namespace AutoRimmer
                 layoutData["scan_cap"] = scanCap;
                 layoutData["scan_more"] = lScanMore;
                 if (lOffMap > 0) layoutData["off_map"] = lOffMap;
+                // ========= IS IT A ROOM YET (git-bug a1644d6) ================
+                // `done: true` says every element resolved. It does NOT say the
+                // room encloses, and run m1-20260901 proved the difference is a
+                // starved colony: every freezer element built, and the space
+                // still read `outdoors: true, cells: 60082`. Two flags, because
+                // there are two ways to fail — see LayoutEnclosure's header.
+                try
+                {
+                    var rep = LayoutEnclosure.Evaluate(map, record);
+                    rep.Track();
+                    layoutData["enclosure"] = rep.Out();
+                }
+                catch (Exception e)
+                {
+                    Journal.EmitWarning("construction: enclosure evaluation threw for "
+                        + record.Id + ": " + e.Message);
+                    layoutData["enclosure"] = null;
+                }
                 return layoutData;
             }
 
@@ -486,6 +504,28 @@ namespace AutoRimmer
                 d["cap_note"] = "counts are a floor: Frame.WorkToBuild is a GetStatValueAbstract "
                     + "per frame and the digest is called constantly, so the glance stops at the "
                     + "cap. `construction` reads the rest.";
+            }
+            // ============ A ROOM THAT NEVER ENCLOSED (git-bug a1644d6) ========
+            // The counts above go to ZERO the moment the last wall completes,
+            // and that is precisely the tick a layout with a hole in it becomes
+            // invisible: nothing is outstanding, nothing is stalled, and the
+            // freezer is still the great outdoors. Presence is the signal, so
+            // the key appears only when a placed layout that declared a room
+            // does not have one. See LayoutEnclosure for the two flags.
+            try
+            {
+                var failing = LayoutEnclosure.Scan(map, LayoutEnclosure.LayoutCap,
+                    out _, out _, out int failCount);
+                if (failCount > 0)
+                {
+                    var rows = new List<object>();
+                    for (int i = 0; i < failing.Count; i++) rows.Add(failing[i].Brief());
+                    d["layouts_unenclosed"] = rows;
+                }
+            }
+            catch (Exception e)
+            {
+                Journal.EmitWarning("digest: layout enclosure scan threw: " + e.Message);
             }
             return d;
         }

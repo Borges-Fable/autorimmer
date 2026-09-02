@@ -93,12 +93,45 @@ namespace AutoRimmer
             var list = new List<object>();
             for (int i = 0; i < rooms.Count && i < cap; i++) list.Add(Brief(rooms[i]));
 
+            // ============ A ROOM THAT IS NOT A ROOM YET (git-bug a1644d6) =====
+            // The loop above can only list rooms that EXIST. A layout placed as
+            // a freezer and never closed produces no room at all — its cells
+            // belong to the map-wide outdoor blob, which this verb skips as
+            // `outdoors` — so the one structure the agent is waiting on is the
+            // one structure `rooms` could not mention. Run m1-20260901 read this
+            // envelope for forty days and never saw its freezer in it.
+            //
+            // So the failing layouts ride along on the turn-level read, with the
+            // gap cell named, and the caller does not have to already suspect a
+            // particular layout to find out. `construction {layout_id}` has the
+            // full report; this is the pointer to it.
+            int layoutsTotal = 0, layoutsChecked = 0, layoutsFailing = 0;
+            var layoutRows = new List<object>();
+            try
+            {
+                var reports = LayoutEnclosure.Scan(map, LayoutEnclosure.LayoutCap,
+                    out layoutsTotal, out layoutsChecked, out layoutsFailing);
+                for (int i = 0; i < reports.Count; i++) layoutRows.Add(reports[i].Brief());
+            }
+            catch (Exception e)
+            {
+                Journal.EmitWarning("rooms: layout enclosure scan threw: " + e.Message);
+            }
+
             return new Dictionary<string, object>
             {
                 ["list"] = list,
                 ["total"] = rooms.Count,
                 ["more"] = Math.Max(0, rooms.Count - list.Count),
                 ["order"] = "proper-indoor-then-size-desc",
+                // Placed layouts that declared an enclosed space and do not have
+                // one — an EMPTY list is the good news and is published as such,
+                // because an absent key and "nothing wrong" must not look alike.
+                ["layouts_unenclosed"] = layoutRows,
+                ["layouts_total"] = layoutsTotal,
+                ["layouts_checked"] = layoutsChecked,
+                ["layouts_failing"] = layoutsFailing,
+                ["layouts_cap"] = LayoutEnclosure.LayoutCap,
                 // The cost ceiling, checkable from the output: exactly this many
                 // rooms had Role/stats computed.
                 ["analysed"] = list.Count,
@@ -635,4 +668,697 @@ namespace AutoRimmer
             };
         }
     }
+
+    // ===================================================== git-bug a1644d6 ===
+    // LAYOUT ENCLOSURE — "is the room I placed a room YET?"
+    //
+    // WHY THIS EXISTS. Run `m1-20260901` placed a freezer as a layout, built it,
+    // and never closed it. `room-at` on its interior answered honestly —
+    // `outdoors: true, cells: 60082`, which is the whole outdoors and not a
+    // 60,000-cell freezer — and nothing connected *a placed layout that was
+    // supposed to be a room* to the question *is it a room*. The colony had no
+    // larder, ran hand-to-mouth into winter, and starved. Finding this out cost
+    // a cell-by-cell interrogation the agent had no reason to run on a layout
+    // that reported `placed` with zero blockers.
+    //
+    // -------------------- THERE ARE TWO FAILURE MODES ------------------------
+    // and a check that reports only the first passes a freezer that cannot hold
+    // cold (DESIGN decisions log 2026-09-02).
+    //
+    //   1. NOT ENCLOSED — `Verse/Room.cs` `ProperRoom`:
+    //
+    //        if (TouchesMapEdge) return false;
+    //        for (int i = 0; i < districts.Count; i++)
+    //          if (districts[i].RegionType == RegionType.Normal) return true;
+    //        return false;
+    //
+    //      A layout that never closed leaks into the map-wide outdoor room,
+    //      which touches the map edge, so `ProperRoom` is false. That IS the
+    //      `outdoors: true / cells: 60082` the run measured.
+    //
+    //   2. ENCLOSED AND THERMALLY OUTDOORS — `Verse/Room.cs`:
+    //
+    //        public bool UsesOutdoorTemperature =>
+    //            TouchesMapEdge || OpenRoofCount >= Mathf.CeilToInt(CellCount * 0.25f);
+    //
+    //      A sealed room missing a quarter of its roof sits on the OUTDOOR
+    //      temperature with `ProperRoom` still true. For a freezer that is the
+    //      same dead colony by a different mechanism. Both are reported, and
+    //      distinctly.
+    //
+    //   `PsychologicallyOutdoors` is a THIRD reading — mood-facing, different
+    //   thresholds (`OpenRoofCountStopAt(300) >= 300`, or map-edge with half the
+    //   roof open) — and is NOT the enclosure question. `Brief` publishes it as
+    //   `indoors` and the three are never conflated.
+    //
+    // ------------------- NAMING THE GAP IS A COMPARISON ----------------------
+    // not a search, and no flood fill over the map is involved. Two things the
+    // mod already holds close it:
+    //
+    //   * `Layouts.Open(...)` records a `CellRect` per placed layout and it
+    //     survives across days — the run called `construction {layout_id:"ly-1"}`
+    //     on day 40+ successfully — and every element's `Placement` carries its
+    //     `Def`, `Pos` (the game's CENTRE) and `Rot`. So the DECLARED shell
+    //     cells are `GenAdj.OccupiedRect` over the wall and door elements.
+    //
+    //   * What actually stands at a cell is one grid read.
+    //
+    // THE PER-CELL TEST IS THE GAME'S OWN, `Verse/RegionTypeUtility.cs`
+    // `GetExpectedRegionType(this IntVec3 c, Map map)`:
+    //
+    //     if (c.GetDoor(map) != null)     return RegionType.Portal;
+    //     if (c.GetFence(map) != null)    return RegionType.Fence;
+    //     if (c.WalkableByNormal(map))    return RegionType.Normal;
+    //     … any thing with def.Fillage == Full → RegionType.None
+    //     otherwise → RegionType.ImpassableFreeAirExchange
+    //
+    // A declared shell cell CLOSES the room exactly when that answer is `None`
+    // (a full-fillage wall) or `Portal` (a door). Anything else leaks. Calling
+    // the region builder's own predicate is what makes three nuances fall out
+    // instead of being special-cased:
+    //
+    //   * A DOOR DOES NOT BREAK ENCLOSURE; AN UNBUILT DOOR DOES. A built door
+    //     is `Portal`; an empty door cell is `Normal`.
+    //
+    //   * A WALL FRAME DOES NOT CLOSE A ROOM, AND IT IS AN EDIFICE.
+    //     `RimWorld/ThingDefGenerator_Buildings.NewFrameDef_Thing` copies
+    //     `building.isEdifice` from the finished def, so a wall frame REGISTERS
+    //     IN THE EDIFICE GRID and `c.GetEdifice(map) != null` is true at it —
+    //     keying the check on "an edifice stands here" would report a half-built
+    //     wall as sealed, which is the original defect with extra steps. The
+    //     same generator clamps `passability` from Impassable to
+    //     `PassThroughOnly` and sets `fillPercent = 0.2f`, so the frame's cell
+    //     is `Normal` and the leak is reported. That is why this file calls
+    //     `GetExpectedRegionType` and never `GetEdifice`.
+    //
+    //   * A SANDBAG IN A WALL SLOT is `ImpassableFreeAirExchange` — impassable
+    //     to a pawn, transparent to the room — and reads as open, correctly.
+    //
+    // ------------------- "INTENDS A ROOM" IS A DECLARATION -------------------
+    // A defensive wall is not a room that failed; reporting it as one for the
+    // rest of the run is how an agent learns to ignore this field. So intent is
+    // decided from the IR-DERIVED DECLARATION ALONE, with no game state in it:
+    // flood the layout's own rect, 4-connected, blocked by the DECLARED wall and
+    // door cells. A component that never touches the rect's perimeter is a
+    // declared interior; one that escapes is outside ground the rect happens to
+    // cover. `intends_room` is "at least one enclosed component exists", it is
+    // the same answer on the day of placement and forty days later, and a
+    // straight wall's flood escapes on both sides so it is never listed.
+    //
+    // The flood is bounded by the layout's own rect (`CellCap`), touches no
+    // region, no pathfinder and no room, and is the ONLY search in this file —
+    // the enclosure question itself is answered by `ProperRoom`, per the rule
+    // that the gate lives in the widget.
+    //
+    // ------------------------------ THE ROOF ---------------------------------
+    // `place-layout` DELIBERATELY DOES NOT CONSUME THE IR'S ROOF MASK
+    // (LayoutVerbs' header: a roof is a designation, not a placement, and
+    // folding a second designator into that transaction would make one call mean
+    // two things). So the mod does not hold the mask, and "intended roofed" is
+    // taken as THE DECLARED INTERIOR — the cells the declared shell encloses.
+    // For a room layout that is the same set the mask would give, it needs no
+    // new IR field and no change to `place-layout`'s contract, and it is the set
+    // `UsesOutdoorTemperature` is actually counting against.
+    //
+    // Where the built room is LARGER than this layout's declared interior — two
+    // layouts sharing a wall, or a room extended by hand — the room's own
+    // `OpenRoofCount` can exceed the holes named here. Both numbers are
+    // published and a note says so rather than letting the shorter list read as
+    // the whole truth.
+    //
+    // ---------------------------- OBSERVER COST ------------------------------
+    // Per layout: one `Placements.Get` and one `GenAdj.OccupiedRect` per
+    // element, one rect-bounded flood, one `GetExpectedRegionType` per declared
+    // shell cell, one `GetRoom` per interior cell up to the distinct-room cap,
+    // and one `Roofed` per interior cell. No `Room.Role`, no `Room.GetStat`, no
+    // `Room.Owners`, no `ContainedAndAdjacentThings`.
+    //
+    // `Room.ProperRoom`, `TouchesMapEdge` and `CellCount` walk districts.
+    // `OpenRoofCount` fills a `cachedOpenRoofCount` on first read and the game
+    // itself reads it every tick out of `RoomTempTracker`, so it is warm in
+    // practice; the cache is content-derived, invalidated by the game's own
+    // dirtying, and unscribed — the same ruling `Room.Role` already has.
+    //
+    // `IntVec3.GetRoom(map)` bottoms out in `RegionGrid.GetValidRegionAt`, which
+    // calls `TryRebuildDirtyRegionsAndRooms()`. That is `Map.MapUpdate`'s own
+    // per-frame call, run here at a safe point on the main thread, and it is the
+    // route `room-at` already takes — stated rather than hidden.
+    public static class LayoutEnclosure
+    {
+        // Rect cells the flood and the interior scan will look at. 4096 is a
+        // 64x64 layout; the biggest shipped template is 11x6.
+        public const int CellCap = 4096;
+        // Named cells per gap list. A room with 12 holes has a bigger problem
+        // than a list can express, and the counts stay complete.
+        public const int GapCap = 12;
+        // Distinct interior rooms reported per layout. A layout with more than
+        // four rooms in it is a wing, and the flags aggregate over all of them.
+        public const int RoomCap = 4;
+        // Layouts evaluated by the roll-ups (`rooms`, `digest.construction`).
+        public const int LayoutCap = 8;
+
+
+        // ---------------------------------------------------------------------
+        // A declared WALL or DOOR, decided on the def alone.
+        //
+        // `Verse/ThingDef.IsDoor` is `typeof(Building_Door).IsAssignableFrom
+        // (thingClass)`, and `ThingDef.Fillage` is Full at `fillPercent > 0.99f`
+        // — which is the exact property `GetExpectedRegionType` tests for
+        // `RegionType.None`. So "declared shell" and "closes the room" are
+        // decided by the same two members, one on the def and one on the cell.
+        // ---------------------------------------------------------------------
+        public static bool IsShellDef(BuildableDef bd, out bool isDoor)
+        {
+            isDoor = false;
+            var td = bd as ThingDef;
+            if (td == null) return false;
+            try
+            {
+                if (td.IsDoor) { isDoor = true; return true; }
+                return td.Fillage == FillCategory.Full;
+            }
+            catch { return false; }
+        }
+
+        public static EnclosureReport Evaluate(Map map, LayoutRecord record)
+        {
+            var r = new EnclosureReport { LayoutId = record?.Id, Name = record?.Name };
+            if (map == null || record == null) { r.Note = "no layout"; return r; }
+            if (record.MapId != map.uniqueID)
+            {
+                r.Note = "this layout is on map " + record.MapId + ", not the current one";
+                return r;
+            }
+            if (record.CancelledSeq != 0)
+            {
+                r.Cancelled = true;
+                r.Note = "this layout was cancelled; enclosure is not asked of it";
+                return r;
+            }
+
+            var rect = record.Rect.ClipInsideMap(map);
+            r.Rect = rect;
+            if (rect.Area <= 0) { r.Note = "this layout's rect is empty on this map"; return r; }
+            if (rect.Area > CellCap)
+            {
+                r.Note = "this layout's rect is " + rect.Area + " cells, past the "
+                    + CellCap + "-cell scan cap; enclosure was not evaluated";
+                return r;
+            }
+
+            // --------------------------------------------- the declared shell -
+            var shell = new Dictionary<IntVec3, ShellCell>();
+            for (int i = 0; i < record.PlacementIds.Count; i++)
+            {
+                var p = Placements.Get(record.PlacementIds[i]);
+                if (p?.Def == null) continue;
+                if (!IsShellDef(p.Def, out bool isDoor)) continue;
+                CellRect occ;
+                try { occ = GenAdj.OccupiedRect(p.Pos, p.Rot, p.Def.Size); }
+                catch { continue; }
+                foreach (var c in occ)
+                {
+                    if (!c.InBounds(map)) continue;
+                    if (!shell.ContainsKey(c))
+                        shell[c] = new ShellCell { At = c, DefName = p.DefName,
+                                                   PlacementId = p.Id, IsDoor = isDoor };
+                }
+            }
+            r.ShellCells = shell.Count;
+
+            // ------------------------------- what the DECLARATION encloses ----
+            // The only search in this file, and it never leaves the rect. See
+            // the header: this decides INTENT, not enclosure.
+            var interior = new List<IntVec3>();
+            r.Components = FloodInterior(rect, shell, interior);
+            // South-to-north, west-to-east — the flood's own order is a stack's
+            // and would move between builds. A deterministic order is what lets
+            // an acceptance suite assert on `gaps[0]` and `unroofed[0]` at all.
+            interior.Sort(CellOrder);
+            r.InteriorCells = interior.Count;
+            r.IntendsRoom = interior.Count > 0;
+
+            // ------------------------------------------------ the shell gaps --
+            var shellCells = new List<IntVec3>(shell.Keys);
+            shellCells.Sort(CellOrder);
+            for (int si = 0; si < shellCells.Count; si++)
+            {
+                var kv = new KeyValuePair<IntVec3, ShellCell>(shellCells[si], shell[shellCells[si]]);
+                RegionType rt;
+                try { rt = kv.Key.GetExpectedRegionType(map); }
+                catch { continue; }
+                // `None` is a full-fillage wall, `Portal` is a door. Everything
+                // else leaks — including a wall FRAME, which is `Normal`.
+                // Compared as values, not as strings: `Verse/RegionType` is a
+                // [Flags] enum, so a future combined member would stringify to
+                // something a name test would silently miss.
+                if (rt == RegionType.None || rt == RegionType.Portal) continue;
+                string token = rt.ToString();
+                r.OpenShell++;
+                if (r.Gaps.Count >= GapCap) continue;
+                r.Gaps.Add(new Dictionary<string, object>
+                {
+                    ["at"] = Positions.Out(kv.Key),
+                    ["def"] = kv.Value.DefName,
+                    ["is_door"] = kv.Value.IsDoor,
+                    ["placement_id"] = kv.Value.PlacementId,
+                    ["standing"] = StandingAt(map, kv.Key),
+                    // The game's own answer for the cell, so a caller can look
+                    // the verdict up rather than trust this one.
+                    ["region_type"] = token,
+                });
+            }
+            r.ShellComplete = r.OpenShell == 0;
+
+            // A layout whose declared shell encloses nothing is NOT a room that
+            // failed — a defensive wall, a conduit spine, a row of solar panels
+            // — and reporting it as one for the rest of the run is how an agent
+            // learns to ignore this field. It still gets its gap list, which is
+            // a real fact about a wall with a hole in it; it does not get an
+            // enclosure verdict, and `enclosed` stays NULL rather than false.
+            if (!r.IntendsRoom)
+            {
+                r.Note = "this layout's declared walls and doors enclose no cell of "
+                    + "its own rect, so it does not declare a room and the enclosure "
+                    + "question is not asked of it";
+                return r;
+            }
+
+            // --------------------------------------------- the actual rooms ---
+            var seen = new List<Room>();
+            for (int i = 0; i < interior.Count; i++)
+            {
+                var c = interior[i];
+                // FOG: no room detail out of unexplored ground, the rule this
+                // file's header already states for `rooms`.
+                bool fogged;
+                try { fogged = c.Fogged(map); } catch { fogged = true; }
+                if (fogged) { r.FoggedCells++; continue; }
+                if (!c.Roofed(map)) { r.UnroofedCells++; if (r.RoofHoles.Count < GapCap) r.RoofHoles.Add(Positions.Out(c)); }
+                if (seen.Count >= RoomCap) continue;
+                Room room = null;
+                try { room = c.GetRoom(map); } catch { }
+                if (room == null) continue;
+                bool dup = false;
+                for (int j = 0; j < seen.Count; j++) if (seen[j] == room) { dup = true; break; }
+                if (dup) continue;
+                seen.Add(room);
+            }
+            for (int i = 0; i < seen.Count; i++) r.Rooms.Add(RoomRow(seen[i]));
+            r.RoomsFound = seen.Count;
+
+            if (seen.Count == 0)
+            {
+                r.Note = r.FoggedCells > 0
+                    ? "every declared interior cell is fogged; enclosure was not read"
+                    : "no room resolved at any declared interior cell";
+                return r;
+            }
+
+            bool allProper = true, anyOutdoorTemp = false;
+            int roomOpenRoof = 0;
+            for (int i = 0; i < seen.Count; i++)
+            {
+                var room = seen[i];
+                if (!SafeBool(() => room.ProperRoom)) allProper = false;
+                if (SafeBool(() => room.UsesOutdoorTemperature)) anyOutdoorTemp = true;
+                var orc = WorldSafe.SafeObj(() => (object)room.OpenRoofCount) as int?;
+                if (orc.HasValue) roomOpenRoof += orc.Value;
+            }
+            r.Enclosed = allProper;
+            r.UsesOutdoorTemp = anyOutdoorTemp;
+            r.RoomOpenRoofCells = roomOpenRoof;
+            return r;
+        }
+
+        // Every OPEN layout on this map, evaluated, failing ones first. The
+        // roll-up `rooms` and `digest.construction` both call — one routine, so
+        // a turn-level glance and a targeted read cannot disagree about whether
+        // a room is a room.
+        public static List<EnclosureReport> Scan(Map map, int cap,
+            out int total, out int checkedCount, out int failing)
+        {
+            total = 0;
+            checkedCount = 0;
+            failing = 0;
+            var rows = new List<EnclosureReport>();
+            if (map == null) return rows;
+            var all = Layouts.All();
+            // ONE `CellCap` FOR THE WHOLE SCAN, not one per layout. `digest` is
+            // documented as called constantly and this rides on it, so the
+            // budget has to be a ceiling on the roll-up rather than on each
+            // member of it — eight 64x64 layouts would otherwise be 32k flood
+            // steps a glance. `layouts_checked` against `layouts_total` is how a
+            // reader sees the budget bite.
+            int budget = CellCap;
+            // Newest first: the layout an agent just placed is the one it is
+            // waiting on.
+            for (int i = all.Count - 1; i >= 0; i--)
+            {
+                var rec = all[i];
+                if (rec == null || rec.MapId != map.uniqueID || rec.CancelledSeq != 0) continue;
+                total++;
+                if (checkedCount >= cap) continue;
+                int area;
+                try { area = rec.Rect.ClipInsideMap(map).Area; } catch { continue; }
+                if (area > budget) continue;
+                budget -= area;
+                checkedCount++;
+                EnclosureReport rep;
+                try { rep = Evaluate(map, rec); }
+                catch (Exception e)
+                {
+                    Journal.EmitWarning("rooms: enclosure evaluation threw for layout "
+                        + rec.Id + ": " + e.Message);
+                    continue;
+                }
+                if (!rep.IntendsRoom) continue;
+                rep.Track();
+                if (!rep.Failing) continue;
+                failing++;
+                rows.Add(rep);
+            }
+            return rows;
+        }
+
+        // ---------------------------------------------------------------------
+
+        private struct ShellCell
+        {
+            public IntVec3 At;
+            public string DefName;
+            public string PlacementId;
+            public bool IsDoor;
+        }
+
+        // South-to-north, then west-to-east. The one ordering rule in this file,
+        // applied to both cell lists so the output is stable across builds.
+        private static int CellOrder(IntVec3 a, IntVec3 b)
+        {
+            int c = a.z.CompareTo(b.z);
+            return c != 0 ? c : a.x.CompareTo(b.x);
+        }
+
+        // 4-connected flood over the rect's non-shell cells. A component that
+        // reaches the rect's own perimeter ESCAPES — the declaration does not
+        // close it — and its cells are not interior. Returns the number of
+        // enclosed components and fills `interior` with their cells.
+        private static int FloodInterior(CellRect rect,
+            Dictionary<IntVec3, ShellCell> shell, List<IntVec3> interior)
+        {
+            var seen = new HashSet<IntVec3>();
+            var stack = new List<IntVec3>();
+            var comp = new List<IntVec3>();
+            int components = 0;
+            foreach (var start in rect)
+            {
+                if (shell.ContainsKey(start) || seen.Contains(start)) continue;
+                comp.Clear();
+                stack.Clear();
+                stack.Add(start);
+                seen.Add(start);
+                bool escapes = false;
+                while (stack.Count > 0)
+                {
+                    var c = stack[stack.Count - 1];
+                    stack.RemoveAt(stack.Count - 1);
+                    comp.Add(c);
+                    if (c.x == rect.minX || c.x == rect.maxX
+                        || c.z == rect.minZ || c.z == rect.maxZ) escapes = true;
+                    for (int d = 0; d < 4; d++)
+                    {
+                        var n = c + GenAdj.CardinalDirections[d];
+                        if (!rect.Contains(n) || shell.ContainsKey(n) || seen.Contains(n)) continue;
+                        seen.Add(n);
+                        stack.Add(n);
+                    }
+                }
+                if (escapes) continue;
+                components++;
+                interior.AddRange(comp);
+            }
+            return components;
+        }
+
+        // What is actually standing on a declared shell cell that did not close.
+        // `blueprint` and `frame` are the honest "someone is on it"; `missing` is
+        // nothing at all, which is a cancelled or destroyed element; `other` is
+        // something else entirely occupying the slot.
+        private static string StandingAt(Map map, IntVec3 c)
+        {
+            try
+            {
+                var list = map.thingGrid.ThingsListAtFast(c);
+                bool other = false;
+                for (int i = 0; i < list.Count; i++)
+                {
+                    var t = list[i];
+                    if (t?.def == null) continue;
+                    if (t is Blueprint) return "blueprint";
+                    if (t is Frame) return "frame";
+                    if (t.def.category == ThingCategory.Building) other = true;
+                }
+                return other ? "other-building" : "missing";
+            }
+            catch { return "unknown"; }
+        }
+
+        private static Dictionary<string, object> RoomRow(Room room)
+        {
+            return new Dictionary<string, object>
+            {
+                ["id"] = room.ID,
+                ["cells"] = WorldSafe.SafeObj(() => (object)room.CellCount),
+                // Verse/Room.cs ProperRoom — THE enclosure test.
+                ["proper"] = SafeBool(() => room.ProperRoom),
+                // Verse/Room.cs UsesOutdoorTemperature — the SECOND mechanism.
+                ["uses_outdoor_temp"] = SafeBool(() => room.UsesOutdoorTemperature),
+                ["touches_map_edge"] = SafeBool(() => room.TouchesMapEdge),
+                ["open_roof_cells"] = WorldSafe.SafeObj(() => (object)room.OpenRoofCount),
+                ["temp_c"] = WorldSafe.SafeObj(() => (object)WorldSafe.R(room.Temperature, 1)),
+            };
+        }
+
+        private static bool SafeBool(Func<bool> f)
+        {
+            try { return f(); } catch { return false; }
+        }
+    }
+
+    // The enclosure verdict for ONE placed layout. One type, published by
+    // `construction {layout_id}` in full and by `rooms` / `digest.construction`
+    // in brief, so a targeted read and a turn-level glance cannot disagree.
+    public sealed class EnclosureReport
+    {
+        public string LayoutId;
+        public string Name;
+        public string Note;
+        public bool Cancelled;
+        public CellRect Rect;
+
+        public bool IntendsRoom;
+        public int Components;
+        public int ShellCells;
+        public int InteriorCells;
+        public int FoggedCells;
+        public int OpenShell;
+        public bool ShellComplete;
+        public int UnroofedCells;
+        public int RoomOpenRoofCells;
+        public int RoomsFound;
+
+        // NULLABLE ON PURPOSE. `false` means measured-and-open; null means the
+        // question could not be answered here (fog, no room, off-map), and the
+        // two must never collapse — an unanswered enclosure reading as "fine"
+        // is the defect this issue exists to close, one level up.
+        public bool? Enclosed;
+        public bool? UsesOutdoorTemp;
+
+        public readonly List<Dictionary<string, object>> Gaps = new List<Dictionary<string, object>>();
+        public readonly List<object> RoofHoles = new List<object>();
+        public readonly List<object> Rooms = new List<object>();
+
+        // The thing an agent branches on: this layout declared a room and the
+        // room is not one, OR it is one and is sitting on outdoor temperature.
+        public bool Failing => IntendsRoom && (Enclosed != true || UsesOutdoorTemp == true);
+
+        public void Track()
+        {
+            if (LayoutId != null) LayoutEnclosureWatch.Note(LayoutId, Failing);
+        }
+
+        public Dictionary<string, object> Out()
+        {
+            var d = new Dictionary<string, object>
+            {
+                ["layout_id"] = LayoutId,
+                ["name"] = Name,
+                // The declaration's own verdict, independent of build state: did
+                // this layout's walls and doors ever enclose anything? A
+                // defensive wall answers false here forever and is never
+                // reported as a failed room.
+                ["intends_room"] = IntendsRoom,
+                ["declared_rooms"] = Components,
+                ["shell_cells"] = ShellCells,
+                ["interior_cells"] = InteriorCells,
+                // Verse/Room.cs ProperRoom over every declared interior room.
+                ["enclosed"] = Enclosed,
+                // Verse/Room.cs UsesOutdoorTemperature over the same rooms. A
+                // freezer can be `enclosed:true` and `uses_outdoor_temp:true` at
+                // once, and that is the second way m1-20260901 could have died.
+                ["uses_outdoor_temp"] = UsesOutdoorTemp,
+                // Every declared wall/door cell that does not close the room, by
+                // `Verse/RegionTypeUtility.GetExpectedRegionType`. A bare
+                // `enclosed:false` repeats the defect one level up.
+                ["open_shell_cells"] = OpenShell,
+                ["shell_complete"] = ShellComplete,
+                ["gaps"] = Gaps,
+                ["gaps_more"] = Math.Max(0, OpenShell - Gaps.Count),
+                // Declared interior cells with no roof — the thermal hole,
+                // counted the way UsesOutdoorTemperature counts it.
+                ["unroofed_cells"] = UnroofedCells,
+                ["unroofed"] = RoofHoles,
+                ["unroofed_more"] = Math.Max(0, UnroofedCells - RoofHoles.Count),
+                ["rooms"] = Rooms,
+                ["rooms_found"] = RoomsFound,
+                ["failing"] = Failing,
+            };
+            if (Cancelled) d["cancelled"] = true;
+            if (FoggedCells > 0) d["fogged_cells"] = FoggedCells;
+            if (Note != null) d["note"] = Note;
+            // The built room can be BIGGER than this layout's declared interior
+            // (two layouts sharing a wall, a room extended by hand), so the
+            // named holes can be a subset of what the flag counts. Say so rather
+            // than let the shorter list read as the whole truth.
+            if (RoomOpenRoofCells > UnroofedCells)
+                d["unroofed_note"] = "the room's own OpenRoofCount is "
+                    + RoomOpenRoofCells + " against " + UnroofedCells + " named here: "
+                    + "the room extends past this layout's declared interior, so the "
+                    + "named cells are a FLOOR. `room {id}` reads the whole room.";
+            if (ShellComplete && Enclosed == false)
+                d["shell_note"] = "every declared wall and door cell is closed and the "
+                    + "space still leaks — the hole is outside this layout's own "
+                    + "declaration. `room-at` on an interior cell names the room it "
+                    + "actually joined.";
+            var age = LayoutEnclosureWatch.Age(LayoutId);
+            if (age != null) d["unenclosed_for"] = age;
+            return d;
+        }
+
+        // The roll-up row: enough to act on without a second call, short enough
+        // to sit in `rooms` and in the digest.
+        public Dictionary<string, object> Brief()
+        {
+            var d = new Dictionary<string, object>
+            {
+                ["layout_id"] = LayoutId,
+                ["name"] = Name,
+                ["enclosed"] = Enclosed,
+                ["uses_outdoor_temp"] = UsesOutdoorTemp,
+                ["open_shell_cells"] = OpenShell,
+                ["unroofed_cells"] = UnroofedCells,
+                ["rect"] = Footprint.Out(Rect),
+                // ONE named cell, so the roll-up itself is actionable: an agent
+                // reading `rooms` is told where to look, not merely that
+                // something is wrong. `construction {layout_id}` has the rest.
+                ["first_gap"] = Gaps.Count > 0 ? Gaps[0] : null,
+            };
+            if (Note != null) d["note"] = Note;
+            var age = LayoutEnclosureWatch.Age(LayoutId);
+            if (age != null) d["unenclosed_for"] = age;
+            return d;
+        }
+    }
+
+    // ===================================================== git-bug a1644d6 ===
+    // HOW LONG HAS IT BEEN LIKE THAT — acceptance item 4, and it follows
+    // `f9dadc7`'s settled resolution (DESIGN decisions log 2026-09-02) to the
+    // letter so the two roll-ups read consistently when the stalled-blueprint
+    // half lands: an unenclosed room and a stalled blueprint are usually the
+    // same event seen from two sides.
+    //
+    // TRACK IN MEMORY, AND PUBLISH WHAT YOU DO NOT KNOW. `AgentGameComponent`
+    // has no `ExposeData`, and this project deliberately does not buy durability
+    // with new scribed state (`d16a463` is an open hazard on exactly that). So
+    // this table dies at a game boundary along with `Placements` and `Layouts`,
+    // and `tracked_since` says when this process started watching. A reader can
+    // then tell three states apart that must never collapse:
+    //
+    //   * stale        — observed unenclosed across at least one day boundary
+    //   * not stale    — observed, and younger than that
+    //   * not yet known — tracking is younger than the layout
+    //
+    // The third is the whole point. An absent or zero age must not read as
+    // "clean": that is exactly how the original defect worked, where a flat
+    // number read as a healthy one.
+    //
+    // IT IS SAMPLED, NOT TICKED. Nothing here runs on a tick; `Note` is called
+    // from the reads that evaluate a layout (`rooms`, `digest.construction`).
+    // So the age is "how long since the first read that saw it open", which is a
+    // FLOOR on the real age and is published as one.
+    public static class LayoutEnclosureWatch
+    {
+        private static readonly object gate = new object();
+        private static readonly Dictionary<string, int> firstFail =
+            new Dictionary<string, int>(StringComparer.Ordinal);
+        private static int trackedSince = -1;
+
+        public static void Note(string layoutId, bool failing)
+        {
+            if (string.IsNullOrEmpty(layoutId)) return;
+            int now;
+            try { now = Find.TickManager.TicksGame; } catch { return; }
+            lock (gate)
+            {
+                if (trackedSince < 0) trackedSince = now;
+                if (!failing) { firstFail.Remove(layoutId); return; }
+                if (!firstFail.ContainsKey(layoutId)) firstFail[layoutId] = now;
+            }
+        }
+
+        // Null when this layout is not currently failing — presence is the
+        // signal, so a caller never compares a zero against a missing key.
+        public static Dictionary<string, object> Age(string layoutId)
+        {
+            if (string.IsNullOrEmpty(layoutId)) return null;
+            int since, since0;
+            lock (gate)
+            {
+                if (!firstFail.TryGetValue(layoutId, out since)) return null;
+                since0 = trackedSince;
+            }
+            int now;
+            try { now = Find.TickManager.TicksGame; } catch { return null; }
+            // Verse GenDate.TicksPerDay.
+            const int day = GenDate.TicksPerDay;
+            int boundaries = Math.Max(0, now / day - since / day);
+            var d = new Dictionary<string, object>
+            {
+                ["since_tick"] = since,
+                ["ticks"] = Math.Max(0, now - since),
+                ["day_boundaries"] = boundaries,
+                // The f9dadc7 idiom: what this PROCESS has watched, so a reload
+                // cannot silently report "not stale".
+                ["tracked_since"] = since0,
+                ["stale"] = boundaries >= 1,
+            };
+            if (since <= since0)
+                d["floor_note"] = "this layout was already open at the first read this "
+                    + "process made, so the age is a FLOOR — tracking is in memory only "
+                    + "and resets at a load, a new game or a return to the menu.";
+            return d;
+        }
+
+        // A layout id names a rect on a map. After a game boundary the map is
+        // gone; see Runtime.ResetForGameBoundary and Placements' header.
+        public static void Clear()
+        {
+            lock (gate)
+            {
+                firstFail.Clear();
+                trackedSince = -1;
+            }
+        }
+    }
+
 }

@@ -132,6 +132,42 @@ it becomes. Ledger: log only firings (`verdict:"action"`), per
   can address a per-bill path.
 - retire-when: never. This is a state predicate over a standing order and there
   is no alert for it — `Alert_NeedMealSource` tests only that a stove exists.
+### room-that-is-not-a-room
+- when: turn
+- applies-when: any layout has been placed with `place-layout`
+- read: `digest` → `construction.layouts_unenclosed` (absent when there is
+  nothing to report — presence is the signal), or `rooms` →
+  `layouts_unenclosed` / `layouts_failing` on any turn you called `rooms`
+- flag: the key is present, or `layouts_failing > 0`. Each row carries
+  **two flags and they are different failures**: `enclosed: false` is a hole in
+  the shell (`Verse/Room.ProperRoom`), and `uses_outdoor_temp: true` is a hole
+  in the ROOF on a room that may be perfectly sealed
+  (`UsesOutdoorTemperature` = `TouchesMapEdge || OpenRoofCount >=
+  CeilToInt(CellCount * 0.25f)`). A freezer dies of either.
+- act: `first_gap.at` is the cell. If `standing` is `blueprint` or `frame`, it
+  is a build that has not happened — that is `materials-designation-loop` or a
+  stalled element, not a design problem. If it is `missing`, something
+  destroyed or cancelled the wall and it must be replaced:
+  `build {def:"Wall", at:[x,z], stuff:"…"}`. If there is no gap at all and
+  `uses_outdoor_temp` is still true, the hole is the roof — the game roofs an
+  enclosed player room by itself
+  (`AutoBuildRoofAreaSetter.TryGenerateAreaNow`, ≤26 regions, ≤320 cells), so a
+  roof that is not going on means nobody is free to build it, not that a
+  designation is missing.
+- why: run `m1-20260901` placed its freezer as a layout, built every element,
+  and never closed it. `construction {layout_id}` read `done: true` for forty
+  days while `room-at` on the interior read `outdoors: true, cells: 60082` —
+  the whole outdoors. The colony had no larder and starved. **`done` means
+  every element resolved; it has never meant the room encloses**, and the two
+  come apart at exactly the tick the last wall completes, which is also the
+  tick every construction count goes to zero and the layout becomes invisible
+  ([[a-room-is-not-a-room-until-the-game-says-so]], git-bug `a1644d6`).
+- and: a row that has been there **across a day boundary** carries
+  `unenclosed_for.stale: true`. `unenclosed_for.tracked_since` says when this
+  process started watching — tracking is in memory and resets at a load, so a
+  young `tracked_since` means the age is a floor and NOT that the room is fine.
+- retire-when: nothing retires this; it is the read that would have caught the
+  wipe.
 
 ### hostiles-standing
 - when: turn

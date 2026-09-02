@@ -16,6 +16,7 @@ no opinion).
 | [[quicktest-and-autostart-collide]] | Critical | verified-in-source | launching `--quicktest` on a bench whose Saves still holds `autostart.rws` — map gen fails deterministically |
 | [[orbital-trade-needs-a-beacon]] | Critical | verified-in-source | any orbital trade — no beacon means the ship sees nothing of yours, and the console alone is not enough |
 | [[one-doctor-is-zero-doctors]] | Critical | observed-at-bench | **graduated to CODE**: `digest.work_coverage` reads it at every glance and `work-cover` repairs it (git-bug `40ed42f`). The note keeps only the WHY — Doctor's floor is 2 on AVAILABILITY because `Alert_NeedDoctor.Patients` has `!item.Downed` in it |
+| [[a-room-is-not-a-room-until-the-game-says-so]] | Critical | observed-at-bench | any `place-layout` meant to enclose — `done:true` is not `enclosed:true`, and a sealed room with a quarter of its roof missing is still thermally outdoors (**cited**: `turn.md §room-that-is-not-a-room`, `templates/freezer-kitchen.md` §Placement) |
 | [[read-every-return-or-lose-a-colonist]] | Critical | observed-at-bench | any back-to-back short advances — a narrowed read is a blind loop |
 | [[seek-off-is-a-decision-to-flee]] | Critical | verified-in-source | choosing a combat posture — `hostility_response` is decided ABOVE seek, so `Flee` beats it |
 | [[a-designation-outside-the-allowed-area-does-nothing]] | Critical | observed-at-bench | any designation on a MOVING target — a hunt designation went inert when the herd migrated and a colonist starved |

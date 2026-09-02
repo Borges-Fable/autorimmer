@@ -113,6 +113,25 @@ you rotate the offset by hand.
 `place-layout templates/freezer-kitchen.ir.json --mode blueprint` (3.3 — the
 verb does not exist yet; `1adc737` is open). After the walls close, in order:
 
+0. **CONFIRM IT ENCLOSED, before anything else.** `construction
+   {layout_id:"ly-N"}` → `enclosure`, and **read both flags**: `enclosed`
+   (`Verse/Room.ProperRoom`) and `uses_outdoor_temp`
+   (`OpenRoofCount >= CeilToInt(CellCount * 0.25f)`). A freezer that is
+   `enclosed:true` and `uses_outdoor_temp:true` is sealed and sitting on the
+   outdoor temperature — a hole in the roof, not in the wall — and it will not
+   hold cold no matter what the coolers are set to. Where either fails,
+   `enclosure.gaps[0].at` is the cell.
+
+   **This template shipped the failure this step exists to catch.** Run
+   `m1-20260901` placed this room, built every element, read `done: true` for
+   forty days, and had `room-at` report `outdoors: true, cells: 60082` on the
+   freezer interior the whole time. The colony had no larder and starved
+   (git-bug `a1644d6`, [[a-room-is-not-a-room-until-the-game-says-so]]). The
+   flags also ride on `digest.construction.layouts_unenclosed` and on
+   `rooms.layouts_unenclosed`, so the turn checklist catches it even if this
+   step is skipped — but the read costs one call and answers before the coolers
+   are even wired.
+
 1. **Wire it.** Extend the col-5 conduit spine south from the template's edge
    to a net that has a generator and 400 W of headroom. The coolers are
    connectors, so they need a transmitter within 6 cells — they do NOT need

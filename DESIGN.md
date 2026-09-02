@@ -3335,3 +3335,88 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `asleep-no-matching-ingredient` (backed off, and nothing on the map can ever
   satisfy it). Only the second needs the agent, and presenting them identically
   is what let twenty days pass.
+
+- 2026-09-02 (repair round, worker) — **The enclosure check keys on
+  `GetExpectedRegionType`, not on `GetEdifice`, because A WALL FRAME IS AN
+  EDIFICE.** Implementing `a1644d6` against the resolution above turned up one
+  fact that decides the whole gap check.
+  `RimWorld/ThingDefGenerator_Buildings.NewFrameDef_Thing` copies
+  `building.isEdifice` from the finished def:
+
+  ```csharp
+  thingDef.passability = def.passability;
+  if ((int)thingDef.passability > 1) thingDef.passability = Traversability.PassThroughOnly;
+  thingDef.fillPercent = 0.2f;
+  thingDef.building.isEdifice = def.building.isEdifice;
+  ```
+
+  So a **wall frame registers in `Verse/EdificeGrid`** and `c.GetEdifice(map)`
+  is non-null at it — while the same generator clamps `Impassable` down to
+  `PassThroughOnly` and sets `fillPercent = 0.2f`, so the cell is walkable and
+  the room leaks straight through it. A gap check written as "is an edifice
+  standing here" therefore reports a half-built wall as SEALED, which is the
+  original defect with extra steps. The check calls the region builder's own
+  predicate instead, `Verse/RegionTypeUtility.GetExpectedRegionType`, and a
+  declared shell cell closes the room exactly when that answers `None` (a
+  `Fillage == Full` wall) or `Portal` (a door). Three nuances then fall out
+  rather than being special-cased: a built door does not break enclosure and an
+  unbuilt one does; a wall frame reads open; and a sandbag in a wall slot reads
+  `ImpassableFreeAirExchange`, which is open, correctly.
+
+- 2026-09-02 (repair round, worker) — **"Intended roofed" is the layout's
+  DECLARED INTERIOR, not the IR's roof mask, because `place-layout` does not
+  receive the mask.** `8c8680a` says the intended roof is "the IR's own `roof`
+  mask, which every shipped template already carries", and the templates do
+  carry one — but the mod never sees it: `place-layout` takes a RESOLVED
+  element list and `LayoutVerbs`' header records the roof as a deliberate
+  non-consumption ("a roof is a DESIGNATION, not a placement"). Adding a `roof`
+  argument would change that verb's contract to serve a report.
+
+  Taken as the cells the declared shell encloses instead. For a room layout
+  that is the same set the mask would give; it needs no new IR field; and it is
+  the set `UsesOutdoorTemperature` is actually counting against. Where the
+  built room is LARGER than the declared interior — two layouts sharing a wall,
+  a room extended by hand — the room's own `OpenRoofCount` can exceed the named
+  holes, so both numbers are published and `unroofed_note` says which is the
+  floor.
+
+- 2026-09-02 (repair round, worker) — **A layout "intends a room" is decided
+  from the DECLARATION ALONE, by a flood over the layout's own rect, and that
+  is the cry-wolf guard.** `a1644d6`'s roll-ups have to answer "which placed
+  layouts should be rooms and are not", and the tempting test — "it has walls
+  and its interior is not a proper room" — reports a defensive wall, a conduit
+  spine and a row of solar panels as failed rooms forever. A report that fires
+  on things that are not regressions is worse than the silence it replaces,
+  because the agent learns to ignore it (the rule `f1a1700` is parked under).
+
+  So: flood the layout's rect 4-connected, blocked by the declared `Wall`/`Door`
+  cells; a component that never reaches the rect perimeter is a declared
+  interior. `intends_room` is "at least one such component exists". It contains
+  **no game state at all** — same answer on the day of placement and on day 40,
+  independent of what has been built — and it is bounded by the rect
+  (`LayoutEnclosure.CellCap`, one budget for the whole roll-up because `digest`
+  rides on it). A straight wall's flood escapes on both sides, so it is never
+  listed. This is the file's ONLY search; the enclosure question itself is
+  still `ProperRoom`, per the gate-lives-in-the-widget rule.
+
+  Verified offline against all three shipped templates
+  (`accept/a1644d6-enclosure.py --selftest`): `freezer-kitchen` declares 2
+  rooms / 32 interior cells, `bedroom` 1 / 15, `power-room` 1 / 25, and a
+  5-cell wall run declares 0. The freezer template is only checkable because
+  `Cooler` is `fillPercent 1.0` / `Impassable` in Core's
+  `Buildings_Temperature.xml` and so seals a wall slot exactly as `Wall` does —
+  had it not been, the flood would escape through the north wall and the one
+  template that shipped this failure would have been silently exempt.
+
+- 2026-09-02 (repair round, worker) — **`rooms` cannot report a room that does
+  not exist, which is why `daa269a`'s roll-up and `a1644d6`'s roll-up are on
+  different keys.** `rooms` lists `map.regionGrid.AllRooms` and skips
+  `PsychologicallyOutdoors`, so an unclosed freezer is not a row in it — its
+  cells belong to the map-wide outdoor blob that the verb filters out. The
+  failing LAYOUTS therefore ride alongside the room list on
+  `layouts_unenclosed`, with one gap cell named per row, and the same rows
+  appear on `digest.construction.layouts_unenclosed` under the presence-is-the-
+  signal rule. The digest is the read the play loop makes unconditionally, and
+  B-3's bar is that the agent is told *without asking cell by cell*; a key only
+  `construction {layout_id}` carried would have needed the agent to already
+  suspect the layout, which is exactly what run `m1-20260901` never did.

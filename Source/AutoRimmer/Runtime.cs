@@ -49,6 +49,10 @@ namespace AutoRimmer
             // so it is safe on either thread. See Placements' header.
             Placements.Clear();
             Layouts.Clear();
+            // Keyed by layout id and measured in TicksGame, so it is stale for
+            // both reasons at once after a boundary. In memory by design — see
+            // LayoutEnclosureWatch's header and git-bug d16a463.
+            LayoutEnclosureWatch.Clear();
             // git-bug 2d9a1da, and it is here for exactly the reason the two
             // lines above it are: state indexed by a game that no longer
             // exists. A sample ring is worse than a stale placement id, though,
