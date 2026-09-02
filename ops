@@ -1,1 +1,1 @@
-{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":5,"timestamp":1788367703,"nonce":"xhJSU5aCrTD3/xEWCLY+totWVZw=","added":["state:doing"],"removed":null}]}
+{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":3,"timestamp":1788367703,"nonce":"VQyFz3VQeg79Sbmlp/xDVeHuM7s=","message":"dispatched (repair round, session 22) together with f08dfc4 — both are the envelope's error surface, one worker. Branch fix/e440676-error-class.","files":null}]}
