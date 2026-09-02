@@ -48,7 +48,8 @@ it becomes. Ledger: log only firings (`verdict:"action"`), per
   medicine" made countable; calibrate from runs)*
 - act: buy at next trader, craft herbal from a healroot zone, or harvest wild
   healroot. Stockpiles-only caveat: `resources.scope` says so — meds loose on
-  the ground after a raid count zero until hauled ([[unforbid-before-expecting-pickup]]).
+  the ground after a raid count zero until hauled
+  ([[unforbid-before-expecting-pickup]], [[stockpile-scope-hides-your-own-supplies]]).
 - why: one of Evan's three named gaps (food, medicine, weapons — 96d9315
   comment 7); no vanilla alert leads on medicine stock.
 - retire-when: sampling carries a medicine series and a restock policy hardens
@@ -85,7 +86,12 @@ it becomes. Ledger: log only firings (`verdict:"action"`), per
   "colonists don't put down trees themselves"). Crops are the exception and
   belong to `food-days-floor`, not here.
 - why: a bill stalling at zero input pages THIS item, not a bill retry — the
-  retry hides the real correction. Stockpiles-only caveat applies here too.
+  retry hides the real correction. Stockpiles-only caveat applies here too, and
+  it is the trap that cost m1-20260901 five days: `resources.steel` read 0 while
+  811 steel lay on the map, and the fix was `unforbid` plus an allowed-area
+  extension, NOT more mining. Read `things {def, detail:true}`'s `forbidden` and
+  a `place-layout --dry-run`'s `available` vs `in_stockpiles` before designating
+  anything ([[stockpile-scope-hides-your-own-supplies]]).
 - retire-when: 1.6 predicate, or a mod-side standing-designation policy
   (candidate for the ladder's mod rung once the policy is Evan-ratified).
 

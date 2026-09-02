@@ -1,0 +1,31 @@
+PASS  ledger-valid          17 lines
+PASS  item-ids-known        12 colony-start steps, 23 ### ids
+FAIL  daily-coverage        missing (day, item): [(10, 'apparel-margin'), (10, 'production-still-runs'), (10, 'barracks-heat'), (10, 'armed-roster'), (10, 'freezer-below-zero'), (11, 'apparel-margin'), (11, 'production-still-runs'), (11, 'barracks-heat'), (11, 'armed-roster'), (11, 'freezer-below-zero'), (12, 'apparel-margin'), (12, 'production-still-runs'), (12, 'barracks-heat'), (12, 'armed-roster'), (12, 'freezer-below-zero'), (13, 'apparel-margin'), (13, 'production-still-runs'), (13, 'barracks-heat'), (13, 'armed-roster'), (13, 'freezer-below-zero'), (14, 'apparel-margin'), (14, 'production-still-runs'), (14, 'barracks-heat'), (14, 'armed-roster'), (14, 'freezer-below-zero'), (15, 'apparel-margin'), (15, 'production-still-runs'), (15, 'barracks-heat'), (15, 'armed-roster'), (15, 'freezer-below-zero'), (16, 'apparel-margin'), (16, 'production-still-runs'), (16, 'barracks-heat'), (16, 'armed-roster'), (16, 'freezer-below-zero'), (17, 'apparel-margin'), (17, 'production-still-runs'), (17, 'barracks-heat'), (17, 'armed-roster'), (17, 'freezer-below-zero'), (18, 'apparel-margin'), (18, 'production-still-runs'), (18, 'barracks-heat'), (18, 'armed-roster'), (18, 'freezer-below-zero'), (19, 'apparel-margin'), (19, 'production-still-runs'), (19, 'barracks-heat'), (19, 'armed-roster'), (19, 'freezer-below-zero'), (20, 'apparel-margin'), (20, 'production-still-runs'), (20, 'barracks-heat'), (20, 'armed-roster'), (20, 'freezer-below-zero'), (21, 'apparel-margin'), (21, 'production-still-runs'), (21, 'barracks-heat'), (21, 'armed-roster'), (21, 'freezer-below-zero'), (22, 'apparel-margin'), (22, 'production-still-runs'), (22, 'barracks-heat'), (22, 'armed-roster'), (22, 'freezer-below-zero'), (23, 'apparel-margin'), (23, 'production-still-runs'), (23, 'barracks-heat'), (23, 'armed-roster'), (23, 'freezer-below-zero'), (24, 'apparel-margin'), (24, 'production-still-runs'), (24, 'barracks-heat'), (24, 'armed-roster'), (24, 'freezer-below-zero'), (25, 'apparel-margin'), (25, 'production-still-runs'), (25, 'barracks-heat'), (25, 'armed-roster'), (25, 'freezer-below-zero'), (26, 'apparel-margin'), (26, 'production-still-runs'), (26, 'barracks-heat'), (26, 'armed-roster'), (26, 'freezer-below-zero'), (27, 'apparel-margin'), (27, 'production-still-runs'), (27, 'barracks-heat'), (27, 'armed-roster'), (27, 'freezer-below-zero'), (29, 'apparel-margin'), (29, 'production-still-runs'), (29, 'barracks-heat'), (29, 'armed-roster'), (29, 'freezer-below-zero')]
+PASS  action-taken          9, first: colony-start-1: the plaza spine, also the conduit run; every door faces it
+PASS  summary-written       summary.md
+PASS  final-undrafted       3 colonists, 0 drafted, 0 unpardoned hostiles
+FAIL  advance-invariants    859-advance: client died mid-call — cmd.json has verb 'advance' {'until': {'letter': True}, 'timeout_ticks': 60000}, no result.json (the advance ran unobserved)
+INFO  advance-wakes         153-advance: alert Alert_NeedWarmClothes
+INFO  advance-wakes         173-advance: alert Alert_NeedDefenses
+INFO  advance-wakes         181-advance: alert Alert_LowMedicine
+INFO  advance-wakes         190-advance: letter ThreatSmall (asked for: until:{letter})
+INFO  advance-wakes         192-advance: letter PositiveEvent (asked for: until:{letter})
+INFO  advance-wakes         194-advance: alert Alert_ColonistNeedsTend
+INFO  advance-wakes         204-advance: letter ThreatBig
+INFO  advance-wakes         216-advance: letter PositiveEvent (asked for: until:{letter})
+INFO  advance-wakes         220-advance: letter NegativeEvent (asked for: until:{letter})
+INFO  advance-wakes         245-advance: alert Alert_LifeThreateningHediff
+INFO  advance-wakes         271-advance: alert Alert_ColonistNeedsTend
+INFO  advance-wakes         274-advance: alert Alert_LifeThreateningHediff
+INFO  advance-wakes         286-advance: alert Alert_LifeThreateningHediff
+INFO  advance-wakes         301-advance: letter NewQuest (asked for: until:{letter})
+INFO  advance-wakes         305-advance: alert Alert_LowFood
+INFO  advance-wakes         354-advance: letter PositiveEvent (asked for: until:{letter})
+INFO  advance-wakes         358-advance: letter NewQuest (asked for: until:{letter})
+INFO  advance-wakes         377-advance: alert Alert_LowFood
+INFO  advance-wakes         381-advance: alert Alert_ChessTableNoChairs
+INFO  advance-wakes         385-advance: alert Alert_FireInHomeArea
+INFO  advance-wakes         …and 50 more wakes
+FAIL  advance-discipline    127-advance: ADVANCED BLIND — the mod refused with unread-journal (the previous advance journaled 55 event(s) that no `journal` call has read (seq 1..55; types: action 29, alert_on 3, construction 6, message 2, session 2, warni); 128-advance: ADVANCED BLIND — the mod refused with unread-journal (the previous advance journaled 55 event(s) that no `journal` call has read (seq 1..55; types: action 29, alert_on 3, construction 6, message 2, session 2, warni) [halt:alert 42, halt:casualty 2, halt:dialog 9, halt:interrupted 4, halt:letter 28, halt:ticks 4, halt:timeout 6, no-result 1, refused:bad-args 1, refused:unread-journal 2]
+PASS  zero-red-errors       974 events, 0 red
+PASS  transcript-journal    145 journaled mutations all covered by transcript ops

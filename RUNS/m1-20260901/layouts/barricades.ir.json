@@ -1,0 +1,115 @@
+{
+  "defName": "AR_M1_Barricade_Line",
+  "size": [
+    14,
+    3
+  ],
+  "spawnConduits": false,
+  "layers": [
+    [
+      [
+        "Barricade",
+        "Barricade",
+        "Barricade",
+        ".",
+        ".",
+        ".",
+        ".",
+        ".",
+        ".",
+        ".",
+        ".",
+        "Barricade",
+        "Barricade",
+        "Barricade"
+      ],
+      [
+        ".",
+        ".",
+        ".",
+        ".",
+        ".",
+        ".",
+        ".",
+        ".",
+        ".",
+        ".",
+        ".",
+        ".",
+        ".",
+        "."
+      ],
+      [
+        "Barricade",
+        "Barricade",
+        "Barricade",
+        "Barricade",
+        "Barricade",
+        "Barricade",
+        "Barricade",
+        "Barricade",
+        "Barricade",
+        "Barricade",
+        "Barricade",
+        "Barricade",
+        "Barricade",
+        "Barricade"
+      ]
+    ]
+  ],
+  "terrain": [],
+  "roof": [
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  ],
+  "modRequirements": [],
+  "extension": null,
+  "animalCells": [],
+  "_note": "Cover for the two-rifle militia south of the plaza. Barricade, not Sandbags: Sandbags take Fabric/Leathery stuff and the colony has no cloth yet (place-layout preflight said so by name). Front line south, two wings north for crossfire; defenders stand on the middle row."
+}

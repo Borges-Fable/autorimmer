@@ -233,6 +233,29 @@ to execute.
 - retire-when: cc8988c lands — this item then shrinks to "confirm the
   procedure ran and undraft count is zero".
 
+### trade-opportunity
+- when: event: a letter whose label matches a trader, a caravan or a trade
+  inspiration — `trader|caravan|Trade`, case-insensitive
+- read: `trade` (it names the gate if no session is open), then
+  `pawns {filter:"all"}` to confirm the caravan is actually on the map, then
+  `resources.silver` and whichever counts are short
+- flag: a trade letter that was dismissed without a `trade-start`, or a caravan
+  that has already left (`by_class` shows no non-player faction pawns)
+- act: `trade-start {trader, negotiator}` with the best Social on the roster,
+  then `trade-set` / `trade-confirm`. Verify any echo with an independent
+  `things` read (`be75bc4`, `7e8c969`)
+- why: **a trade letter is time-boxed and a batched turn loop will ride past the
+  whole visit.** m1-20260901 day 14 printed and dismissed "Bulk goods trader from
+  East Galer" as a `PositiveEvent` inside a 3-day batch, advanced ~45,000 ticks,
+  and by the next read the caravan was gone — with 800 silver unspent,
+  `resources.steel` at 0 and `food_days` 3.9 against a required 6. A bulk goods
+  trader sells exactly steel and food. Nine days of shortage followed a letter
+  that was read and thrown away. Any driver that batches advances must break the
+  batch on this class, not only on threats
+  ([[batching-turns-costs-you-the-trader]])
+- retire-when: `advance` gains a trade/caravan halt matcher, so the loop stops
+  because the game stopped it — the shape every other halt already has
+
 ### power-incident
 - when: event: Zzzt letter, or any fire event near the power room
 - read: `fires` (scoped alerts lie — this verb doesn't), then

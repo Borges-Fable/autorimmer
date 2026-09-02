@@ -1,0 +1,22 @@
+{"day": 1, "tick": 47365, "item": "colony-start-1", "verdict": "action", "reading": "stockpile zone 0 'plaza' 111 cells x113-115 z116-152", "note": "the plaza spine, also the conduit run; every door faces it"}
+{"day": 1, "tick": 47365, "item": "colony-start-2", "verdict": "action", "reading": "4 unforbid rects; 966 of 1170 steel was forbidden", "note": "gear+meals+near steel+near wood, then a 4th rect for the 6-steel shortfall the barracks dry-run named"}
+{"day": 1, "tick": 47365, "item": "colony-start-3", "verdict": "action", "reading": "place-layout ly-1 barracks (104,136) steel shell + wood beds; 32/33 built", "note": "33rd element (Heater) blocked by constructionSkillPrerequisite 5 vs roster 4 -> git-bug e08c3e5"}
+{"day": 1, "tick": 47365, "item": "colony-start-4", "verdict": "action", "reading": "growing zone 1 'rice-west' 126 cells, plant_configured true, plant_source backing-field", "note": "Plant_Rice named in the add call; getter never read unset"}
+{"day": 1, "tick": 47365, "item": "colony-start-5", "verdict": "action", "reading": "rifle->Jimmy (Shooting 2), revolver->Lacey; all 3 flak pieces -> Jimmy", "note": "flak concentrated on Jimmy because Lacey is a Nudist; 4 orders collided silently first -> git-bug 253c694"}
+{"day": 1, "tick": 47365, "item": "colony-start-6", "verdict": "ok", "reading": "50 survival meals = ~10 colonist-days; Alert_NeedMealSource silent before day 2", "note": "stove deferred to ly-2 kitchen, placed this session"}
+{"day": 1, "tick": 47365, "item": "colony-start-7", "verdict": "action", "reading": "work-cover Doctor: Lacey 0->3, still_under [], coverage_after.ok true", "note": "then the full 70-change priority matrix with manual:true; no dev:set-skill needed, G2 watermark stays seq 0"}
+{"day": 1, "tick": 47365, "item": "colony-start-8", "verdict": "action", "reading": "research-set Batteries (400); bench_ok false until ly-3 lands", "note": "game had auto-selected Pemmican, which nothing could work"}
+{"day": 1, "tick": 47365, "item": "colony-start-9", "verdict": "ok", "reading": "Home auto-expanded on ordinary construction; barracks inside it", "note": "no dev-spawn, so the 96d9315 edge case does not apply"}
+{"day": 1, "tick": 47365, "item": "colony-start-10", "verdict": "action", "reading": "structural count 0 sandbags/barricades/turrets; scheduled before day 6", "note": "never waiting on Alert_NeedDefenses, which self-silences day 6 whatever the state"}
+{"day": 1, "tick": 47365, "item": "colony-start-11", "verdict": "ok", "reading": "no Brawler on roster; Jimmy Shooting 2 > Lacey 1, neither with passion", "note": "passion-over-skill applied as tiebreak not rule; Wouter violence-disabled"}
+{"day": 1, "tick": 47365, "item": "colony-start-12", "verdict": "action", "reading": "area 6 'home-ground' 2038 cells; posture area+seek auto", "note": "seek DECLINED first pass (unarmed, Melee 2<6) and taken on re-run once weapons were held: will_seek 2/2, flee_risk []"}
+{"day": 1, "tick": 47365, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer exists; ly-7 not yet placed"}
+{"day": 1, "tick": 47365, "item": "armed-roster", "verdict": "ok", "reading": "2 of 2 violence-capable armed; Wouter violence-disabled", "note": "rifle + revolver held; knife spare in stockpile"}
+{"day": 1, "tick": 47365, "item": "production-still-runs", "verdict": "n/a", "reading": "no production bench exists yet; ly-2 stove placed this session"}
+{"day": 1, "tick": 47365, "item": "apparel-margin", "verdict": "ok", "reading": "worst worn hp_pct 100 across all three", "note": "3-day cadence; next due day 4"}
+{"day": 1, "tick": 47365, "item": "barracks-heat", "verdict": "ok", "reading": "room 38 barracks 17.0C, outdoor 5C, uses_outdoor_temp false", "note": "M1's day-3 shape avoided: no campfire indoors, heat is electric and pending power"}
+{"day": 30, "tick": 1749054, "item": "barracks-heat", "verdict": "ok", "reading": "38=21C 52=12.4C 53=12.5C 54=12.4C 64=11.6C 69=23C"}
+{"day": 30, "tick": 1749054, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 30, "tick": 1749054, "item": "armed-roster", "verdict": "ok", "reading": "2/2 violence-capable armed: Lacey*=Gun_Revolver; Wouter(non-violent)=none; Jimmy*=Gun_BoltActionRifle"}
+{"day": 30, "tick": 1749054, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=18.9, rot_days=19.8"}
+{"day": 30, "tick": 1749054, "item": "apparel-margin", "verdict": "ok", "reading": "worst worn hp: 90% 92% 92%"}

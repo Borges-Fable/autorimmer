@@ -18,6 +18,8 @@ no opinion).
 | [[one-doctor-is-zero-doctors]] | Critical | observed-at-bench | **graduated to CODE**: `digest.work_coverage` reads it at every glance and `work-cover` repairs it (git-bug `40ed42f`). The note keeps only the WHY — Doctor's floor is 2 on AVAILABILITY because `Alert_NeedDoctor.Patients` has `!item.Downed` in it |
 | [[read-every-return-or-lose-a-colonist]] | Critical | observed-at-bench | any back-to-back short advances — a narrowed read is a blind loop |
 | [[seek-off-is-a-decision-to-flee]] | Critical | verified-in-source | choosing a combat posture — `hostility_response` is decided ABOVE seek, so `Flee` beats it |
+| [[stockpile-scope-hides-your-own-supplies]] | Critical | observed-at-bench | any `resources.*` reading 0 — it is stockpiles-only, and three different problems all look like this |
+| [[batching-turns-costs-you-the-trader]] | Important | observed-at-bench | driving several advances unattended — a batch must break on opportunities, not just threats |
 | [[materials-are-a-standing-loop]] | Important | evan-stated | any input trending to zero — designate, don't retry the bill |
 | [[benches-go-indoors]] | Important | evan-stated | siting any bench — enclosure plus the right room |
 | [[growing-zone-default-is-potato]] | Important | verified-in-source | creating/reading growing zones — one raw read commits potato forever |
