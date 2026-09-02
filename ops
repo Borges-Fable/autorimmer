@@ -1,1 +1,1 @@
-{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":3,"timestamp":1788351206,"nonce":"Ew7bYTdJYOTt1TozlOnvHxv3J3g=","message":"CLOSING. Session-21 ledger. All four gate items merged and built; RUNLOG written at `1cfc376`; superseded by the M1 run `m1-20260901` and the repair round.","files":null}]}
+{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":4,"timestamp":1788351210,"nonce":"wZDVqBxIwEn2YWUN8Ef6XfCe6YE=","status":2}]}
