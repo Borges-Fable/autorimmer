@@ -831,14 +831,33 @@ namespace AutoRimmer
         // two are the same number for every designator except mine-vein, and a
         // consumer that cannot tell them apart cannot tell a flood-fill from a
         // straight drag.
+        //
+        // A DRY RUN HAS NO DELTA, and taking one anyway would be the bug: the
+        // designator wrote nothing, so after == before, so the landed set is
+        // EMPTY and every rollup built on it reports zero for a call that
+        // accepted forty targets. `dry_run` is how the playbook tells an agent
+        // to re-check standing orders after an area change; a `reach` and a
+        // `composition` computed over nothing would make that advice useless.
+        // So a dry run reports the ACCEPTED set — what would land — and says so
+        // in `Source`, including the one way it under-reports.
         public static Landed LandedOf(Map map, DesignationDef def, Targets targets,
-            List<IntVec3> acceptedCells, List<Thing> acceptedThings, HashSet<IntVec3> before)
+            List<IntVec3> acceptedCells, List<Thing> acceptedThings, HashSet<IntVec3> before,
+            bool dryRun)
         {
             var l = new Landed { IsThings = targets.IsThings };
             if (targets.IsThings)
             {
                 l.Things.AddRange(acceptedThings);
-                l.Source = "accepted things";
+                l.Source = dryRun ? "accepted things (dry run: what WOULD be designated)"
+                    : "accepted things";
+                return l;
+            }
+            if (dryRun)
+            {
+                l.Cells.AddRange(acceptedCells);
+                l.Source = "accepted cells (dry run: what WOULD be designated — a "
+                    + "flood-filling designator such as mine-vein would add more, and "
+                    + "nothing here can know how many without writing)";
                 return l;
             }
             var after = before == null ? null : CellSnapshot(map, def);

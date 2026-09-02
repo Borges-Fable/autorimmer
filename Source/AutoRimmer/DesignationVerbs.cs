@@ -365,7 +365,7 @@ namespace AutoRimmer
             // nothing on the map, so it keeps the preflight's score, which was
             // taken over exactly the set it would have created.
             var landed = DesignateEngine.LandedOf(map, entry.Def, targets,
-                acceptedCells, acceptedThings, beforeCells);
+                acceptedCells, acceptedThings, beforeCells, dryRun);
             if (reach.Applies && !dryRun)
             {
                 reach = DesignateReach.Roster(map, entry.Giver);
