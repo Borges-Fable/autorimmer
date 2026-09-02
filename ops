@@ -1,1 +1,1 @@
-{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":3,"timestamp":1788351205,"nonce":"dfi4WSD3gpjXtmU3c3DiP0/pHrk=","message":"CLOSING. `accept/722c951-advance-halt.py` 96 PASS / 0 FAIL / 0 SKIP (`accept/runs/s21-20260901/suites/722c951-rerun.log`). The one spec ambiguity was ruled at `4c17009` with the mod correct as shipped.","files":null}]}
+{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":4,"timestamp":1788351209,"nonce":"ohaPIABjPr5WjnFlQ+f9czhdJqM=","status":2}]}
