@@ -509,7 +509,12 @@ def phase0():
                  dig(e, "ok") is True and dig(e, "data.gameLoaded") is True,
                  "start _RimWorld-Agent with a save loaded, paused.")
 
-    v = send("verbs")
+    # `verbs` is a CLIENT word, not an op: `rwa verbs` sends `status` and reads
+    # `data.verbs` off it. Sending op "verbs" to the mod returns ok with an
+    # EMPTY data block, so digging `data.verbs` off it finds nothing and this
+    # precondition skipped the whole suite against a bench that had `alert-mute`
+    # registered all along (session 21).
+    v = send("status")
     verbs = as_list(dig(v, "data.verbs"))
     precondition("0.b", "`alert-mute` is registered",
                  ARGS.dry_run or "alert-mute" in verbs,

@@ -166,3 +166,49 @@ PHASE 3 — the refusals, and the one that is deliberately NOT a refusal
   3.17    FAIL    …with an advisory that says it is not a refusal and why (data.advisories.0.advisory)
           expected: a string containing 'minTargetTemperature'
           actual:   "UNPOWERED \u2014 Building_Cooler.TickRare and Building_Heater.TickRare both return immediately when compPowerTrader.PowerOn is false, so the target is stored and nothing acts on it. Check digest.power."
+  3.18    PASS    `target` is refused as a near-miss for `target_c`
+
+==============================================================================
+PHASE 4 — `digest.temperature` shows an out-of-range room
+==============================================================================
+  4.b     OK      precondition: the controller serves a real indoor room
+  4.c     OK      precondition: the controller is a heater or a cooler
+  4.0     NOTE    room 42 is at 4.5 C; driving a heater to 204 C
+  4.1     PASS    the extreme target is accepted (ok)
+  4.2     PASS    `digest.temperature.ok` goes FALSE (data.temperature.ok)
+  4.3     PASS    …with at least one out-of-range room (data.temperature.out_of_range_rooms)
+  4.4     PASS    …and the headline NAMES the room id
+  4.5     PASS    the room has a row at all
+  4.6     PASS    `digest.temperature room` publishes data.row.room_id
+  4.7     PASS    `digest.temperature room` publishes data.row.at
+  4.8     PASS    `digest.temperature room` publishes data.row.cells
+  4.9     PASS    `digest.temperature room` publishes data.row.temp_c
+  4.10    PASS    `digest.temperature room` publishes data.row.uses_outdoor_temp
+  4.11    PASS    `digest.temperature room` publishes data.row.controllers
+  4.12    PASS    `digest.temperature room` publishes data.row.controllers_total
+  4.13    PASS    `digest.temperature room` publishes data.row.out_of_range
+  4.14    PASS    `digest.temperature room` publishes data.row.target_c
+  4.15    PASS    `digest.temperature room` publishes data.row.drift_c
+  4.16    PASS    the row is marked out of range (data.row.out_of_range)
+  4.17    PASS    …carrying the target we set (data.row.target_c)
+  4.18    PASS    …and a drift equal to temp - target
+  4.19    PASS    …and the controller line inside it names the same id
+  4.20    PASS    …marked out of range too (c.out_of_range)
+  4.21    PASS    `controller line` publishes c.operating_at_high_power
+  4.22    PASS    `controller line` publishes c.powered
+  4.23    PASS    `controller line` publishes c.effective
+  4.24    PASS    `temperature` is addressable as a predicate section
+  4.25    PASS    …and the predicate is TRUE at arm time, as the digest says (data.until.true_when_armed)
+  4.26    FAIL    putting the target back clears the room from out_of_range
+          expected: 42 absent from out_of_range
+          actual:   [42]
+
+==============================================================================
+PHASE 5 — THE ROT HALF: food that is visibly deteriorating
+==============================================================================
+  x.a     OK      precondition: one enclosed, roofed, non-outdoor room of >= 4 cells
+  5.a     OK      precondition: some rottable human-edible food on the map
+  5.b     SKIP    precondition NOT MET: at least one rottable food stack
+          food_rot.rottable_stacks is 0. Spawn 20 x MealSimple, or put meals on the map.
+          This is a FIXTURE gap, not a failure of the spec.
+EXIT=2

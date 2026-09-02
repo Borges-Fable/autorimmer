@@ -1,0 +1,219 @@
+280fb78 wake-halts acceptance — root /home/dorian/projects/rimworld/_RimWorld-Agent/config/unity3d/Ludeon Studios/RimWorld by Ludeon Studios/AutoRimmer
+
+==============================================================================
+PHASE 0 — the shapes every later phase digs into
+==============================================================================
+  0.a     OK      precondition: the bench is up and a colony is loaded
+  0.b     OK      precondition: `alert-mute` is registered
+  0.1     PASS    `digest {sections:['alerts']}` answers (ok)
+  0.2     PASS    `digest` publishes data.alerts.active
+  0.3     PASS    `digest` publishes data.alerts.muted
+  0.4     PASS    `digest` publishes data.alerts.muted_count
+  0.5     PASS    `digest` publishes data.alerts.muted_live
+  0.6     PASS    nothing is muted at the start of the run (data.alerts.muted_count)
+  0.7     PASS    `digest` publishes data.alerts.active.0.muted
+  0.8     PASS    …and it is false while nothing is muted (data.alerts.active.0.muted)
+  0.9     PASS    `alert-mute {}` answers (ok)
+  0.10    PASS    `alert-mute` publishes data.muted
+  0.11    PASS    `alert-mute` publishes data.mutes_held
+  0.12    PASS    `alert-mute` publishes data.candidates
+  0.13    PASS    `alert-mute` publishes data.live_alerts
+  0.14    PASS    `alert-mute` publishes data.action
+  0.15    PASS    `alert-mute` publishes data.note
+  0.16    PASS    a pure listing mutates nothing, so no journal line is owed (data.action.journal_seq)
+  0.17    PASS    …and says so rather than looking like a failed write (data.action.provenance)
+  0.c     OK      precondition: `journal-selftest --steps alert-at` is available
+  0.18    PASS    `journal-selftest` publishes data.alert_at.fires_at_tick
+  0.19    PASS    `journal-selftest` publishes data.alert_at.id
+  0.20    PASS    `journal-selftest` publishes data.alert_at.priority
+  0.21    PASS    the default fixture alert is the non-critical one (data.alert_at.id)
+  0.d     OK      precondition: `journal-selftest --steps letter --letter_def` is available
+  0.22    PASS    the fixture sends the def it was asked for (data.letter.def)
+  0.23    PASS    `journal-selftest` publishes data.letter.arrives_at_tick
+  0.24    PASS    a short bounded advance runs (ok)
+  0.25    PASS    an advance that did not escape the wake publishes no `through_news`
+  0.26    PASS    …and no `news_rode_past` block
+  0.27    PASS    …and no `muted_alerts` block while nothing is muted
+  0.28    NOTE    baseline advance: reason=ticks ticks=79
+
+==============================================================================
+PHASE 1 — a letter of ANY def wakes an advance that never asked
+==============================================================================
+  1.1.a   OK      precondition: a NeutralEvent letter can be armed
+  1.1.1   PASS    an advance that asked for NOTHING halts on a NeutralEvent letter
+  1.1.2   PASS    …the reason is `letter` (data.reason)
+  1.1.3   PASS    …the halt NAMES the letter's def (data.halted_on.def)
+  1.1.4   PASS    `advance` publishes data.halted_on.label
+  1.1.5   PASS    …identifying itself as a letter halt (data.halted_on.kind)
+  1.1.6   PASS    …AND that nobody asked for it — the whole issue (data.halted_on.armed_by)
+  1.1.7   PASS    `advance` publishes data.halted_seq
+  1.1.8   PASS    `advance` publishes data.halted_on.tick
+  1.1.9   PASS    …and the detail says what to do next (data.halted_on.detail)
+  1.1.10  PASS    …and it stopped EARLY, short of its own bound (data.ticks_elapsed)
+  1.1.11  PASS    …with the game paused, as every advance must (data.paused_on_exit)
+  1.2.a   OK      precondition: a PositiveEvent letter can be armed
+  1.2.1   PASS    an advance that asked for NOTHING halts on a PositiveEvent letter
+  1.2.2   PASS    …the reason is `letter` (data.reason)
+  1.2.3   PASS    …the halt NAMES the letter's def (data.halted_on.def)
+  1.2.4   PASS    `advance` publishes data.halted_on.label
+  1.2.5   PASS    …identifying itself as a letter halt (data.halted_on.kind)
+  1.2.6   PASS    …AND that nobody asked for it — the whole issue (data.halted_on.armed_by)
+  1.2.7   PASS    `advance` publishes data.halted_seq
+  1.2.8   PASS    `advance` publishes data.halted_on.tick
+  1.2.9   PASS    …and the detail says what to do next (data.halted_on.detail)
+  1.2.10  PASS    …and it stopped EARLY, short of its own bound (data.ticks_elapsed)
+  1.2.11  PASS    …with the game paused, as every advance must (data.paused_on_exit)
+  1.99    NOTE    PositiveEvent is not decoration: it is the case a severity filter would have slept through, and Evan's ruling is that an inspiration you never woke for is a run that never played
+
+==============================================================================
+PHASE 2 — an `alert_on` transition wakes an advance that never asked
+==============================================================================
+  2.a     OK      precondition: the fixture alert can be armed
+  2.b     NOTE    armed Alert_AutoRimmerFixture at tick 4779 (scanner cadence 30 frames)
+  2.1     PASS    an advance that asked for NOTHING halts on an alert going ON
+  2.2     PASS    …the reason is `alert` (data.reason)
+  2.3     PASS    …the halt NAMES the alert (data.halted_on.id)
+  2.4     PASS    …AND its priority — the acceptance bullet, verbatim (data.halted_on.priority)
+  2.5     PASS    `advance` publishes data.halted_on.label
+  2.6     PASS    …identifying itself as an alert halt (data.halted_on.kind)
+  2.7     PASS    …and that nobody asked for it (data.halted_on.armed_by)
+  2.8     PASS    `advance` publishes data.halted_seq
+  2.9     PASS    …and it stopped EARLY, short of its own bound (data.ticks_elapsed)
+  2.10    PASS    …and the detail points at the mute, which is the answer to a chronic alert (data.halted_on.detail)
+  2.11    PASS    a CRITICAL fixture alert wakes the same way
+  2.12    PASS    …and its priority is the alert's own, not a constant (data.halted_on.priority)
+
+==============================================================================
+PHASE 3 — THE COLLISION: `until:{letter}` and `until:{threat}` still work as explicit WAITS
+==============================================================================
+The wake and the matchers fire on the SAME journal row. The caller's
+name has to win, or an advance armed `until:{threat}` comes back
+`reason:"letter"` and every consumer branching on that token breaks
+SILENTLY — it stopped at the same tick on the same event.
+  3.1a    PASS    `until:{letter:true}` still halts on a letter (data.reason)
+  3.1b    PASS    …and says the CALLER armed it, not the wake (data.halted_on.armed_by)
+  3.1c    PASS    …still identifying itself as a letter halt (data.halted_on.kind)
+  3.1d    PASS    `advance` publishes data.halted_on.def
+  3.2a    PASS    a ThreatBig letter under `until:{threat}` reports `threat` (data.reason)
+  3.2b    PASS    …and NOT `letter` — the collision, resolved in the caller's favour (data.reason)
+  3.2c    PASS    …armed by the caller (data.halted_on.armed_by)
+  3.2d    PASS    …and the payload still carries the def (data.halted_on.def)
+  3.3a    PASS    an advance waiting for a ThreatBig letter is still WOKEN by a PositiveEvent one (data.reason)
+  3.3b    PASS    …and says the wake armed it, not the caller (data.halted_on.armed_by)
+  3.3c    PASS    …naming the letter that actually arrived (data.halted_on.def)
+  3.4a    PASS    two matchers in one `until` are still refused — the restriction that made this case unreachable
+  3.b     OK      precondition: the digest publishes time.tick
+  3.4b    PASS    a letter WAKES an advance that is armed on a `condition` — the case CheckUntilKeys makes unspellable, and the whole reason the wake had to become unconditional (data.reason)
+  3.4c    PASS    …armed by the wake, not by the caller (data.halted_on.armed_by)
+  3.4d    PASS    …naming the letter (data.halted_on.def)
+  3.4e    PASS    …and it stopped short of the timeout it would otherwise have run to (data.ticks_elapsed)
+  3.4f    PASS    `advance` publishes data.until
+  3.4g    NOTE    the predicate's own report still rides on the envelope (`data.until`) even though something else stopped the advance — 1.6 publishes it on EVERY exit, which is what makes a wake mid-predicate diagnosable rather than mysterious
+  3.5a    PASS    `until:{alert:'X'}` halts even though X is MUTED (data.reason)
+  3.5b    PASS    …naming X (data.halted_on.id)
+  3.5c    PASS    …armed by the caller (data.halted_on.armed_by)
+
+==============================================================================
+PHASE 4 — `alert-mute`: a recorded ACT, visible in the digest, proven BOTH ways
+==============================================================================
+  4.1a    PASS    muting with NO reason is refused
+  4.1b    PASS    …and the refusal says WHY a reason is required (error.detail)
+  4.1c    PASS    …a whitespace reason too, so it cannot degrade into a bare boolean
+  4.1d    PASS    an empty id list is refused
+  4.1e    PASS    an unknown alert id is REFUSED per-row rather than stored (data.refused.0.id)
+  4.1f    PASS    …and nothing was muted by it (data.mutes_held)
+  4.1g    PASS    …with a message that says what an id IS (data.refused.0.reason)
+  4.1h    PASS    `alert-mute` publishes data.refused.0.did_you_mean
+  4.1i    NOTE    near misses for 'Alert_NeedWarm': ["Alert_NeedWarmClothes"]
+  4.2a    PASS    the mute takes (ok)
+  4.2b    PASS    …one alert muted (data.mutes_held)
+  4.2c    PASS    …named (data.muted.0.id)
+  4.2d    PASS    …with the reason it was given (data.muted.0.reason)
+  4.2e    PASS    `alert-mute` publishes data.action.journal_seq
+  4.2f    PASS    …a real journal seq, so the act has provenance (data.action.journal_seq)
+  4.2g    PASS    `alert-mute` publishes data.applied.0.already_on
+  4.2h    PASS    the journal carries the `action` row for the mute
+  4.2i    PASS    …carrying the reason, which is what a post-mortem reads (payload.reason)
+  4.2j    PASS    …and the step (payload.step)
+  4.3a    PASS    `digest.alerts.muted_count` counts the standing decision (data.alerts.muted_count)
+  4.3b    PASS    …and the list names it (data.alerts.muted.0.id)
+  4.3c    PASS    …with its reason, so day-8 can read the day-2 decision (data.alerts.muted.0.reason)
+  4.3d    PASS    `digest` publishes data.alerts.muted.0.live
+  4.3e    NOTE    this is the whole argument for the field: b1b3060 shipped digest.posture because a standing decision the agent cannot see is one it forgets it made
+  4.4a    PASS    an advance spanning a MUTED alert runs to its bound (data.reason)
+  4.4b    PASS    …the full bound, not a wake dressed as one (data.ticks_elapsed)
+  4.4c    PASS    `advance` publishes data.muted_alerts
+  4.4d    PASS    …reporting how many wakes the mute swallowed (data.muted_alerts.count)
+  4.4e    PASS    …and naming them, so the mute is visible DOING its work (data.muted_alerts.events.0.id)
+  4.4f    PASS    …and this is not an escape: no `through_news` was passed
+  4.4g    PASS    the live alert row carries `muted:true` beside the alert it modifies
+  4.4h    PASS    …and `muted_live` counts it (data.alerts.muted_live)
+  4.5a    PASS    the release takes (ok)
+  4.5b    PASS    …nothing muted any more (data.mutes_held)
+  4.5c    PASS    `alert-mute` publishes data.action.journal_seq
+  4.5d    PASS    …and the digest agrees (data.alerts.muted_count)
+  4.5e    PASS    the SAME alert now wakes the run again — the mute proven in both directions on one fixture
+  4.5f    PASS    …and no `muted_alerts` block, because nothing is muted
+  4.6a    PASS    `release_all` clears the set (data.mutes_held)
+  4.6b    PASS    `alert-mute` publishes data.action.journal_seq
+  4.6c    PASS    …and a SECOND release_all writes no journal row, because nothing was mutated (data.action.journal_seq)
+  4.99    NOTE    if this phase crashed part-way, clear the mute with `alert-mute {release_all:true}` and the fixture alerts with `journal-selftest {steps:['alerts-clear']}`
+
+==============================================================================
+PHASE 5 — `through_news`: the per-call escape, with its reason
+==============================================================================
+  5.1a    PASS    an EMPTY through_news reason is refused
+  5.1b    PASS    …and the refusal cites the ruling it enforces (error.detail)
+  5.1c    PASS    …and a bare boolean is refused, which is the whole point of a reason STRING
+  5.2a    PASS    an advance with `through_news` runs past the letter to its bound (data.reason)
+  5.2b    PASS    …the full bound (data.ticks_elapsed)
+  5.2c    PASS    …the reason is echoed on the envelope, so a transcript-only audit sees the guard rails were off (data.through_news)
+  5.2d    PASS    `advance` publishes data.news_rode_past
+  5.2e    PASS    …and it says HOW MANY wakes it rode past — an escape that hides the number it bypassed is a silent bypass with a quote mark on it (data.news_rode_past.count)
+  5.2f    PASS    `advance` publishes data.news_rode_past.events
+  5.2g    PASS    `advance` publishes data.news_rode_past.events.0.kind
+  5.3a    PASS    the escape is journaled as an `action` row
+  5.3b    PASS    …carrying the reason verbatim (payload.through_news)
+  5.4a    PASS    `through_news` does NOT defeat an explicit `until:{letter}` (data.reason)
+  5.4b    PASS    …and the halt is still marked as the caller's (data.halted_on.armed_by)
+  5.4c    PASS    …with the escape still echoed, because it was still passed (data.through_news)
+
+==============================================================================
+PHASE 6 — A DAY-LONG ADVANCE, and the halts do not fire SPURIOUSLY
+==============================================================================
+The bullet a suite skips. An unconditional halt that fires on nothing
+is a wedge, and 'it did not halt' is unprovable on a live colony — so
+'not spurious' is given a testable meaning: EVERY halt must name a
+journal row that EXISTS, of the matching type, at the seq it
+published. A halt with nothing behind it is the failure.
+
+Budget: 60000 ticks (1.00 in-game days). Use --day-ticks to shorten.
+  6.1     NOTE    segment 1: alert after 34602 ticks — Alert_StarvationColonists (seq 87, journal row OK)
+  6.2     NOTE    segment 2: alert after 14716 ticks — Alert_ColonistsIdle (seq 90, journal row OK)
+  6.1     PASS    NO halt fired without a journal row behind it — the anti-spurious test
+  6.2     PASS    the advance made real progress across the day
+  6.4     NOTE    3 segments, 60012/60000 ticks ran, halts: alert 2, ticks 1
+  6.6     PASS    with the wake escaped, a day-long advance COMPLETES on its bound (data.reason)
+  6.7     PASS    …having actually run the ticks (data.ticks_elapsed)
+  6.8     NOTE    wakes ridden past in that day: 4
+  6.9     NOTE    THE NUMBER NOBODY HAD: 4 wakes in 60016 ticks of this colony's day. The issue's own measurement was 3 letters + 6 alert_on in 13,667 ticks on a bench being actively wrecked by a suite.
+
+==============================================================================
+PHASE 7 — four halts, four distinct tokens (what accept/4.2-play-loop.py keys on)
+==============================================================================
+`advance_discipline` tallies `halt:<reason>` per advance and routes on
+it. That is only a discriminator if the tokens really are distinct on
+a live bench, which is measured here rather than assumed.
+  7.1     PASS    a bound comes back as reason 'ticks'
+  7.2     PASS    a letter comes back as reason 'letter'
+  7.3     PASS    a alert comes back as reason 'alert'
+  7.4     PASS    a casualty comes back as reason 'casualty'
+  7.5     PASS    …and all four tokens are DISTINCT, which is what makes the 4.2 tally a discriminator rather than a count
+  7.6     NOTE    observed: {"bound": "ticks", "letter": "letter", "alert": "alert", "casualty": "casualty"}
+
+==============================================================================
+RESULT
+==============================================================================
+all 144 checks passed
+NOTHING HERE HAS MET A BENCH UNTIL THE ORCHESTRATOR RUNS IT.
+EXIT=0
