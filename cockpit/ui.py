@@ -76,7 +76,7 @@ class Cockpit(App):
     def __init__(self, run, journal, follow=False, at=None, specs=None,
                  root=None, source="", repo=None, run_dir=None, page=0):
         super().__init__()
-        self.run, self.journal, self.follow = run, journal, follow
+        self.trun, self.journal, self.follow = run, journal, follow
         self.specs, self.root, self.source = specs or [], root, source
         self.i = max(0, min(len(run.steps) - 1,
                             at if at is not None else (len(run.steps) - 1 if follow else 0)))
@@ -132,10 +132,10 @@ class Cockpit(App):
         self._goto(self.i + delta, drop_follow=True)
 
     def action_day(self, delta):
-        self._goto(self.run.jump_day(self.i, delta), drop_follow=True)
+        self._goto(self.trun.jump_day(self.i, delta), drop_follow=True)
 
     def action_tail(self):
-        self._goto(len(self.run.steps) - 1)
+        self._goto(len(self.trun.steps) - 1)
 
     def action_cursor(self, delta):
         if self._nsec:
@@ -163,7 +163,7 @@ class Cockpit(App):
         self.follow = not self.follow
         if self.follow:
             self._poll()
-            self._goto(len(self.run.steps) - 1)
+            self._goto(len(self.trun.steps) - 1)
         else:
             self.status = "follow off"
             self.render_all()
@@ -178,30 +178,30 @@ class Cockpit(App):
             self.exit()
 
     def _goto(self, i, drop_follow=False):
-        i = max(0, min(len(self.run.steps) - 1, i))
-        if drop_follow and self.follow and i != len(self.run.steps) - 1:
+        i = max(0, min(len(self.trun.steps) - 1, i))
+        if drop_follow and self.follow and i != len(self.trun.steps) - 1:
             # Scrubbing away from the tail IS turning follow off; leaving it on
             # would yank the view back on the next poll.
             self.follow, self.status = False, "follow off — scrubbed"
         if i != self.i:
-            self.run.steps[self.i].forget()
+            self.trun.steps[self.i].forget()
         self.i, self.cursor = i, 0
         self.render_all()
 
     def _poll(self):
-        added = self.run.refresh(self.root, self.specs)
+        added = self.trun.refresh(self.root, self.specs)
         if self.journal:
             self.journal.tail()
         if added:
             self.status = f"+{added} step{'s' if added > 1 else ''}"
         if self.follow:
-            self.i = len(self.run.steps) - 1
+            self.i = len(self.trun.steps) - 1
         self.render_all()
 
     # ----------------------------------------------------------- renderers
     def _sections(self):
-        s = self.run.steps[self.i]
-        return F.sections(s, self.run.prev_of_op(self.i, s.op))
+        s = self.trun.steps[self.i]
+        return F.sections(s, self.trun.prev_of_op(self.i, s.op))
 
     def render_all(self):
         # The 500ms follow timer can fire once after the screen is gone (or
@@ -232,7 +232,7 @@ class Cockpit(App):
         what stays dark at the end is the answer to whether the tools make
         sense.
         """
-        so_far = S.usage(self.run.steps, self.i)
+        so_far = S.usage(self.trun.steps, self.i)
         names = sorted(self.verbs) or sorted(self.total_use)
         pane = self.query_one("#map", Static)
         # Before the first layout a pane reports 0; the screen width is the
@@ -276,7 +276,7 @@ class Cockpit(App):
             if len(files) > 6:
                 t.append(f"    +{len(files) - 6} more\n", style=DIM)
 
-        tick = self.run.steps[self.i].tick
+        tick = self.trun.steps[self.i].tick
         seen = [e for e in self.checklist
                 if tick is None or (e.get("tick") or 0) <= tick]
         t.append("\n  checklist      ", style=DIM)
@@ -291,14 +291,14 @@ class Cockpit(App):
         self.query_one("#sidebody", Static).update(t)
 
     def render_head(self):
-        s = self.run.steps[self.i]
+        s = self.trun.steps[self.i]
         left = Text("autorimmer ", style=DIM)
-        left.append(self.run.segments[0].name if self.run.segments else "?", style=BRIGHT)
+        left.append(self.trun.segments[0].name if self.trun.segments else "?", style=BRIGHT)
         right = Text("step ", style=DIM)
         right.append(f"{self.i + 1:,}", style=BRIGHT)
-        right.append(f" of {len(self.run.steps):,}", style=DIM)
+        right.append(f" of {len(self.trun.steps):,}", style=DIM)
 
-        day = self.run.day_of(self.i)
+        day = self.trun.day_of(self.i)
         l2 = Text("day " + (str(day) if day is not None else "?"), style=FG)
         cal = self._calendar()
         if cal:
@@ -322,7 +322,7 @@ class Cockpit(App):
         and longitude — so it is shown when a digest has said it, and not
         otherwise."""
         for j in range(self.i, max(-1, self.i - 400), -1):
-            st = self.run.steps[j]
+            st = self.trun.steps[j]
             if st.op != "digest" or not st.has_result:
                 continue
             tm = ((st.result or {}).get("data") or {}).get("time") or {}
@@ -332,7 +332,7 @@ class Cockpit(App):
         return ""
 
     def render_map(self):
-        j, ms = self.run.last_map_at_or_before(self.i)
+        j, ms = self.trun.last_map_at_or_before(self.i)
         pane, cap = self.query_one("#map", Static), self.query_one("#legend", Static)
         if ms is None:
             pane.update(Text("no map-view in this run yet", style=DIM))
@@ -380,14 +380,14 @@ class Cockpit(App):
         return t
 
     def render_side(self):
-        s = self.run.steps[self.i]
+        s = self.trun.steps[self.i]
         secs = self._sections()
         self._nsec = len(secs)
         self.cursor = min(self.cursor, self._nsec - 1) if self._nsec else 0
         self.query_one("#side").border_title = s.key.split("/")[-1]
 
         t, line = Text(), 0
-        for r in F.head_rows(s, self.run, self.i):
+        for r in F.head_rows(s, self.trun, self.i):
             t.append("  ")
             t.append(f"{r.label:<8}", style=DIM)
             t.append(str(r.value) + "\n", style=WARN if r.warn else BRIGHT)
@@ -417,7 +417,7 @@ class Cockpit(App):
     def _journal_lines(self):
         if not self.journal:
             return [Text("  no journal file found\n", style=DIM)]
-        events = self.journal.between(*self.run.journal_window(self.i))
+        events = self.journal.between(*self.trun.journal_window(self.i))
         if not events:
             return [Text("  nothing\n", style=DIM)]
         out = []
