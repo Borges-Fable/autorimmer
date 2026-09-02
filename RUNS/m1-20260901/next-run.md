@@ -42,11 +42,18 @@ the number, nothing turns it into a decision.
    destroyed, is a structural regression and nothing reports it. *Wanted: a
    triggered item on `construction` `destroyed` rows and on a room's `role`
    changing away from what it was.*
-3. **A room that should be enclosed and is not.** `room-at` on the freezer reads
-   `outdoors: true, cells: 60082`. A layout placed as a *room* that is still part
-   of the great outdoors N days later is a defect the agent cannot see without
-   asking cell by cell. *Wanted: `construction --layout_id` to report enclosure,
-   or `rooms` to list intended-but-unenclosed layouts.*
+3. **A room that should be enclosed and is not — and this has TWO mechanisms,
+   not one.** My diagnosis of the freezer named only the first; the repair-round
+   orchestrator found the second against the decompiled source (DESIGN `8c8680a`):
+   - `Room.ProperRoom` is false whenever the space leaks to the map edge. That is
+     the `outdoors: true, cells: 60082` this run measured — a wall with a hole.
+   - `Room.UsesOutdoorTemperature` goes true at
+     `OpenRoofCount >= CellCount * 0.25` **while `ProperRoom` is still true**. A
+     sealed room missing a quarter of its roof sits on the outdoor temperature.
+   **Same dead colony, different mechanism — and a check reporting only
+   `ProperRoom` would pass it.** Whatever ships must report both. *Wanted:
+   `construction --layout_id` to report enclosure AND roof coverage, or `rooms`
+   to list intended-but-unenclosed layouts with both flags.*
 4. **Crafted-but-uninstalled items.** Five sculptures sat **minified** in the
    stockpile all run giving zero beauty, while every colonist carried
    `Unsightly environment −5` and `Awful barracks −7`. *Wanted: a trip-wire on
