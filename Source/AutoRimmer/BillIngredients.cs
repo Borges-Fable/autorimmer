@@ -264,9 +264,7 @@ namespace AutoRimmer
         private static string Remedy(Dictionary<string, object> match)
         {
             string top = null;
-            if (match != null && match.TryGetValue("rejected", out var r)
-                && r is Dictionary<string, object> reasons)
-                foreach (var kv in reasons) { top = kv.Key; break; }   // already count-sorted
+            if (match != null && match.TryGetValue("rejected_top", out var r)) top = r as string;
             if (top == null)
                 return "nothing on the map is even a candidate for this recipe's ingredients — "
                     + "produce or haul some in. `things {def:…}` says what exists.";
@@ -383,7 +381,15 @@ namespace AutoRimmer
             d["usable_sample"] = usableSample;
             d["rejected_sample"] = rejectSample;
             d["truncated"] = truncated;
-            d["rejected"] = TopReasons(reasons);
+            d["rejected"] = TopReasons(reasons, out string top);
+            // THE TOP REASON AS ITS OWN FIELD, and not because it is
+            // convenient. `Remedy` used to read it by taking the first entry of
+            // the `rejected` dictionary, which is insertion-ordered only by
+            // implementation accident — `Dictionary<K,V>` guarantees no order
+            // at all, and a rehash would have silently changed which verb the
+            // agent was told to run. The order is decided once, here, and the
+            // decision is published.
+            d["rejected_top"] = top;
             d["defs_in_universe"] = defs.Count;
             d["search_radius"] = radius >= 999f ? (object)"unlimited" : WorldSafe.R(radius, 0);
             d["note"] = "WorkGiver_DoBill's own ingredient predicate, clause by clause "
@@ -558,7 +564,8 @@ namespace AutoRimmer
 
         // Deterministic order: count descending, then name — rwtest asserts on
         // the list rather than on a set.
-        private static Dictionary<string, object> TopReasons(Dictionary<string, int> reasons)
+        private static Dictionary<string, object> TopReasons(Dictionary<string, int> reasons,
+            out string top)
         {
             var keys = new List<string>(reasons.Keys);
             keys.Sort((a, b) =>
@@ -566,6 +573,7 @@ namespace AutoRimmer
                 int c = reasons[b].CompareTo(reasons[a]);
                 return c != 0 ? c : string.CompareOrdinal(a, b);
             });
+            top = keys.Count > 0 ? keys[0] : null;
             var d = new Dictionary<string, object>();
             for (int i = 0; i < keys.Count && i < ReasonCap; i++) d[keys[i]] = reasons[keys[i]];
             return d;
