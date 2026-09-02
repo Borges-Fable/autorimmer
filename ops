@@ -1,1 +1,1 @@
-{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":5,"timestamp":1788350836,"nonce":"LT56EUFxpb6kUAHuZb8lLZlN0NA=","added":["state:doing"],"removed":null}]}
+{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":3,"timestamp":1788350836,"nonce":"oDG34yJDMrkzNk+Px0BelzHpq68=","message":"dispatched with eef837a to one worker on branch fix/eef837a-bill-filter — same file, same subsystem, and this issue is eef837a acceptance item 4 stated generally.","files":null}]}
