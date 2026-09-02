@@ -1,1 +1,1 @@
-{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":3,"timestamp":1788351205,"nonce":"K5hNykACvrzMBRttOQVZMrldvfE=","message":"CLOSING. `accept/280fb78-wake-halts.py` 144 PASS / 0 FAIL on a bench (`accept/runs/s21-20260901/sweep/280fb78.log`, `82aa72f`). Merged `3158c5a`, built `eceb6e2`.","files":null}]}
+{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":4,"timestamp":1788351209,"nonce":"8z6irodkFxaMV43pkSboMOOEJMU=","status":2}]}
