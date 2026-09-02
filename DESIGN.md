@@ -3103,3 +3103,44 @@ queue by default (an agent flailing mid-experiment must not page triage).
   one that supplies the numbers; the contract requires every `unread_ok`,
   `through_casualties`, `through_news` and `alert-mute` to appear in the
   summary with its reason, which is the measurement the wall waits for.
+
+- 2026-09-02 (repair round) — **`Room.Owners` yields NOTHING for a barracks
+  with more than one owned bed, by vanilla's own design, so `daa269a`'s
+  `owners_total: 0` is the game's semantics and not a swallowed exception.**
+  `Verse/Room.cs` `Owners`, read by member name:
+
+  ```csharp
+  if (TouchesMapEdge || IsHuge || (Role != Bedroom && Role != PrisonCell
+      && Role != Barracks && Role != PrisonBarracks)) yield break;
+  var beds = ContainedBeds.Where(x => x.def.building.bed_humanlike);
+  if (beds.Count() > 1 && (Role == Barracks || Role == PrisonBarracks)
+      && beds.Where(b => b.OwnersForReading.Any()).Count() > 1) yield break;
+  ```
+
+  Room 38 of run `m1-20260901` is a Barracks with three humanlike beds, three
+  of them owned, so it takes the second `yield break` exactly. The issue
+  offered two candidates — "Owners may deliberately yield nothing for a
+  Barracks" and "the enumeration is throwing into the bare `catch {}`". The
+  first is right in substance and wrong in detail, and the detail decides the
+  fix: the gate is not the Barracks role, it is **more than one owned bed**.
+  A barracks with exactly ONE owned bed yields that owner normally, which is
+  why this never showed up before a three-colonist room.
+
+  Consequences, all of which bind the fix:
+
+  1. The room-level rollup must be derived from `ContainedBeds` /
+     `OwnersForReading` — the same route the `beds[]` block at
+     `PlaceVerbs.cs:173-192` already uses and gets right. `room.Owners` is the
+     wrong source for the question "who lives here" and cannot be repaired by
+     catching harder.
+  2. `TouchesMapEdge` and `IsHuge` are two further silent-empty conditions
+     nobody had accounted for. A map-edge-touching barracks reports no owners
+     for a third distinct reason.
+  3. The bare `catch {}` around the enumeration is a real latent hazard and is
+     NOT the cause here. It stays worth replacing with one that records that it
+     fired, per the issue's acceptance item 2, but fixing it alone would have
+     changed nothing and would have looked like a fix.
+  4. Vanilla's `Owners` is still the right source for the single-owner
+     *bedroom* question. It is not wrong; it answers "whose room is this",
+     while the mod was asking "who sleeps in here". Two different questions
+     that agree on every room with fewer than two owned beds.
