@@ -36,6 +36,13 @@ namespace AutoRimmer
         public const int PolicyCap = 12;
         public const int DrugEntryCap = 12;
         public const int AssignmentCap = 40;
+        // Things examined across ONE `bills` call, shared by every bill on
+        // every bench. A butchery bill's universe is the whole Corpses
+        // category and a cooking bill's the raw-food tree, so the per-bill
+        // work is bounded by what is actually SPAWNED, not by the def count;
+        // 2,000 is comfortably above a normal map's stock of either and the
+        // block reports `truncated` when it bites.
+        public const int IngredientScanBudget = 2000;
 
         // ------------------------------ bills -------------------------------
 
@@ -48,6 +55,15 @@ namespace AutoRimmer
             int cap = ctx.Args.Int("cap", BenchCap);
             if (cap < 1 || cap > 100) throw new VerbArgsException("cap must be 1..100");
             bool counts = ctx.Args.Bool("counts", true);
+            // git-bug eef837a. ON BY DEFAULT, and that is the decision the
+            // issue turns on: the answer "this bill matches nothing on the map"
+            // has to arrive in the read the daily checklist already makes, not
+            // in a verb somebody has to know to call. `ingredients:false` is
+            // the escape for a caller that wants the cheap old shape.
+            bool wantIngredients = ctx.Args.Bool("ingredients", true);
+            int scanCap = ctx.Args.Int("ingredient_cap", IngredientScanBudget);
+            if (scanCap < 0 || scanCap > 20000)
+                throw new VerbArgsException("ingredient_cap must be 0..20000");
 
             // PotentialBillGiver is `!def.AllRecipes.NullOrEmpty()` — the
             // game's own membership test, and the list is maintained by
@@ -57,6 +73,10 @@ namespace AutoRimmer
             givers.Sort((a, b) => a.thingIDNumber.CompareTo(b.thingIDNumber));
 
             var benches = new List<object>();
+            // One shared budget across the whole call, decremented per bill —
+            // a per-bill cap would multiply by fifteen bills times twenty
+            // benches and the truncation contract would be invisible.
+            var budget = new int[] { wantIngredients ? scanCap : 0 };
             int withBills = 0, skippedFogged = 0, totalBills = 0;
             bool found = false;
             for (int i = 0; i < givers.Count; i++)
@@ -76,7 +96,7 @@ namespace AutoRimmer
                 // whole answer on a `bench` read.
                 if (!one && stack.Count == 0) continue;
                 if (benches.Count >= cap) continue;
-                benches.Add(Bench(map, t, stack, counts));
+                benches.Add(Bench(map, t, stack, counts, wantIngredients, budget));
             }
             if (one && !found)
                 throw new VerbArgsException(
@@ -98,17 +118,33 @@ namespace AutoRimmer
                 ["bills_total"] = totalBills,
                 ["order"] = "id-asc",
                 ["skipped"] = new Dictionary<string, object> { ["fogged"] = skippedFogged },
+                // The truncation contract for the eef837a scan, at the level
+                // where it is actually decided: one budget, all benches.
+                ["ingredient_scan"] = new Dictionary<string, object>
+                {
+                    ["enabled"] = wantIngredients,
+                    ["budget"] = wantIngredients ? scanCap : 0,
+                    ["remaining"] = budget[0],
+                    ["note"] = "each bill carries `health` (the verdict), `remedy` (the verb that "
+                        + "fixes it, or that none does), `filter_state`, `ingredient_search` (the "
+                        + "named sleep state) and `ingredient_match` (how many things on this map "
+                        + "this bill can actually use, and what rejected the rest). `health` is "
+                        + "the field to read: `no-matching-ingredient` and "
+                        + "`asleep-no-matching-ingredient` are the states that starved run "
+                        + "m1-20260901. Pass `ingredients:false` for the pre-eef837a shape.",
+                },
             };
         }
 
-        private static Dictionary<string, object> Bench(Map map, Thing t, List<Bill> stack, bool counts)
+        private static Dictionary<string, object> Bench(Map map, Thing t, List<Bill> stack, bool counts,
+            bool wantIngredients, int[] budget)
         {
             var bills = new List<object>();
             for (int i = 0; i < stack.Count && i < BillCap; i++)
             {
                 var b = stack[i];
                 if (b?.recipe == null) continue;
-                bills.Add(BillLine(b, i, counts));
+                bills.Add(BillLine(map, t, b, i, counts, wantIngredients, budget));
             }
             return new Dictionary<string, object>
             {
@@ -141,7 +177,8 @@ namespace AutoRimmer
             catch { return null; }
         }
 
-        private static Dictionary<string, object> BillLine(Bill b, int index, bool counts)
+        private static Dictionary<string, object> BillLine(Map map, Thing giver, Bill b, int index,
+            bool counts, bool wantIngredients, int[] budget)
         {
             var prod = b as Bill_Production;
             int count = -1;
@@ -180,6 +217,13 @@ namespace AutoRimmer
                 // proof that something ran a failing ingredient search on this
                 // bill — which is how git-bug 32b9e01 was reproduced, and how a
                 // third-party work giver doing the same thing gets caught.
+                //
+                // KEPT AS THE RAW FIELD, AND NO LONGER THE ANSWER (d9d6c12).
+                // A tick the caller has to compare against `now` is not a
+                // state, and in run m1-20260901 nobody made the comparison.
+                // `ingredient_search` below is the same fact as a NAMED state
+                // with the wake tick, the wait, and a count of consecutive
+                // failed searches.
                 ["next_ingredient_search_tick"] = b.nextTickToSearchForIngredients,
                 ["ingredient_search_cooldown"] = WorldSafe.SafeObj(
                     () => Math.Max(0, b.nextTickToSearchForIngredients - Find.TickManager.TicksGame)),
@@ -244,12 +288,31 @@ namespace AutoRimmer
                 || b.recipe.memePrerequisitesAny != null
                 || b.recipe.factionPrerequisiteTags != null;
 
-            try
+            // ---- git-bug eef837a / d9d6c12: the whole ingredient diagnosis --
+            // `ingredient_filter` USED TO BE THE LAST LINE OF THIS METHOD and
+            // it was set inside a bare try/catch, so a throw out of
+            // FilterSummary left the key ABSENT and a null filter published a
+            // bare `null` — the two states run m1-20260901 could not tell
+            // apart, and the second is why three colonists starved. Every key
+            // below is now unconditional and `filter_state` says which case it
+            // is in words. See BillIngredients.Diagnose.
+            int take = 0;
+            if (wantIngredients && budget != null && budget[0] > 0)
+                take = Math.Min(budget[0], BillIngredients.ThingCap);
+            var diag = BillIngredients.Diagnose(map, giver, b, take > 0, take);
+            if (take > 0 && budget != null)
             {
-                d["ingredient_filter"] = FilterSummary.Build(
-                    b.ingredientFilter, b.recipe.fixedIngredientFilter, "recipe-fixed");
+                int used = 0;
+                var m = diag.TryGetValue("ingredient_match", out var mv)
+                    ? mv as Dictionary<string, object> : null;
+                if (m != null && m.TryGetValue("scanned", out var sv) && sv is int si) used = si;
+                budget[0] = Math.Max(0, budget[0] - Math.Max(1, used));
             }
-            catch { }
+            foreach (var kv in diag) d[kv.Key] = kv.Value;
+            if (take <= 0)
+                d["ingredient_match_skipped"] = wantIngredients
+                    ? "the call's ingredient_cap budget was spent on earlier bills"
+                    : "ingredients:false";
             return d;
         }
 
