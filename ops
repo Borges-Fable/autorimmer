@@ -1,1 +1,1 @@
-{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":5,"timestamp":1788361563,"nonce":"FoncW+5OlHAUSbfRSTp3a6HZMqs=","added":["state:doing"],"removed":null}]}
+{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":3,"timestamp":1788361563,"nonce":"U0rgCe7Z2gnQVP7qRKd6Xj9I8ZA=","message":"dispatched (repair round, session 22), batched: b7359fa + 855117a share DesignationVerbs.cs; bb931b9 is a new file and cannot conflict. Branch fix/b7359fa-designate-reach.","files":null}]}
