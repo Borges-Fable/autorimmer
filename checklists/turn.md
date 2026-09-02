@@ -77,14 +77,48 @@ it becomes. Ledger: log only firings (`verdict:"action"`), per
 - read: `digest` → `resources.wood`, `resources.steel`
 - flag: `wood < 100` or `steel < 50` *(proposed)* with no matching designation
   batch outstanding
-- act: `designate {type:"chop", rect:[x,z,w,h]}` /
-  `designate {type:"mine", rect:[x,z,w,h]}` over the next batch — one rect,
-  one call. (`type` is an ARG: `DesignationVerbs.Designate` reads
+- act: **three different calls for three different jobs, and the wrong one is
+  silent.** (`type` is an ARG: `DesignationVerbs.Designate` reads
   `a.StrReq("type")`, and `rwa designate chop …` dies on the bare word.)
+  - **wood** — `designate {type:"chop", rect:[x,z,w,h]}` over the next batch;
+    one rect, one call.
+  - **ore** — `nearest {def:"MineableSteel", from:…}` FIRST, then
+    `designate {type:"mine-vein", cells:[…]}` seeded off the cells it names.
+    `mine-vein` flood-fills the whole contiguous vein
+    (`Designator_MineVein.DesignateSingleCell`), so one seed does the body a
+    rect can only nibble at, and it takes ore only
+    (`ThingDef.building.veinMineable`). Read `designated`, not `accepted` —
+    one accepted cell can paint forty.
+  - **plain rock for blocks** — `designate {type:"mine", rect:[…]}`. On a
+    map already carrying 1,800 stone chunks this is close to pure waste; on a
+    mountain base it is the point. The verb cannot know which, so it reports:
+    read `composition`.
+  **`map-view` IS THE WRONG INSTRUMENT FOR SITING EITHER MINE CALL.** Its `%`
+  glyph collapses `sandstone`, `marble` and `compacted steel` into one
+  character, so a rect chosen off it cannot be aimed
+  ([[a-glyph-is-topology-not-identity]]). m1-20260901 aimed at the steel face
+  and designated 14 cells of whatever rock was exposed; 13 steel cells inside
+  the same rect were still standing 20 days later. Use `map-view` to find the
+  face, a def-keyed query to designate it.
   Wood and stone only flow while a designation exists; colonists never fell
   or mine on their own initiative ([[materials-are-a-standing-loop]], Evan:
   "colonists don't put down trees themselves"). Crops are the exception and
   belong to `food-days-floor`, not here.
+- also: **read the designate envelope back before moving on.** Three fields,
+  and each is a different correction:
+  - `accepted_unreachable > 0` — those targets lie outside EVERY capable
+    colonist's allowed area and the designations are inert. `reach.areas[]`
+    names the area and its id; the fix is `area {kind:"allowed", op:"add"}`,
+    NOT re-designating ([[a-designation-outside-the-allowed-area-does-nothing]]).
+    A batch where nothing is workable is REFUSED outright, with the correction
+    in `refused.hint`.
+  - `reach.enabled == 0` while `reach.capable > 0` — the area is fine and
+    every miner has Mining switched off. That is `work-priorities`, and it is
+    the other half of the 128 designated `MineableSteel` cells m1-20260901
+    never mined ([[who-will-actually-do-it]]).
+  - `composition` — the per-def rollup of what actually landed, with
+    `mineable_thing` and the yield each cell drops. `MineableSteel: 4,
+    Marble: 8` is the answer `accepted: 14` never was.
 - why: a bill stalling at zero input pages THIS item, not a bill retry — the
   retry hides the real correction. Stockpiles-only caveat applies here too, and
   it is the trap that cost m1-20260901 five days: `resources.steel` read 0 while
@@ -92,8 +126,14 @@ it becomes. Ledger: log only firings (`verdict:"action"`), per
   extension, NOT more mining. Read `things {def, detail:true}`'s `forbidden` and
   a `place-layout --dry-run`'s `available` vs `in_stockpiles` before designating
   anything ([[stockpile-scope-hides-your-own-supplies]]).
-- retire-when: 1.6 predicate, or a mod-side standing-designation policy
-  (candidate for the ladder's mod rung once the policy is Evan-ratified).
+- becomes: nothing — the three readings above are facts about a CALL, not
+  state predicates, so 1.6's `until:condition` cannot carry them. The standing
+  half (are yesterday's designations still reachable today?) is a predicate and
+  waits on a mod-side watch; see the lesson's retire-when.
+- retire-when: a mod-side standing-designation policy (candidate for the
+  ladder's mod rung once the policy is Evan-ratified). The AIMING half is done
+  — `composition`, `accepted_unreachable` and `reach` ship (git-bug
+  `855117a`, `b7359fa`) — so what is left here is the loop, not the reads.
 
 ### bill-produces-nothing
 - when: turn

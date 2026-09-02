@@ -3732,3 +3732,79 @@ queue by default (an agent flailing mid-experiment must not page triage).
   things for a Thing-targeted one, and `designated_from` names which reading the
   caller got. `designations_before`/`designations_now` already reported the same
   truth as a pair of counts; this is that pair with the cells in hand.
+
+- 2026-09-02 (repair round, worker; git-bug 855117a) — **`855117a`'s headline
+  count is exact and its headline DIAGNOSIS is not supported by the run's own
+  artifacts, and the fix is the same either way.** The issue says
+  `designate {type:"mine", rect:[131,116,6,10]}` accepted "14 cells of whatever
+  rock was exposed on that rect, which on this face is mostly sandstone and
+  marble". Checked before building, per the standing rule that an issue's stated
+  cause is checked against the artifacts:
+
+  * **"14 of 60" is exact.** `RUNS/m1-20260901/journal/…ndjson` seq 45:
+    `{"verb":"designate","step":"mine","counts":{"targeted":60,"accepted":14,
+    "rejected":46},"rejected_by_reason":{"not-designatable":22,"fogged":24}}`.
+  * **"mostly sandstone" is contradicted.** The save's
+    `<compressedThingMapDeflate>` is a ushort-per-cell grid of `def.shortHash`
+    (`MapFileCompressor.HashValueForSquare` /
+    `DataSerializeUtility.SerializeUshort`, deflate + base64). Decoded from
+    `day17-tick1020680-autosave.rws`, the rect's still-unmined cells are **13
+    `MineableSteel`, 8 `Marble`, and one `ChunkMarble` lying on the ground —
+    no sandstone rock anywhere in it.** All four cells `nearest
+    {def:"MineableSteel"}` had named are among the fourteen accepted.
+  * **What the artifacts DO prove is sharper.** Thirteen `MineableSteel` cells
+    inside that same rect were never designated and were still standing twenty
+    in-game days later. The rect caught the exposed face; the ore body ran past
+    it. So the aiming failure is real and its shape is "the rect UNDER-covers
+    the ore", not "the rect designated worthless rock".
+
+  Neither reading changes the fix, and that is the argument for it: **nobody
+  could tell which it had been from `accepted: 14`.** So `designate` publishes
+  `composition` — a per-def rollup of what actually landed, `by` naming whether
+  the subject was the cell's mineable, its edifice or its terrain, and for an
+  ore def `mineable_thing`, `mineable_yield` and `EffectiveMineableYield` (both,
+  because the raw number is the def's and the effective one is this game's
+  difficulty). It is scored on `DesignateEngine.Landed`, never on `accepted`.
+
+  Two further facts about the mine pair, confirmed in the decompile, both now
+  reported rather than silent:
+
+  1. `Designator_MineVein` **flood-fills at designate time** —
+     `DesignateSingleCell` calls `FloodFillDesignations`, which paints every
+     contiguous non-fogged cell whose edifice def matches and calls
+     `TryRemoveDesignation(c, DesignationDefOf.Mine)` on each. So `mine-vein`
+     REPLACES a Mine designation silently: the MineVein count rises, the Mine
+     count falls, and nothing said the second half. `replaced` now does.
+     `Designator_Mine.DesignateSingleCell` does the same to `SmoothWall`.
+  2. The reverse is a REFUSAL, and it was the residual `8b0b88f` recorded and
+     left: `Designator_Mine.CanDesignateThing`'s third clause rejects on
+     `DesignationAt(t.Position, DesignationDefOf.MineVein)`, a def that is not
+     the entry's, so `designate mine` over vein-marked ground read
+     `not-designatable` — the same envelope as "this rock is not mineable",
+     which is the opposite correction. `already-designated-other` is its own
+     key now, with `designation_present` naming the def. This is not a blind
+     re-implementation of the widget: the gate has already spoken and the probe
+     only re-keys a rejection that was going to be emitted anyway, which is
+     `WhyAlready`'s own rule.
+
+  `mine-vein` was registered and had never been exercised — the issue said to
+  verify that first. It is exercised in `accept/855117a-mine-vein.py`, and one
+  hazard turned up in the reading that the fog gate already covers:
+  `Designator_MineVein.CanDesignateCell` returns **true** for a fogged cell,
+  while `DesignateSingleCell` then does `loc.GetEdifice(base.Map).def` with no
+  null check. `DesignateEngine`'s own uniform fog gate rejects the cell before
+  the designator ever sees it, so the NRE is unreachable through this verb —
+  but it is unreachable *because of that gate*, not because the game is safe.
+
+- 2026-09-02 (repair round, worker; git-bug 855117a) — **A collapsed-alphabet
+  channel is for TOPOLOGY; identity needs a def-keyed query.** `map-view` is one
+  ASCII char per cell, so `"%": "sandstone | marble | compacted steel"` is the
+  channel being honest about a collision it documents. The general form, one
+  level down from `e6faa51`'s independence argument (never compare a glyph from
+  one channel against a glyph from another): **never compare a glyph against a
+  def either.** A `|` in a legend entry is the channel saying it cannot answer
+  the question about to be asked of it. Carried as the playbook lesson
+  `a-glyph-is-topology-not-identity` AND as a `use_for` line in the `channel`
+  block `Spatial.Render` publishes — because the channel block is what the agent
+  is actually holding at the moment it chooses a rect, and a lesson it did not
+  reload is not a control.

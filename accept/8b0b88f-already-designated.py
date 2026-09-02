@@ -1381,14 +1381,20 @@ if __name__ == "__main__":
 #    itself. 1.2l/m now fetch the journal at the seq the action block names,
 #    which also proves the row a later reader would actually find.
 #
-# 7. RESIDUAL, recorded in DesignationVerbs.Designate and deliberately NOT
-#    asserted here because it is not the fixed behaviour: `designate mine` over
-#    a cell that carries a MINE-VEIN designation still reports
-#    not-designatable, because `Designator_Mine.CanDesignateThing` rejects on
+# 7. RESIDUAL - CLOSED 2026-09-02 by git-bug 855117a, and the check went to
+#    `accept/855117a-mine-vein.py` phase 3 rather than here, because the fix
+#    needed the designator table's new `Blocks` array and belongs with the rest
+#    of that issue. What it was: `designate mine` over a cell carrying a
+#    MINE-VEIN designation reported `not-designatable`, because
+#    `Designator_Mine.CanDesignateThing` rejects on
 #    `DesignationAt(t.Position, DesignationDefOf.MineVein)` - a def that is not
-#    this entry's. Telling that one apart means re-implementing the widget's
-#    second clause. If a future round takes that on, this file is where the
-#    check belongs.
+#    this entry's - so it read exactly like "this rock is not mineable", which
+#    is the opposite correction. It is now its own key,
+#    `DesignateEngine.WhyAlreadyOther` ("already-designated-other"), with
+#    `designation_present` naming the def on the reject row. Nothing in THIS
+#    file changes: it never asserted the residual, and the plain
+#    `already-designated` key it does assert is untouched (855117a's phase 3.8
+#    is the control that proves the two did not merge).
 #
 # 8. `designations_before` / `designations_now` are the count of that def
 #    STANDING ON THE MAP (DesignateEngine.CountOf over

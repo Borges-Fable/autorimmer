@@ -65,6 +65,21 @@ namespace AutoRimmer
             // by member name: the named class is the one that reads this
             // designation out of `designationManager`.
             public Type Giver;
+            // OTHER designations whose presence makes this designator's own
+            // gate say no (git-bug 855117a). Exactly one entry in the table
+            // has any: `Designator_Mine.CanDesignateThing`'s third clause,
+            // `DesignationAt(t.Position, DesignationDefOf.MineVein)`. Used to
+            // re-key a rejection the gate already made — see
+            // DesignateEngine.WhyAlreadyOther.
+            public DesignationDef[] Blocks;
+            // OTHER designations this designator SILENTLY REMOVES where it
+            // lands. `Designator_MineVein.FloodFillDesignations` calls
+            // TryRemoveDesignation(c, Mine) on every cell it paints;
+            // `Designator_Mine.DesignateSingleCell` does the same to
+            // SmoothWall. Their before/after cells are diffed so the removal
+            // is published rather than showing up as an unexplained fall in
+            // someone else's count.
+            public DesignationDef[] Replaces;
         }
 
         private static Dictionary<string, DesEntry> table;
@@ -86,10 +101,31 @@ namespace AutoRimmer
             // the two designations are interchangeable for job generation.
             Add("mine", () => new Designator_Mine(), DesignationDefOf.Mine,
                 "RimWorld/Designator_Mine.CanDesignateCell", typeof(WorkGiver_Miner));
+            t["mine"].Blocks = new[] { DesignationDefOf.MineVein };
+            t["mine"].Replaces = new[] { DesignationDefOf.SmoothWall };
             // ONE designate paints a whole vein — cheaper than painting cells,
             // and the reason the session-4 amendment named it.
+            //
+            // ORDER MATTERS BETWEEN THESE TWO, and it is not symmetric:
+            //  * `mine` on a MineVein-designated cell is REFUSED
+            //    (Designator_Mine.CanDesignateThing's third clause), now
+            //    reported as `already-designated-other` rather than reading
+            //    like "this rock is not mineable";
+            //  * `mine-vein` on a Mine-designated cell is ACCEPTED and
+            //    REPLACES it — FloodFillDesignations calls
+            //    TryRemoveDesignation(c, Mine) on every cell it paints — now
+            //    reported in `replaced`.
+            // AND IT FLOOD-FILLS: one accepted cell paints the whole
+            // contiguous vein of the same edifice def, so `accepted` is not
+            // the size of the job. `designated` is.
             Add("mine-vein", () => new Designator_MineVein(), DesignationDefOf.MineVein,
-                "RimWorld/Designator_MineVein.CanDesignateCell", typeof(WorkGiver_Miner));
+                "RimWorld/Designator_MineVein.CanDesignateCell", typeof(WorkGiver_Miner),
+                "mine-vein FLOOD-FILLS: Designator_MineVein.DesignateSingleCell paints every "
+                + "contiguous non-fogged cell whose edifice def matches the seed, so one "
+                + "accepted cell can create many designations — read `designated`, not "
+                + "`accepted`. It takes ORE only (ThingDef.building.veinMineable), and it "
+                + "REPLACES any Mine designation on the cells it paints (see `replaced`).");
+            t["mine-vein"].Replaces = new[] { DesignationDefOf.Mine };
 
             // --- plants ----------------------------------------------------
             // HarvestPlant and CutPlant are both `WorkGiver_PlantsCut`'s:
@@ -267,9 +303,11 @@ namespace AutoRimmer
                 var pThings = new List<Thing>();
                 var pRejects = new List<DesignateEngine.Reject>();
                 if (targets.IsThings)
-                    DesignateEngine.RunThings(map, probe, targets.Things, true, pThings, pRejects, entry.Def);
+                    DesignateEngine.RunThings(map, probe, targets.Things, true, pThings, pRejects,
+                        entry.Def, entry.Blocks);
                 else
-                    DesignateEngine.RunCells(map, probe, targets.Cells, true, pCells, pRejects, entry.Def);
+                    DesignateEngine.RunCells(map, probe, targets.Cells, true, pCells, pRejects,
+                        entry.Def, entry.Blocks);
                 DesignateReach.Score(reach, map,
                     targets.IsThings ? null : pCells, targets.IsThings ? pThings : null);
 
@@ -285,6 +323,9 @@ namespace AutoRimmer
             // what mine-vein's flood-fill actually painted rather than the one
             // cell the gate accepted. Null for a Thing-targeted def.
             var beforeCells = DesignateEngine.CellSnapshot(map, entry.Def);
+            // …and of every designation this designator silently REMOVES where
+            // it lands, so `replaced` can name what went (855117a).
+            var replacedBefore = ReplacedSnapshot(map, entry.Replaces);
             var acceptedCells = new List<IntVec3>();
             var acceptedThings = new List<Thing>();
             var rejects = new List<DesignateEngine.Reject>();
@@ -307,9 +348,11 @@ namespace AutoRimmer
             // forbids doing blind; `mine-vein` on a mine-designated cell has no
             // such clause and is accepted by the game.
             if (targets.IsThings)
-                DesignateEngine.RunThings(map, des, targets.Things, dryRun, acceptedThings, rejects, entry.Def);
+                DesignateEngine.RunThings(map, des, targets.Things, dryRun, acceptedThings, rejects,
+                    entry.Def, entry.Blocks);
             else
-                DesignateEngine.RunCells(map, des, targets.Cells, dryRun, acceptedCells, rejects, entry.Def);
+                DesignateEngine.RunCells(map, des, targets.Cells, dryRun, acceptedCells, rejects,
+                    entry.Def, entry.Blocks);
 
             int acceptedCount = targets.IsThings ? acceptedThings.Count : acceptedCells.Count;
             if (!dryRun) DesignateEngine.FinalizeSucceeded(des, acceptedCount > 0);
@@ -364,6 +407,20 @@ namespace AutoRimmer
                 ["reach"] = DesignateReach.Out(reach, map),
                 ["allow_unreachable"] = allowUnreachable,
             };
+            // WHAT was designated, not how many (git-bug 855117a): a per-def
+            // rollup of what actually landed, with the yield an ore cell
+            // produces where the game publishes one. `map-view`'s `%` glyph
+            // collapses sandstone, marble and compacted steel into one
+            // character, so a rect aimed off that view lands on whatever rock
+            // was exposed — and until now nothing in the envelope could tell
+            // an agent which it got.
+            data["composition"] = DesignateComposition.Build(map, landed, out int compMore,
+                out int compTotal);
+            data["composition_more"] = compMore;
+            data["composition_total"] = compTotal;
+            var replaced = DesignateComposition.Replaced(map, entry.Replaces, replacedBefore,
+                des.GetType().Name + " removes it where it lands");
+            if (replaced != null) data["replaced"] = replaced;
             if (entry.Note != null) data["note"] = entry.Note;
             if (targets.IsThings)
             {
@@ -406,11 +463,32 @@ namespace AutoRimmer
                         ["unreachable"] = reach.Applies ? (object)reach.Unreachable : null,
                     },
                     ["designation"] = entry.Def?.defName,
+                    // 855117a: the transcript records WHAT was designated, so
+                    // a post-mortem can ask "we mined for six days — what did
+                    // we actually queue?" without a save.
+                    ["composition"] = data["composition"],
                     ["cells"] = data.TryGetValue("cells", out var cs) ? cs : null,
                     ["ids"] = data.TryGetValue("ids", out var ids) ? ids : null,
                     ["rejected_by_reason"] = data["rejects_by_reason"],
                 });
             return data;
+        }
+
+        // The cells carrying each def this designator will silently remove,
+        // taken before it runs. Null when the entry replaces nothing, which is
+        // every entry but `mine` and `mine-vein`.
+        private static Dictionary<DesignationDef, HashSet<IntVec3>> ReplacedSnapshot(
+            Map map, DesignationDef[] defs)
+        {
+            if (defs == null || defs.Length == 0) return null;
+            var d = new Dictionary<DesignationDef, HashSet<IntVec3>>();
+            for (int i = 0; i < defs.Length; i++)
+            {
+                if (defs[i] == null) continue;
+                var set = DesignateEngine.CellSnapshot(map, defs[i]);
+                if (set != null) d[defs[i]] = set;
+            }
+            return d.Count > 0 ? d : null;
         }
 
         // ------------------------------------------------------------------

@@ -340,6 +340,9 @@ namespace AutoRimmer
             public Thing Thing;
             public string Why;
             public string Reason;
+            // The OTHER designation standing here that made the gate say no —
+            // see WhyAlreadyOther.
+            public DesignationDef Other;
         }
 
         public const string WhyFogged = "fogged";
@@ -361,6 +364,30 @@ namespace AutoRimmer
         // somewhere else. `rejects_by_reason.already-designated` is then a
         // free per-call count of wasted orders.
         public const string WhyAlready = "already-designated";
+
+        // A THIRD KIND OF NO, and it was the residual 8b0b88f recorded and
+        // deliberately left (git-bug 855117a closes it). `designate mine` over
+        // a cell that already carries a MINE-VEIN designation reported
+        // `not-designatable` — the same envelope as "this rock is not mineable"
+        // — because `Designator_Mine.CanDesignateThing` rejects on a def that
+        // is not this entry's:
+        //
+        //     if (!t.def.mineable) return false;
+        //     if (DesignationAt(t.Position, Designation) != null) return WasRejected;
+        //     if (DesignationAt(t.Position, DesignationDefOf.MineVein) != null) return WasRejected;
+        //
+        // The third clause is what this key names. It is not a re-implementation
+        // of the gate — the gate has already spoken and this only re-keys a
+        // rejection we were going to emit anyway (WhyAlready's rule) — and it is
+        // not blind, because the clause is quoted above from the decompiled 1.6
+        // source by member name, which is exactly what the gate rule asks for.
+        //
+        // A DISTINCT KEY, not folded into `already-designated`: both mean stop
+        // asking, but this one also means "the work IS queued, under another
+        // def", which is a different thing to tell an agent that is about to
+        // conclude its mining order was dropped. The def itself rides on the
+        // reject row as `designation_present`.
+        public const string WhyAlreadyOther = "already-designated-other";
 
         // Is the designation ALREADY on this target? Asked only after the
         // game's gate has rejected, so the gate stays the sole authority on
@@ -422,6 +449,13 @@ namespace AutoRimmer
             return false;
         }
 
+        // WHICH other designation the gate tripped on, when it was one. Its own
+        // key rather than a sentence stuffed into `reason`: `reason` is the
+        // GAME's own AcceptanceReport string verbatim or null, and this file's
+        // REJECTIONS contract forbids inventing words the game did not say.
+        // The def name is a fact, not a phrase.
+        private static object PresentDef(Reject r) => r.Other?.defName;
+
         public static Dictionary<string, object> RejectOut(Map map, Reject r)
         {
             var d = new Dictionary<string, object>
@@ -430,6 +464,7 @@ namespace AutoRimmer
                 ["why"] = r.Why,
                 ["reason"] = string.IsNullOrEmpty(r.Reason) ? null : r.Reason,
             };
+            if (r.Other != null) d["designation_present"] = PresentDef(r);
             if (r.Thing != null)
             {
                 d["id"] = r.Thing.thingIDNumber;
@@ -488,8 +523,15 @@ namespace AutoRimmer
         // own table — passed so a rejection can be told apart from a redundancy
         // (see WhyAlready). Optional: a designator that adds no designation
         // (claim, smooth, the area brushes) passes null and nothing changes.
+        //
+        // `blockedBy` is the OTHER designations whose presence this
+        // designator's gate rejects on — `Designator_Mine.CanDesignateThing`'s
+        // third clause, and the only entry in the table with one. Asked only
+        // after the gate has rejected AND the entry's own def is not present,
+        // so it never touches the accept path. See WhyAlreadyOther.
         public static void RunCells(Map map, Designator des, List<IntVec3> cells, bool dryRun,
-            List<IntVec3> accepted, List<Reject> rejects, DesignationDef designation = null)
+            List<IntVec3> accepted, List<Reject> rejects, DesignationDef designation = null,
+            DesignationDef[] blockedBy = null)
         {
             for (int i = 0; i < cells.Count; i++)
             {
@@ -530,11 +572,14 @@ namespace AutoRimmer
                     // question. It is kept anyway: a reason we deleted or
                     // invented would be worse than the game's own inaccurate
                     // one, and `why` is what `rejects_by_reason` keys on.
+                    bool already = AlreadyDesignated(map, designation, c, null);
+                    var other = already ? null : OtherPresent(map, blockedBy, c, null);
                     rejects.Add(new Reject
                     {
                         At = c,
-                        Why = AlreadyDesignated(map, designation, c, null) ? WhyAlready : "not-designatable",
+                        Why = already ? WhyAlready : (other != null ? WhyAlreadyOther : "not-designatable"),
                         Reason = ReasonOf(report),
+                        Other = other,
                     });
                     continue;
                 }
@@ -551,8 +596,26 @@ namespace AutoRimmer
             }
         }
 
+        // The first of `blockedBy` that is present on this target, or null.
+        // Uses the same `AlreadyDesignated` dispatch, so a Cell-targeted def
+        // asked through a thing and vice versa is still the game's own
+        // `targetType` discriminator and never a Log.Error.
+        public static DesignationDef OtherPresent(Map map, DesignationDef[] blockedBy,
+            IntVec3 cell, Thing thing)
+        {
+            if (blockedBy == null) return null;
+            for (int i = 0; i < blockedBy.Length; i++)
+            {
+                var d = blockedBy[i];
+                if (d == null) continue;
+                if (AlreadyDesignated(map, d, cell, thing)) return d;
+            }
+            return null;
+        }
+
         public static void RunThings(Map map, Designator des, List<Thing> things, bool dryRun,
-            List<Thing> accepted, List<Reject> rejects, DesignationDef designation = null)
+            List<Thing> accepted, List<Reject> rejects, DesignationDef designation = null,
+            DesignationDef[] blockedBy = null)
         {
             for (int i = 0; i < things.Count; i++)
             {
@@ -585,12 +648,15 @@ namespace AutoRimmer
                     // `Designator_Haul` all return a bare `false` here for an
                     // already-designated thing, so `reason` is null either way
                     // and `why` carries the whole distinction.
+                    bool already = AlreadyDesignated(map, designation, t.Position, t);
+                    var other = already ? null : OtherPresent(map, blockedBy, t.Position, t);
                     rejects.Add(new Reject
                     {
                         At = t.Position,
                         Thing = t,
-                        Why = AlreadyDesignated(map, designation, t.Position, t) ? WhyAlready : "not-designatable",
+                        Why = already ? WhyAlready : (other != null ? WhyAlreadyOther : "not-designatable"),
                         Reason = ReasonOf(report),
+                        Other = other,
                     });
                     continue;
                 }

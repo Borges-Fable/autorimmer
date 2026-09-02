@@ -215,6 +215,22 @@ namespace AutoRimmer
                              + "> terrain, with \"?@$!&^;\" reserved for pawns and fog; this "
                              + "is NOT map-dump's per-layer def-catalog alphabet and the two "
                              + "are not comparable cell-for-cell",
+                    // git-bug 855117a. The collision is the documented cost of
+                    // a fixed-width channel, and a legend entry reading
+                    // "sandstone | marble | compacted steel" is this channel
+                    // being honest — but a run read that entry, picked a rect
+                    // off it, and designated fourteen cells of whatever rock
+                    // was exposed while aiming at ore. TOPOLOGY, NOT IDENTITY:
+                    // a glyph answers "what is the shape of this ground", a
+                    // def-keyed query answers "what is standing here", and a
+                    // designation is an identity question. Said in the channel
+                    // block rather than only in a lesson, because this is what
+                    // the agent is holding at the moment it chooses the rect.
+                    ["use_for"] = "TOPOLOGY — shape, extent, what adjoins what. A legend entry "
+                             + "with a \"|\" in it is more than one def sharing a glyph, so a "
+                             + "cell's IDENTITY cannot be read off this grid. Site a "
+                             + "designation from `nearest {def:\"…\"}` or `things {def:\"…\"}`, "
+                             + "never from a glyph (git-bug 855117a).",
                 },
                 ["origin"] = new List<object> { (double)rect.minX, (double)rect.minZ },
                 ["w"] = rect.Width,

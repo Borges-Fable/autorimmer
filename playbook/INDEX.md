@@ -23,6 +23,7 @@ no opinion).
 | [[stockpile-scope-hides-your-own-supplies]] | Critical | observed-at-bench | any `resources.*` reading 0 — it is stockpiles-only, and three different problems all look like this |
 | [[batching-turns-costs-you-the-trader]] | Important | observed-at-bench | driving several advances unattended — a batch must break on opportunities, not just threats |
 | [[materials-are-a-standing-loop]] | Important | evan-stated | any input trending to zero — designate, don't retry the bill |
+| [[a-glyph-is-topology-not-identity]] | Important | verified-in-source | any rect chosen off `map-view` — its `%` glyph collapses three rock defs into one character, so a mine rect picked from it cannot be aimed (**cited**: `turn.md §materials-designation-loop`) |
 | [[benches-go-indoors]] | Important | evan-stated | siting any bench — enclosure plus the right room |
 | [[growing-zone-default-is-potato]] | Important | verified-in-source | creating/reading growing zones — one raw read commits potato forever |
 | [[wealth-buys-bigger-raids]] | Important | verified-in-source | every defence purchase and every post-mortem — the damping term |
