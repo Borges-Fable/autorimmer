@@ -1,0 +1,112 @@
+/* One background, one muted foreground, one accent, one warning.
+   $accent is spent on exactly one thing: what changed at this step. */
+
+Screen {
+    background: #16181b;
+    color: #b6b8b3;
+    layers: base help;
+}
+
+/* ---- header: run identity left, position right. No border; the rule below
+       it separates more quietly than a box would. -------------------------- */
+#head {
+    dock: top;
+    height: 3;
+    padding: 0 2;
+    background: #16181b;
+    border-bottom: solid #26292e;
+}
+
+/* ---- body: the map is the hero and takes what is left; the sidebar is a
+       fixed, subordinate column. Two regions, never four quadrants. -------- */
+#body {
+    layout: horizontal;
+    height: 1fr;
+    padding: 1 2 0 2;
+}
+
+#mapwrap {
+    width: 1fr;
+    height: 100%;
+    border: round #2f3339;
+    padding: 0 1;
+    margin-right: 2;
+}
+#mapwrap:focus-within { border: round #3b4048; }
+
+#mapscroll {
+    width: 100%;
+    height: 1fr;
+    /* A 10x14 keyhole and a 60x48 survey both land in the same pane; centring
+       makes the small one read as deliberate rather than broken. */
+    align: center middle;
+    scrollbar-size: 1 1;
+    scrollbar-background: #16181b;
+    scrollbar-color: #2f3339;
+    scrollbar-color-hover: #3b4048;
+    scrollbar-color-active: #d1a054;
+}
+
+#map { width: auto; height: auto; }
+
+/* The legend is a caption. Dim, under the map, inside the same border so it
+   does not become a second panel. */
+#legend {
+    dock: bottom;
+    height: auto;
+    max-height: 2;
+    color: #5d6169;
+    padding: 0 1;
+}
+
+#side {
+    width: 46;
+    height: 100%;
+    border: round #2f3339;
+    padding: 0 1;
+    scrollbar-size: 1 1;
+    scrollbar-background: #16181b;
+    scrollbar-color: #2f3339;
+    scrollbar-color-hover: #3b4048;
+    scrollbar-color-active: #d1a054;
+}
+Screen.-narrow #side { width: 34; }
+Screen.-tiny #side { display: none; }
+/* Page two puts a verb grid in the map's pane: a grid must align left. */
+Screen.-rig #mapscroll { align: left top; }
+Screen.-tiny #mapwrap { margin-right: 0; }
+
+/* A folded summary that WRAPS stops being a fold: the continuation lands in
+   the gutter and the key/value pair reads as two things. Clip instead. */
+#sidebody {
+    width: 100%;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+/* ---- footer: one quiet status line. ---------------------------------- */
+#foot {
+    dock: bottom;
+    height: 1;
+    padding: 0 2;
+    background: #16181b;
+    color: #5d6169;
+}
+
+/* ---- help: an overlay, not a fifth panel. ---------------------------- */
+#helpwrap {
+    layer: help;
+    display: none;
+    width: 100%;
+    height: 100%;
+    align: center middle;
+}
+#help {
+    width: 62;
+    max-width: 100%;
+    height: auto;
+    padding: 1 2;
+    background: #1b1e22;
+    border: round #3b4048;
+}
+Screen.-help #helpwrap { display: block; }
