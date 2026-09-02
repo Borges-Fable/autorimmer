@@ -95,6 +95,44 @@ it becomes. Ledger: log only firings (`verdict:"action"`), per
 - retire-when: 1.6 predicate, or a mod-side standing-designation policy
   (candidate for the ladder's mod rung once the policy is Evan-ratified).
 
+### bill-produces-nothing
+- when: turn
+- applies-when: any production bill exists
+- read: `bills` → every bill's **`health`**. One word per bill. The three that
+  are never acceptable on a food or medicine bench:
+  `no-matching-ingredient` · `asleep-no-matching-ingredient` · `filter-empty`.
+- flag: any bill whose `health` is one of those three. Do the act in that bill's
+  own **`remedy`** field, which names the verb — and when it says
+  **NO BILL LEVER FIXES THIS**, believe it and stop sending `bill-set`.
+- act: `remedy` names it. The four that occur:
+  `unforbid {things:[…]}` (ids are in `ingredient_match.rejected_sample`) ·
+  `bill-set {allow:[…]}` or `{special:{…}}` when the reason starts
+  `bill-filter:` · `bill-set {ingredient_radius:"unlimited"}` · and for a
+  `recipe-fixed:` reason, **nothing on the bill** — the recipe's own
+  `fixedIngredientFilter` rejects those things and no lever widens past it.
+  Change the ingredients or the recipe.
+- why: **this is what killed run m1-20260901** (git-bug eef837a). The butcher
+  bill read `suspended:false`, an unlimited radius, and a filter whose
+  `allowed_defs` contained `Corpse_WildBoar` — with a wild boar corpse on the
+  butcher spot's own cell — and it produced nothing for twenty days while three
+  colonists starved. Every one of those readings was TRUE. The rejection was
+  per THING and per SPECIAL FILTER: `ButcherCorpseFlesh.fixedIngredientFilter`
+  disallows `AllowRotten`, and `Bill.IsFixedOrAllowedIngredient` consults the
+  RECIPE's filter before the bill's, so a corpse past `CompRottable`'s 2.5-day
+  rot start can never be butchered by that recipe. A def-level filter summary
+  cannot say that; `health` and `ingredient_match.rejected` can.
+- also: **`next_ingredient_search_tick` is still published and is still not the
+  answer.** It is a 500–600 tick back-off that rearms on every failure, so a
+  future value is normal for any starving bill and says nothing about how long.
+  Read `ingredient_search.state` (`asleep`/`ready`) and
+  `ingredient_search.consecutive_failed_searches` instead — and note that
+  `asleep-will-retry` and `asleep-no-matching-ingredient` are DIFFERENT
+  verdicts, because only the second needs you (git-bug d9d6c12).
+- becomes: `advance until:{condition:{path:"…health", eq:"workable"}}` once 1.6
+  can address a per-bill path.
+- retire-when: never. This is a state predicate over a standing order and there
+  is no alert for it — `Alert_NeedMealSource` tests only that a stove exists.
+
 ### hostiles-standing
 - when: turn
 - read: `digest` → `threats.hostiles_unpardoned` (fall back to

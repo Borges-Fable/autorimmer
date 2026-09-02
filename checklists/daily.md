@@ -59,21 +59,32 @@ every day, to the run ledger.
 ### production-still-runs
 - when: daily
 - applies-when: any production bench exists
-- read: `bills` — a meal bill exists, unsuspended; `next_ingredient_search_tick`
-  moving proves something is actually working it (a bill can read `active`
-  and be worked by nobody — that field is the only observable proof either
-  way, DESIGN 2026-08-31)
-- flag: no live meal bill; a bill starved of ingredients; a bill whose search
-  tick never advances
-- act: starved input → `materials-designation-loop` (designate, don't retry
-  the bill); nobody working it → `bill-who-will-do-it`'s roster read; no bill
-  at all → `blocked` on 3.6 (`48f666c`) until bill authoring ships
+- read: `bills` — a meal bill exists, unsuspended, and its **`health`** is
+  `workable` or `asleep-will-retry`. **`next_ingredient_search_tick` is no
+  longer the read** (git-bug d9d6c12): it is a 500–600 tick back-off that
+  rearms on every failure, so a future value is the normal state of any
+  starving bill and one sample cannot tell one failure from ten thousand.
+  `ingredient_search.state` and `.consecutive_failed_searches` say it in words,
+  and `health` folds them together with whether anything on the map could
+  satisfy the bill at all.
+- flag: no live meal bill; any bill whose `health` is `no-matching-ingredient`,
+  `asleep-no-matching-ingredient` or `filter-empty` — the turn-level trip-wire
+  `bill-produces-nothing` catches these every return and this daily read is the
+  backstop for the bench nobody looked at.
+- act: the bill's own `remedy` field names the verb, INCLUDING when the answer
+  is that no bill lever helps (a `recipe-fixed:` rejection — see
+  `bill-produces-nothing` in turn.md, git-bug eef837a). Starved input →
+  `materials-designation-loop` (designate, don't retry the bill); nobody
+  working it → `bill-who-will-do-it`'s roster read
 - why: `Alert_NeedMealSource` checks only that a `isMealSource` BUILDING
   exists and is silent before day 2 — a stove is not food being made. The
   read half ships today; only authoring waits on 3.6 (96d9315 verification:
   "the checklist item can be authored now").
-- retire-when: 3.6's bill verbs report worker eligibility and ingredient
-  reachability at creation, moving this to an act-keyed check.
+- retire-when: partly discharged. `bill-add` and `bill-set` now return the same
+  `diagnosis` block at creation, so "a bill that cannot be worked" is caught at
+  the act (git-bug eef837a). What is still owed here is WORKER eligibility —
+  who on this colony has the bench's work type enabled and unblocked — which no
+  verb answers per bill yet.
 
 ### apparel-margin
 - when: daily, every 3 days (decay is slow; a daily read buys nothing)

@@ -3235,3 +3235,103 @@ queue by default (an agent flailing mid-experiment must not page triage).
   the head of a chain is the dangerous shape rather than the incomplete one:
   on `m1-20260901` it reports `113 advances within policy` where the whole run
   FAILs the wedge rule. `5eba561`.
+- 2026-09-02 (git-bug eef837a) — **A DEF-LEVEL FILTER SUMMARY IS NOT AN ANSWER
+  ABOUT A THING, and the gap between the two killed a colony.** Run
+  m1-20260901 lost three colonists to a `ButcherCorpseFlesh` bill that reported
+  `suspended:false`, an unlimited search radius, and an ingredient filter whose
+  `allowed_defs` contained `Corpse_WildBoar` — with a wild boar corpse standing
+  on the butcher spot's own cell. Every one of those readings was true. What
+  rejected the corpse was `ButcherCorpseFlesh.fixedIngredientFilter`'s
+  `<specialFiltersToDisallow><li>AllowRotten</li>`, evaluated PER THING by
+  `Verse/ThingFilter.cs Allows(Thing)`'s last clause
+  (`disallowedSpecialFilters[i].Worker.Matches(t)`, i.e.
+  `CompRottable.Stage != Fresh`), and consulted by `RimWorld/Bill.cs
+  IsFixedOrAllowedIngredient` **before** the bill's own filter. The save proves
+  it: `day-62.rws` has `Corpse_WildBoar` at `(114, 0, 138)` — the spot's own
+  cell — unforbidden, `rotProg 183767`, past `CompRottable`'s 150,000-tick rot
+  start. The agent read "hp 95%" and called it fresh, because hit points are
+  not rot.
+
+  **The general rule, which is bigger than bills.** Wherever this mod
+  summarises a `ThingFilter`, the summary answers a question about DEFS and the
+  game answers a question about THINGS, and the two differ by exactly the
+  clauses a def cannot carry: hit points, quality, and the special filters.
+  Publishing the def summary and calling it "the filter" was the defect. So
+  every filter summary now carries both special-filter lists — its own and its
+  universe's — and a bill additionally carries `ingredient_match`, which runs
+  `WorkGiver_DoBill`'s own predicate over the things actually on the map and
+  NAMES the clause that rejected each one. `health` folds that into one word
+  and `remedy` names the verb that fixes it, including the case where the
+  honest answer is that no verb does: no `bill-set` lever can widen past
+  `recipe.fixedIngredientFilter`, and an agent that does not know that will
+  retry it forever, which is what happened.
+
+  **Two of the issue's own premises are false, and the artifacts say so.**
+  (a) `bill-add` was never broken: `BillUtility.MakeNewBill` ends in the
+  `Bill(RecipeDef, Precept)` ctor, whose body is
+  `ingredientFilter.CopyAllowancesFrom(recipe.defaultIngredientFilter)`, and
+  `day-46.rws` — the save from the day the bill was created — has it at 115
+  allowed defs, every one an animal corpse, no `Corpse_Human`, no mech corpse:
+  `defaultIngredientFilter: CorpsesAnimal` exactly. (b) `bill-set` did persist:
+  `day-66.rws` holds 127. What was WRONG was the number the verb reported — see
+  the next entry. Both premises came from reading `filter: null`, which is not
+  a shape `bills` has ever emitted; the key it emits is `ingredient_filter`,
+  and it was set inside a bare `try/catch` as the last statement of `BillLine`,
+  so a throw left it ABSENT. Absent and null are the same thing to every
+  consumer, and the run could not tell "this bill has no filter" from "the
+  summary failed" from "the filter is empty". All three are now different
+  words in `filter_state`, and the key is unconditional.
+- 2026-09-02 (git-bug eef837a) — **A widget gate that is only half enforced is
+  worse than none, because the half that is missing is the half that reports a
+  number.** `StorageFilterOps.Toggle`'s per-DEF path refused a def the parent
+  filter disallows, citing `Listing_TreeThingFilter.Visible` — the widget draws
+  no row, so the player has no such checkbox. Its per-CATEGORY path did not, on
+  the recorded argument that "the allowance is dead for anything the parent
+  rejects, so this matches vanilla exactly". For a storage filter that is true.
+  For a BILL it is false, because `Bill.ExposeData` DELETES those allowances
+  during the saving pass. Measured on the run's own saves: `bill-set
+  {allow:["Corpses"]}` reported `defs_delta: 39` over a base of 115 (and
+  printed `allowed_defs: 154`, internally consistent); the next save left 127.
+  **Twenty-seven of the thirty-nine evaporated** — every mechanoid and drone
+  corpse def, which is exactly what `fixedIngredientFilter.disallowedCategories`
+  names. A verb that reports a delta which is not true for longer than one
+  autosave is lying, and DESIGN's 2026-08-31 write-on-save entry had already
+  identified the mechanism without following it to this consequence.
+
+  The fix uses the game's own parameter rather than inventing one:
+  `ThingFilter.SetAllow(ThingCategoryDef, bool, exceptedDefs, exceptedFilters)`
+  takes the excluded set as its third argument, and `Listing_TreeThingFilter`
+  passes `forceHiddenDefs` there for the same reason. `clampCategories` is ON
+  for bills and OFF for storage, and the withheld defs become `refused` lines
+  naming the mechanism. `defs_delta` is now the delta that survives a save;
+  `will_not_persist` re-runs ExposeData's predicate as a QUESTION after every
+  write, so the claim is asserted per call rather than trusted.
+- 2026-09-02 (git-bug d9d6c12) — **A timestamp is not a state, and this one
+  could not be read as one even by a caller who knew the convention.**
+  `Bill.nextTickToSearchForIngredients` has exactly one writer
+  (`WorkGiver_DoBill.StartOrResumeBillJob`'s failed-search branch,
+  `TicksGame + ReCheckFailedBillTicksRange.RandomInRange`) and
+  `ReCheckFailedBillTicksRange` is `new IntRange(500, 600)`. **Ten game
+  seconds, rearmed on every failure.** So the field CANNOT "sit in the future
+  for days", as both the m1-20260901 post-mortem and the issue say — what it
+  does is sit in the future essentially always while a bill is starving, which
+  is worse, because one sample cannot distinguish one failed search from ten
+  thousand and the raw number invites the reader to think it can. The
+  post-mortem's `3606060` was about 1,000 ticks ahead of `now`, not days.
+
+  The consequence for observers generally: **a published field that requires
+  the caller to hold a second field to interpret is not published.** `bills`
+  now emits `ingredient_search` — a named state, the wake tick, the wait, and a
+  consecutive-failure count derived by AutoRimmer's own 250-tick sampler
+  (`BillWatch`), sampling faster than the minimum back-off so no distinct
+  failure can slip between two samples. The count says in the same block that
+  it is a floor observed since the watch armed, because a number that pretended
+  to be the colony's whole history would be the same class of lie. The raw tick
+  is still published beside it: `32b9e01` uses it as proof and that use is
+  unaffected.
+
+  **And the two sleep states are different words.** `asleep-will-retry` (backed
+  off, and there IS a usable ingredient) versus
+  `asleep-no-matching-ingredient` (backed off, and nothing on the map can ever
+  satisfy it). Only the second needs the agent, and presenting them identically
+  is what let twenty days pass.
