@@ -81,6 +81,11 @@ namespace AutoRimmer
         // The digest's window is tighter still: that verb is documented as
         // called constantly.
         private const int DigestScanCap = 60;
+        // Stalled ROWS in the digest. Small because the digest is context-
+        // budgeted and because the list is sorted oldest-first, so six is the
+        // six worst; `stalled_count` is uncapped and `stalled_more` says what
+        // was hidden.
+        private const int DigestStalledCap = 6;
 
         // States, as tokens. The precedence between them is a RESOLUTION and is
         // stated in DESIGN:
@@ -308,6 +313,15 @@ namespace AutoRimmer
                         row["percent"] = item["percent"];
                         if (item["work_left"] is double wl) lWorkLeft += (float)wl;
                     }
+                    // The stall block (git-bug f9dadc7), carried through so a
+                    // layout read answers "how long has this element been like
+                    // this" without a second call per element.
+                    row["state_since_tick"] = item["state_since_tick"];
+                    row["state_age_ticks"] = item["state_age_ticks"];
+                    row["state_age_days"] = item["state_age_days"];
+                    row["age_basis"] = item["age_basis"];
+                    row["stalled"] = item["stalled"];
+                    row["tracked_since_tick"] = item["tracked_since_tick"];
 
                     Bump(layoutByState, item["state"] as string ?? StateReady);
                     if (item["missing"] is List<object> miss)
@@ -553,6 +567,37 @@ namespace AutoRimmer
                 ["skill_blocked"] = skillBlocked,
                 ["work_left"] = Math.Round(workLeft, 1),
             };
+            // THE ROLL-UP THAT ANSWERS "HAS THIS MOVED" (git-bug f9dadc7 item 2).
+            // A dictionary walk with no Verse access — see ConstructionWatch —
+            // so it is affordable here, and it covers the SAMPLER's 300-item
+            // window rather than this section's 60-item one.
+            //
+            // A COUNT ALONE WOULD REPEAT THE DEFECT, so the rows come with it:
+            // def, cell, layout, age, and `why` in the one vocabulary
+            // `construction`'s items and `advance`'s `unresolved_items` also
+            // speak.
+            int nowTick = 0;
+            try { nowTick = Find.TickManager.TicksGame; } catch { }
+            d["stalled"] = ConstructionWatch.Stalled(map, nowTick, DigestStalledCap,
+                out int stalledTotal);
+            d["stalled_count"] = stalledTotal;
+            d["stall_after_ticks"] = ConstructionWatch.StallTicks;
+            d["tracked_since_tick"] = ConstructionWatch.StartedTick;
+            if (stalledTotal > DigestStalledCap) d["stalled_more"] = stalledTotal - DigestStalledCap;
+            // Presence is the signal, so this note appears ONLY while tracking
+            // is too young to answer — which is the honest reading of an empty
+            // `stalled[]` for the first two in-game days after any load.
+            // `AgentGameComponent` has no ExposeData, so a reload restarts the
+            // clock (the orchestrator's resolution on f9dadc7 accepts that; what
+            // it does not accept is a reload silently reporting "not stalled").
+            if (!ConstructionWatch.TrackingOlderThanStall(nowTick))
+                d["stalled_note"] = "stall tracking began at tick "
+                    + (ConstructionWatch.StartedTick ?? "(not yet started)")
+                    + ", less than " + ConstructionWatch.StallTicks + " ticks ago, so `stalled` "
+                    + "is a FLOOR and an empty list here does NOT mean nothing is stuck. "
+                    + "Tracking is in memory and restarts at every load, new game and return to "
+                    + "the main menu. Each element's own `stalled` is true | false | null and "
+                    + "`null` means exactly this.";
             // Presence is the signal, the same rule Dev.NoteFog follows: the cap
             // only appears when it actually bit, so a reader never compares a
             // zero against a missing key.
@@ -598,6 +643,11 @@ namespace AutoRimmer
         // report that disagreed with `construction` about the same blueprint
         // would be the worst kind of instrument.
         internal static Dictionary<int, Pawn> WorkerIndexFor(Map map) => WorkerIndex(map);
+
+        // The same snapshot `construction` reads, for `ConstructionWatch`'s
+        // sampler — not a second enumeration, so the watch and the verb can
+        // never disagree about which things exist.
+        internal static List<Thing> ConstructiblesFor(Map map) => Constructibles(map);
 
         internal static string LiveStateOf(Map map, Thing t, Dictionary<int, Pawn> index,
             ConstructionSkill.Roster roster) => Probe(map, t, index, roster, out _, out _);
@@ -807,6 +857,17 @@ namespace AutoRimmer
                     ? Math.Round(Math.Min(1f, frame.workDone / total), 4)
                     : (object)null;
             }
+
+            // HOW LONG IT HAS BEEN LIKE THIS (git-bug f9dadc7). Five keys, ALWAYS
+            // published so a caller cannot mistake an absent one for a healthy
+            // one: `state_since_tick`, `state_age_ticks`, `state_age_days`,
+            // `age_basis` and the tri-state `stalled` (true | false | null).
+            // `null` is "tracking cannot answer yet" and is precisely what an
+            // untracked or freshly-reloaded element must say instead of a zero
+            // that reads as clean. See ConstructionWatch.cs's header.
+            int nowTick = 0;
+            try { nowTick = Find.TickManager.TicksGame; } catch { }
+            ConstructionWatch.Look(t, nowTick).Fill(d);
             return d;
         }
 

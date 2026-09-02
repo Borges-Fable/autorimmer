@@ -169,6 +169,44 @@ it becomes. Ledger: log only firings (`verdict:"action"`), per
 - retire-when: nothing retires this; it is the read that would have caught the
   wipe.
 
+### construction-stalled
+- when: turn
+- applies-when: `digest.construction.blueprints + frames > 0`
+- read: `digest` → **`construction.stalled`** (a LIST), `construction.stalled_count`,
+  `construction.tracked_since_tick`, and `construction.no_builder`.
+- flag: `stalled_count > 0`. Each row names `def`, `at`, `state`, `layout_id`,
+  `state_age_days` and **`why`** — one sentence naming the cause in the same
+  vocabulary `construction`'s items use.
+- act: branch on the row's `state`, never on the count:
+  `no-builder` → **the skill ceiling**, see `somebody-can-actually-build-it`
+  in triggered.md; hauling and unforbidding change nothing ·
+  `awaiting-materials` → `things {def, detail:true}` for `forbidden`, then
+  `unforbid` / allowed-area / mine, per `materials-designation-loop` ·
+  `blocked` → the row's `why` names the obstacle; `designate` it away ·
+  `ready` → nobody has taken it: work priorities, reachability or a
+  reservation. Then `cancel-layout` / `construction {placement_id}` if the
+  element is no longer wanted at all.
+- **Absence is not clean here.** `stalled` is empty *and*
+  `construction.stalled_note` is present means tracking is younger than the
+  two-day threshold and CANNOT answer yet — every reload restarts it, because
+  the tracker is in memory by design (`AgentGameComponent` has no
+  `ExposeData`; scribing from the observation surface is a separate hazard,
+  git-bug d16a463). Per element, `stalled` is a tri-state: `true` · `false` ·
+  `null` = *not known yet*. Never read `null` or an absent age as healthy.
+- why: `awaiting_materials` sat at **22 for twenty consecutive in-game days**
+  on run m1-20260901 — days 38 to 57, uncapped, a true census every time — and
+  the agent read it every turn. A scalar tells you the size of a set and never
+  its age, and fifteen identical reads and one read are the same envelope.
+  Banking yesterday's count in the caller is the failure mode
+  [[read-every-return-or-lose-a-colonist]] was written about: a derived fact
+  that exists only if the caller remembers to derive it will eventually not be
+  derived. The mod holds the tick, so the mod holds the transition. git-bug
+  f9dadc7.
+- becomes: `advance until:{condition:{path:"construction.stalled_count", eq:0}}`
+  once 1.6 can address it.
+- retire-when: never. There is no alert for a blueprint that never completes;
+  `Alert_ColonistsIdle` fires for the opposite symptom and often not at all.
+
 ### hostiles-standing
 - when: turn
 - read: `digest` → `threats.hostiles_unpardoned` (fall back to

@@ -3550,3 +3550,77 @@ queue by default (an agent flailing mid-experiment must not page triage).
   window), so the literal "30 unforbidden reachable" figure is corroborated
   rather than read back — but completion-by-Lacey-after-the-raise is stronger
   evidence than the envelope would have been.
+
+- 2026-09-02 (git-bug f9dadc7) — **A SCALAR TELLS YOU THE SIZE OF A SET, NEVER
+  ITS AGE — and the fix publishes what it does NOT know.**
+  `digest.construction.awaiting_materials` sat flat while the agent read it
+  every turn, and fifteen identical reads and one read were the same envelope.
+  **Measured rather than assumed: it was 22 for TWENTY consecutive in-game days,
+  days 38 to 57 of run m1-20260901, not the fifteen the issue claims** — and
+  that window carries no `more`/`cap`/`cap_note`, with 22-25 elements against a
+  60-item scan cap, so every one of those twenty readings was a true census and
+  not a floor. The same directory shows a flat 60 across days 13-18 and a flat
+  24 across 21-24 and 31-36. This is the shape of the whole run.
+  (`digests/day-1.json` is a mislabelled day-62-era snapshot and days 2-9, 28,
+  32 and 35 are absent, so 12 of 66 day-boundary digests are effectively
+  missing — worth knowing before quoting that directory.)
+
+  **The state lives in memory and NOWHERE ELSE.** `AgentGameComponent` has no
+  `ExposeData`, so nothing it holds survives a save/load, and the obvious repair
+  — scribing a tracking dictionary — is refused here: writing scribed state from
+  the observation surface is a live hazard class (git-bug d16a463,
+  `_mp/DETERMINISM.md`). `ConstructionWatch` is therefore `BillWatch`'s shape one
+  surface over: a static dictionary keyed by `thingIDNumber`, sampled from
+  `GameComponentTick` every 2,500 ticks, cleared by `GameBoundary`.
+
+  **THE THIRD STATE IS THE WHOLE POINT.** `stalled` is a TRI-STATE — `true` (in
+  this state for at least two in-game days) · `false` (observed entering it more
+  recently) · **`null` (tracking cannot answer yet)** — and `null` is never
+  "clean". `age_basis` says which kind of age it is: `observed-transition` is
+  exact, `since-first-seen` is a FLOOR because the element was already in that
+  state when tracking began, `not-tracked` is no measurement at all. FIRST SIGHT
+  COUNTS NOTHING, exactly as BillWatch's rule reads, and for the same reason. A
+  floor OVER the threshold is still proof; a floor under it proves nothing and
+  must answer `null`. Per [[acceptance-suites-must-prove-shapes]], an absent or
+  zero age reading as healthy is the original defect repeated one layer in.
+
+  **The threshold is elapsed time, not a calendar count.** The issue asks for
+  ">= 2 day boundaries". A half-open window of exactly `2 * GenDate.TicksPerDay`
+  contains at least two multiples of `TicksPerDay`, so `age >= 120000` implies
+  two boundaries crossed and never the reverse — the conservative direction, and
+  it costs no `WorldGrid.LongLatOf` on a hot path. `GenLocalDate.DayOfSeason`
+  (what `digest.time` publishes) is offset from `TicksGame % 60000` by the start
+  hour and the tile's longitude, so counting its increments would have needed a
+  per-element longitude lookup to gain nothing.
+
+  **The key is the live thing's `thingIDNumber`**, so a blueprint that becomes a
+  Frame — or the blueprint `Frame.FailConstruction` puts back — starts a new
+  clock. Both are real state changes (the materials arrived; the work was lost),
+  so losing the age there is correct rather than a limitation. The case the
+  issue exists for, a blueprint nobody ever touches, keeps one id for its whole
+  life.
+
+  **`stalled[]` covers four states, two more than the issue names.**
+  `awaiting-materials` and `blocked` are the contract; `no-builder` is added
+  because it is EXACTLY the run's own Heater and excluding it would drop the
+  headline example out of the headline report, and `ready` is added because
+  materials-present-and-nobody-on-it for two days is the README's third triage
+  branch and a genuine stall. `in-progress` is excluded: the clock restarting
+  when a pawn picks the thing up is the correct behaviour.
+
+  **The cost, and why it is where it is.** The sampler probes through
+  `ConstructionVerbs.Probe`, which makes NO `GetStatValueAbstract` call — the
+  state token does not depend on `WorkToBuild`, which is the whole reason it can
+  run inside the tick loop. Display facts (def, cell, layout id, `why`) are
+  cached on the row at first sight, so the digest's roll-up is a dictionary walk
+  with zero Verse access — and it therefore covers the sampler's 300-item window
+  rather than the digest's own 60-item one. `Placements.For` and
+  `Layouts.Owning` are both linear scans and are walked ONCE per element, at
+  first sight, never per sample.
+
+  **One vocabulary for two issues, deliberately.** e08c3e5 adds the skill branch
+  and this issue adds the time dimension to the same triage, so both land as
+  `state` + a one-sentence `why` (`ConstructionVerbs.Why`) carried identically
+  by `construction`'s items, `digest.construction.stalled[]` and `advance
+  {until:{layout}}`'s `unresolved_items`. Split across two workers they would
+  have been two answers to "why is there no worker".

@@ -82,6 +82,15 @@ namespace AutoRimmer
             // Returns on its first line 249 ticks out of every 250.
             try { BillWatch.Tick(); }
             catch { }
+            // git-bug f9dadc7. The third of the same kind, one cadence slower
+            // than the bill watch and for the mirror-image reason: an element's
+            // stall is measured in DAYS, so a per-FRAME observer would count
+            // wall-clock while the agent sat thinking, and — the case this
+            // issue is about — an advance that runs twenty in-game days would
+            // be sampled by nothing at all if the tracker lived on the read
+            // path. Returns on its first line 2,499 ticks out of every 2,500.
+            try { ConstructionWatch.Tick(); }
+            catch { }
             try { JournalVerbs.TickErrorFixture(); }
             catch { }
             try { JournalVerbs.TickCasualtyFixture(); }
@@ -117,6 +126,11 @@ namespace AutoRimmer
             // A failed-search count carried across a reload would be
             // attributed to bills that no longer exist (git-bug d9d6c12).
             BillWatch.Reset();
+            // An element age carried across a reload would be attributed to
+            // blueprints that no longer exist (git-bug f9dadc7). The clock
+            // restarting is expected; `tracked_since_tick` and the tri-state
+            // `stalled` are what make it honest rather than silent.
+            ConstructionWatch.Reset();
             // Fixtures armed against the colony that just went away.
             JournalVerbs.MainMenuAtTick = -1;
             JournalVerbs.ErrorAtTick = -1;

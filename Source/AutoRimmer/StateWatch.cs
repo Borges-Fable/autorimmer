@@ -775,6 +775,8 @@ namespace AutoRimmer
             try { map = Find.CurrentMap; } catch { }
             var index = map == null ? null : ConstructionVerbs.WorkerIndexFor(map);
             var roster = map == null ? null : ConstructionSkill.Read(map);
+            int now = 0;
+            try { now = Find.TickManager.TicksGame; } catch { }
             for (int i = 0; i < p.LivePlacements.Count && rows.Count < OutstandingCap; i++)
             {
                 var pl = p.LivePlacements[i];
@@ -802,6 +804,9 @@ namespace AutoRimmer
                     // never finished never has to learn a second set of words.
                     row["why"] = why;
                     if (skill != null && skill.Gated) row["skill"] = skill.Out();
+                    // …and how long it has been that way, which is what turns
+                    // "still outstanding" into "outstanding since tick N".
+                    ConstructionWatch.Look(live, now).Fill(row);
                 }
                 rows.Add(row);
             }

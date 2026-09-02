@@ -302,8 +302,9 @@ one is why a layout that can never finish is worth more than a fixed-tick
 advance.
 
 **The triage, in one vocabulary.** Every unresolved element — in
-`unresolved_items` and in `construction`'s `items[]` — carries a `state` and a
-one-sentence `why`. Branch on the state:
+`unresolved_items`, in `construction`'s `items[]`, and in the digest's
+`construction.stalled[]` — carries a `state` and a one-sentence `why`. Branch on
+the state:
 
 | `state` | what it means | the lever |
 |---|---|---|
@@ -324,6 +325,24 @@ raised a colonist's Construction. The gate is
 `RimWorld/GenConstruct.cs CanConstruct`'s `checkSkills` branch, and it fires for
 the DELIVERY work giver as well as the finishing one, which is why the ceiling
 can wear either the first costume or the fourth.
+
+**And the time dimension.** Every one of those rows also carries
+`state_since_tick`, `state_age_ticks`, `state_age_days`, `age_basis` and a
+tri-state `stalled`:
+
+* `stalled: true` — in this state for at least two in-game days.
+* `stalled: false` — observed entering this state more recently than that.
+* `stalled: null` — **tracking cannot answer yet.** Not "fine".
+
+`age_basis` says which kind of age it is: `observed-transition` is exact,
+`since-first-seen` is a FLOOR (the element was already in this state when
+tracking started), `not-tracked` is no measurement at all. Stall tracking is in
+memory and restarts at every load, new game and return to the main menu —
+`digest.construction.tracked_since_tick` says when, and
+`construction.stalled_note` appears while it is too young to answer. git-bug
+f9dadc7: `awaiting_materials` sat at 22 for twenty straight in-game days on run
+m1-20260901 and no read could say so, because a scalar tells you the size of a
+set and never its age.
 
 ```
 rwa advance --until.layout ly-1 --timeout_ticks 60000 --json \
