@@ -1161,8 +1161,13 @@ namespace AutoRimmer
                 throw new VerbArgsException(SpecialShapeMsg);
         }
 
+        // `clampCategories` — git-bug eef837a item 2, and it is ON ONLY FOR
+        // BILLS. Passed through to `Toggle`, where it decides whether a
+        // CATEGORY allow is restricted to the defs the widget would have
+        // drawn a row for.
         public static List<object> Apply(ThingFilter filter, ThingFilter parentFilter, string universeName,
-            VerbArgs a, out List<string> refused, List<SpecialThingFilterDef> hidden = null)
+            VerbArgs a, out List<string> refused, List<SpecialThingFilterDef> hidden = null,
+            bool clampCategories = false)
         {
             var ops = new List<object>();
             refused = new List<string>();
@@ -1194,8 +1199,8 @@ namespace AutoRimmer
             }
 
             // ---- per-def and per-category ------------------------------------
-            Toggle(filter, parentFilter, a, "allow", true, ops, refused);
-            Toggle(filter, parentFilter, a, "disallow", false, ops, refused);
+            Toggle(filter, parentFilter, a, "allow", true, ops, refused, clampCategories, hidden);
+            Toggle(filter, parentFilter, a, "disallow", false, ops, refused, false, hidden);
 
             // ---- the special filters ------------------------------------------
             if (a.Has("special"))
@@ -1236,7 +1241,8 @@ namespace AutoRimmer
         // the third and has its own arg, because its value is a tri-state the
         // caller must state rather than infer).
         private static void Toggle(ThingFilter filter, ThingFilter parentFilter, VerbArgs a, string key,
-            bool allow, List<object> ops, List<string> refused)
+            bool allow, List<object> ops, List<string> refused, bool clampCategories = false,
+            List<SpecialThingFilterDef> hidden = null)
         {
             if (!a.Has(key)) return;
             foreach (var name in a.StrList(key))
@@ -1274,18 +1280,60 @@ namespace AutoRimmer
                     continue;
                 }
                 // The category checkbox: `filter.SetAllow(node.catDef, on,
-                // forceHiddenDefs, hiddenSpecialFilters)`. It walks
-                // DescendantThingDefs regardless of the parent filter, and that
-                // is harmless (the allowance is dead for anything the parent
-                // rejects), so this matches vanilla exactly.
+                // forceHiddenDefs, hiddenSpecialFilters)`.
+                //
+                // ============ git-bug eef837a item 2 ==========================
+                // THE ASYMMETRY THAT REPORTED A CHANGE THAT EVAPORATED. The
+                // per-DEF branch above refuses a def the parent filter
+                // disallows, because `Listing_TreeThingFilter.Visible` draws no
+                // row for it. This branch used to not, on the argument that
+                // "the allowance is dead for anything the parent rejects, so
+                // this matches vanilla exactly" — true for a STORAGE filter,
+                // and false for a BILL, because a bill's over-wide allowance is
+                // not merely dead, it is DELETED:
+                //
+                //   RimWorld/Bill.cs ExposeData, in the SAVING pass:
+                //     if (Scribe.mode == Saving && recipe.fixedIngredientFilter != null)
+                //         foreach (ThingDef d in DefDatabase<ThingDef>.AllDefs)
+                //             if (!recipe.fixedIngredientFilter.Allows(d))
+                //                 ingredientFilter.SetAllow(d, false);
+                //
+                // So `bill-set {allow:["Corpses"]}` on a ButcherCorpseFlesh bill
+                // reported `defs_delta: 39` and the next autosave silently
+                // removed six of them (mechanoid and drone corpses, which
+                // `fixedIngredientFilter.disallowedCategories` rejects) — a
+                // number that was never true for longer than one autosave.
+                // Measured, not argued: run m1-20260901's day-46 save has the
+                // bill at 121 defs and its day-66 save at 154, not 160.
+                //
+                // `clampCategories` restricts the write to the defs the widget
+                // would have DRAWN — `Visible`'s own four clauses — which is
+                // both what the player can actually toggle and what survives
+                // the save. Everything else becomes a `refused` line naming the
+                // mechanism. OFF for storage, whose parent filter carries no
+                // such save-time narrowing and whose behaviour must not move.
+                // ==============================================================
+                var excepted = clampCategories ? Invisible(cat, parentFilter) : null;
+                if (excepted != null && excepted.Count > 0)
+                    refused.Add($"'{cat.defName}' allowed, but {excepted.Count} def(s) under it are "
+                        + "outside the recipe's fixedIngredientFilter and were NOT written: "
+                        + Names(excepted) + ". Bill.ExposeData strips exactly these during the "
+                        + "SAVING pass, so writing them would report a delta that the next "
+                        + "autosave silently undoes, and Listing_TreeThingFilter.Visible draws no "
+                        + "row for any of them — the player has no such checkbox either.");
                 int before = filter.AllowedDefCount;
-                filter.SetAllow(cat, allow);
+                if (excepted != null && excepted.Count > 0) filter.SetAllow(cat, allow, excepted, hidden);
+                else filter.SetAllow(cat, allow);
                 ops.Add(new Dictionary<string, object>
                 {
                     ["op"] = allow ? "allow" : "disallow",
                     ["kind"] = "category",
                     ["def"] = cat.defName,
+                    // THE DELTA THAT PERSISTS, which is the only delta worth
+                    // reporting. Before eef837a this counted writes that
+                    // Bill.ExposeData was about to undo.
                     ["defs_delta"] = filter.AllowedDefCount - before,
+                    ["defs_withheld"] = excepted == null ? 0 : excepted.Count,
                 });
             }
         }
@@ -1293,6 +1341,49 @@ namespace AutoRimmer
         private static bool Allows(ThingFilter f, ThingDef def)
         {
             try { return f.Allows(def); } catch { return true; }
+        }
+
+        // `Verse/Listing_TreeThingFilter.cs Visible(ThingDef)`, the PARENT-
+        // FILTER half of it. A def with no row is a control the player does
+        // not have, so a category click must not toggle it — which is exactly
+        // what `SetAllow(cat, allow, exceptedDefs, …)`'s third argument is for
+        // (the widget itself passes `forceHiddenDefs` there).
+        //
+        // DELIBERATELY NOT Visible's other two clauses (`!PlayerAcquirable`,
+        // `virtualDefParent != null`). Those hide a ROW; they do not decide
+        // what survives a save, and `Bill.ExposeData`'s narrowing keys on
+        // `fixedIngredientFilter.Allows(d)` and nothing else. Withholding on a
+        // clause the persistence argument does not reach would be a behaviour
+        // change with no evidence behind it, and this method is called on the
+        // path that writes a live filter.
+        private static List<ThingDef> Invisible(ThingCategoryDef cat, ThingFilter parentFilter)
+        {
+            var list = new List<ThingDef>();
+            if (parentFilter == null) return list;
+            try
+            {
+                foreach (var td in cat.DescendantThingDefs)
+                {
+                    if (td == null) continue;
+                    if (!parentFilter.Allows(td)
+                        || parentFilter.IsAlwaysDisallowedDueToSpecialFilters(td))
+                        list.Add(td);
+                }
+            }
+            catch { }
+            return list;
+        }
+
+        private const int WithheldNameCap = 8;
+
+        private static string Names(List<ThingDef> defs)
+        {
+            var names = new List<string>();
+            for (int i = 0; i < defs.Count && i < WithheldNameCap; i++) names.Add(defs[i].defName);
+            names.Sort(StringComparer.Ordinal);
+            string s = string.Join(", ", names.ToArray());
+            if (defs.Count > WithheldNameCap) s += ", … (" + (defs.Count - WithheldNameCap) + " more)";
+            return s;
         }
 
         // The four Ideology diet filters BOTH call sites force-hide:

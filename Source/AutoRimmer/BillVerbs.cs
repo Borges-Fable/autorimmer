@@ -268,6 +268,27 @@ namespace AutoRimmer
                 // from the recipe (Uft / mech resurrection / gestation /
                 // forming / plain production). Never `new Bill_Production(…)`:
                 // a modded recipe with formingTicks would get the wrong class.
+                //
+                // AND IT IS ALSO WHAT GIVES THE BILL ITS FILTER (git-bug
+                // eef837a item 1). Every branch of MakeNewBill ends in a
+                // `Bill(RecipeDef, Precept_ThingStyle)` ctor, whose body is:
+                //
+                //     ingredientFilter = new ThingFilter();
+                //     ingredientFilter.CopyAllowancesFrom(recipe.defaultIngredientFilter);
+                //
+                // and `Verse/RecipeDef.cs ResolveReferences` guarantees
+                // `defaultIngredientFilter` is non-null — where the XML omits
+                // it, the game builds one and copies `fixedIngredientFilter`
+                // into it. So a bill added here gets EXACTLY the filter the
+                // Add Bill button produces, because it is the same call. That
+                // was already true when eef837a was filed (the run's own
+                // day-46 save has the bill at 121 `CorpsesAnimal` defs, which
+                // is `ButcherCorpseFlesh.defaultIngredientFilter` exactly);
+                // what was missing was any way to SEE it, which is what the
+                // `diagnosis` block below is for. `filter_defs` vs
+                // `recipe_default_defs` is the assertion in published form:
+                // if a Harmony patch or a modded override ever breaks this,
+                // the two numbers disagree in the verb's own result.
                 bill = recipe.MakeNewBill();
                 stack.AddBill(bill);
             }
@@ -323,10 +344,23 @@ namespace AutoRimmer
                 // The two windows FillTab's Add delegate would have raised,
                 // re-derived. Both force-pause (spec 1.7).
                 ["warnings"] = warnings,
+                // git-bug eef837a item 1. THE VERB ANSWERS ITS OWN QUESTION
+                // BEFORE THE CALLER HAS TO ASK IT: the filter the new bill
+                // got, whether it equals the recipe's own default, and how
+                // many things on this map the bill can actually use right now.
+                // `bill-add` used to return `ok:true` for a bill that could
+                // never produce anything, and the agent found out five game
+                // days later.
+                ["diagnosis"] = BillIngredients.Diagnose(map, bench, bill, true,
+                    BillIngredients.ThingCap),
                 ["bills"] = StackLines(stack),
                 ["bill_slots_free"] = Math.Max(0, BillStack.MaxCount - stack.Count),
                 ["action"] = Stamp(seq),
-                ["note"] = "a bill is not a job: a colonist with the bench's work type enabled picks it up "
+                ["note"] = "READ `diagnosis.health` BEFORE ANYTHING ELSE — `workable` means a thing on "
+                    + "this map passes the whole ingredient predicate right now, and "
+                    + "`no-matching-ingredient` means this bill will sit here producing nothing "
+                    + "until `diagnosis.remedy` is done. "
+                    + "a bill is not a job: a colonist with the bench's work type enabled picks it up "
                     + "on its next think tick (WorkGiver_DoBill), and only if the ingredients are "
                     + "reachable and unforbidden. If the bench has a CompRefuelable and is empty, "
                     + "WorkGiver_DoBill.JobOnThing yields a REFUEL job first. Advance and re-read "
@@ -398,6 +432,14 @@ namespace AutoRimmer
                     ["recipe"] = bill.recipe?.defName,
                     ["changed"] = changed,
                     ["refused"] = refusedFields,
+                    // git-bug eef837a items 2 and 3. THE STATE AFTER THE WRITE,
+                    // read back from the model rather than echoed from the
+                    // arguments — "39 defs added" is what the caller asked for,
+                    // and `diagnosis.filter_defs` is what the bill has. The run
+                    // that motivated this had no way to tell the two apart
+                    // except by making another call and misreading it.
+                    ["diagnosis"] = BillIngredients.Diagnose(map, bench, bill, true,
+                        BillIngredients.ThingCap),
                 });
             }
 
@@ -1690,8 +1732,16 @@ namespace AutoRimmer
             }
             catch { }
 
+            // `clampCategories: true` — git-bug eef837a item 2. The per-def
+            // path already refused a def outside `fixedIngredientFilter`; the
+            // CATEGORY path did not, and the difference is what let
+            // `bill-set {allow:["Corpses"]}` report `defs_delta: 39` for a
+            // write `Bill.ExposeData` then partly undid at the next autosave.
+            // The whole argument is at the `clampCategories` branch in
+            // StorageVerbs.cs StorageFilterOps.Toggle. Storage keeps the old
+            // behaviour — no ExposeData narrowing applies there.
             var applied = StorageFilterOps.Apply(bill.ingredientFilter, bill.recipe.fixedIngredientFilter,
-                "recipe-fixed", a, out var refusedDefs, hidden);
+                "recipe-fixed", a, out var refusedDefs, hidden, clampCategories: true);
             foreach (var r in refusedDefs) No("filter", "outside-fixed-filter", r);
             if (applied.Count > 0)
                 Note("filter", new Dictionary<string, object>
@@ -1699,10 +1749,51 @@ namespace AutoRimmer
                     ["ops"] = applied,
                     ["summary"] = SafeObj(() => FilterSummary.Build(
                         bill.ingredientFilter, bill.recipe.fixedIngredientFilter, "recipe-fixed")),
+                    // THE READ-BACK, at write time. `will_not_persist` runs
+                    // `Bill.ExposeData`'s own narrowing predicate over the
+                    // filter as it now stands and reports what a save would
+                    // remove. With the category clamp above it should always
+                    // be empty; it is published anyway, because "should" is
+                    // not evidence and a modded filter with its own SetAllow
+                    // override can still get there.
+                    ["will_not_persist"] = WillNotPersist(bill),
                     ["note"] = "Bill.ExposeData NARROWS this filter during the SAVING pass for any recipe "
                         + "with a fixedIngredientFilter (DESIGN decisions log 2026-08-31), so an autosave "
-                        + "can change what a later read reports with no player action. Read it live.",
+                        + "can change what a later read reports with no player action. Read it live. "
+                        + "As of git-bug eef837a this verb no longer WRITES anything that narrowing would "
+                        + "remove: a category allow is clamped to the recipe's fixed filter and the "
+                        + "withheld defs are listed in `refused`, so `defs_delta` is the delta that "
+                        + "survives a save. `will_not_persist` is the assertion, published per call.",
                 });
+        }
+
+        // `RimWorld/Bill.cs ExposeData`'s SAVING-pass narrowing, run as a
+        // QUESTION rather than as a write (git-bug eef837a item 2):
+        //
+        //     foreach (ThingDef d in DefDatabase<ThingDef>.AllDefs)
+        //         if (!recipe.fixedIngredientFilter.Allows(d))
+        //             ingredientFilter.SetAllow(d, false);
+        //
+        // …asked over the defs the bill's filter currently allows, which is the
+        // small set. An empty list means every allowance in this filter
+        // survives the next save; a non-empty one names, at WRITE time, the
+        // allowances that are about to evaporate. Nothing here mutates.
+        private static List<object> WillNotPersist(Bill bill)
+        {
+            var doomed = new List<object>();
+            try
+            {
+                var fixedFilter = bill?.recipe?.fixedIngredientFilter;
+                if (fixedFilter == null || bill.ingredientFilter == null) return doomed;
+                foreach (var def in bill.ingredientFilter.AllowedThingDefs)
+                {
+                    if (def == null || fixedFilter.Allows(def)) continue;
+                    if (doomed.Count >= 12) { doomed.Add("…more"); break; }
+                    doomed.Add(def.defName);
+                }
+            }
+            catch { }
+            return doomed;
         }
 
         // ========================= plumbing =================================
