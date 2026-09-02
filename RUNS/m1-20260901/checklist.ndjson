@@ -45,3 +45,163 @@
 {"day": 37, "tick": 2184577, "item": "armed-roster", "verdict": "action", "reading": "1/3 violence-capable armed: Lacey*=none; Marco*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
 {"day": 37, "tick": 2184577, "item": "production-still-runs", "verdict": "action", "reading": "no meal bill on any bench", "note": "blocked food chain: queue CookMealSimple/Bulk"}
 {"day": 37, "tick": 2184577, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 38, "tick": 2276023, "item": "barracks-heat", "verdict": "ok", "reading": "38=19.9C 52=-8.9C 53=-0.5C 54=-0.6C 64=-0.6C 69=13.7C"}
+{"day": 38, "tick": 2276023, "item": "freezer-below-zero", "verdict": "action", "reading": "53=-0.5C 54=-0.6C 64=-0.6C"}
+{"day": 38, "tick": 2276023, "item": "armed-roster", "verdict": "action", "reading": "1/3 violence-capable armed: Lacey*=none; Marco*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 38, "tick": 2276023, "item": "production-still-runs", "verdict": "action", "reading": "no meal bill on any bench", "note": "blocked food chain: queue CookMealSimple/Bulk"}
+{"day": 38, "tick": 2276023, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 39, "tick": 2305578, "item": "barracks-heat", "verdict": "ok", "reading": "38=20.7C 52=2.4C 53=10.5C 54=10.5C 64=10.5C 69=22.9C"}
+{"day": 39, "tick": 2305578, "item": "freezer-below-zero", "verdict": "action", "reading": "52=2.4C"}
+{"day": 39, "tick": 2305578, "item": "armed-roster", "verdict": "action", "reading": "1/3 violence-capable armed: Lacey*=none; Marco*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 39, "tick": 2305578, "item": "production-still-runs", "verdict": "action", "reading": "no meal bill on any bench", "note": "blocked food chain: queue CookMealSimple/Bulk"}
+{"day": 39, "tick": 2305578, "item": "apparel-margin", "verdict": "action", "reading": "worst worn hp: 81% 30% 96%"}
+{"day": 40, "tick": 2342185, "item": "barracks-heat", "verdict": "ok", "reading": "38=20.1C 52=-8.3C 53=-0.1C 54=-1.3C 64=-1.3C 69=13.8C"}
+{"day": 40, "tick": 2342185, "item": "freezer-below-zero", "verdict": "action", "reading": "53=-0.1C"}
+{"day": 40, "tick": 2342185, "item": "armed-roster", "verdict": "action", "reading": "2/3 violence-capable armed: Lacey*=Gun_Revolver; Marco*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 40, "tick": 2342185, "item": "production-still-runs", "verdict": "action", "reading": "no meal bill on any bench", "note": "blocked food chain: queue CookMealSimple/Bulk"}
+{"day": 40, "tick": 2342185, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 41, "tick": 2416267, "item": "barracks-heat", "verdict": "ok", "reading": "38=20.6C 52=-2.6C 53=4.9C 54=5.3C 64=5C 69=19.5C"}
+{"day": 41, "tick": 2416267, "item": "freezer-below-zero", "verdict": "ok", "reading": "52=-2.6C"}
+{"day": 41, "tick": 2416267, "item": "armed-roster", "verdict": "action", "reading": "2/3 violence-capable armed: Lacey*=Gun_Revolver; Marco*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 41, "tick": 2416267, "item": "production-still-runs", "verdict": "action", "reading": "no meal bill on any bench", "note": "blocked food chain: queue CookMealSimple/Bulk"}
+{"day": 41, "tick": 2416267, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 42, "tick": 2466885, "item": "barracks-heat", "verdict": "ok", "reading": "38=20.7C 52=-8.2C 53=0.1C 54=-1.9C 64=-1C 69=13.2C"}
+{"day": 42, "tick": 2466885, "item": "freezer-below-zero", "verdict": "action", "reading": "53=0.1C"}
+{"day": 42, "tick": 2466885, "item": "armed-roster", "verdict": "action", "reading": "2/3 violence-capable armed: Lacey*=Gun_Revolver; Marco*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 42, "tick": 2466885, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=6.6, rot_days=8.1"}
+{"day": 42, "tick": 2466885, "item": "apparel-margin", "verdict": "action", "reading": "worst worn hp: 79% 29% 94%"}
+{"day": 43, "tick": 2527508, "item": "barracks-heat", "verdict": "ok", "reading": "38=20C 52=-15.5C 53=-7.3C 54=-7.5C 64=-8.1C 69=6.5C"}
+{"day": 43, "tick": 2527508, "item": "freezer-below-zero", "verdict": "ok", "reading": "52=-15.5C 53=-7.3C 54=-7.5C 64=-8.1C"}
+{"day": 43, "tick": 2527508, "item": "armed-roster", "verdict": "action", "reading": "2/3 violence-capable armed: Lacey*=Gun_Revolver; Marco*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 43, "tick": 2527508, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=5.5, rot_days=7"}
+{"day": 43, "tick": 2527508, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 44, "tick": 2584012, "item": "barracks-heat", "verdict": "ok", "reading": "38=19.5C 52=-18.2C 53=-11C 54=-11C 64=-10.6C 69=4C"}
+{"day": 44, "tick": 2584012, "item": "freezer-below-zero", "verdict": "action", "reading": "69=4C"}
+{"day": 44, "tick": 2584012, "item": "armed-roster", "verdict": "action", "reading": "2/3 violence-capable armed: Lacey*=Gun_Revolver; Marco*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 44, "tick": 2584012, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=4.6, rot_days=5.8"}
+{"day": 44, "tick": 2584012, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 45, "tick": 2645993, "item": "barracks-heat", "verdict": "ok", "reading": "38=21C 52=-8.2C 53=-8.1C 54=-8C 64=0C 69=6C"}
+{"day": 45, "tick": 2645993, "item": "freezer-below-zero", "verdict": "ok", "reading": "52=-8.2C 53=-8.1C 54=-8C"}
+{"day": 45, "tick": 2645993, "item": "armed-roster", "verdict": "action", "reading": "2/3 violence-capable armed: Lacey*=Gun_Revolver; Marco*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 45, "tick": 2645993, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=3.5, rot_days=4.7"}
+{"day": 45, "tick": 2645993, "item": "apparel-margin", "verdict": "action", "reading": "worst worn hp: 78% 26% 92%"}
+{"day": 46, "tick": 2702770, "item": "barracks-heat", "verdict": "ok", "reading": "38=20.2C 52=-2.8C 53=-2.8C 54=2.9C 64=5.4C 69=11.4C"}
+{"day": 46, "tick": 2702770, "item": "freezer-below-zero", "verdict": "action", "reading": "54=2.9C"}
+{"day": 46, "tick": 2702770, "item": "armed-roster", "verdict": "action", "reading": "2/3 violence-capable armed: Lacey*=Gun_Revolver; Marco*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 46, "tick": 2702770, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=3.2, rot_days=3.8"}
+{"day": 46, "tick": 2702770, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 47, "tick": 2770158, "item": "barracks-heat", "verdict": "ok", "reading": "38=21C 52=2.3C 53=2.1C 54=2C 64=9.5C 69=8.3C"}
+{"day": 47, "tick": 2770158, "item": "freezer-below-zero", "verdict": "action", "reading": "52=2.3C 53=2.1C 54=2C"}
+{"day": 47, "tick": 2770158, "item": "armed-roster", "verdict": "action", "reading": "2/3 violence-capable armed: Lacey*=Gun_Revolver; Marco*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 47, "tick": 2770158, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=2.4, rot_days=2.7"}
+{"day": 47, "tick": 2770158, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 48, "tick": 2833135, "item": "barracks-heat", "verdict": "ok", "reading": "38=17.8C 52=2.1C 53=2.1C 54=1.5C 64=10.3C 69=-3.6C"}
+{"day": 48, "tick": 2833135, "item": "freezer-below-zero", "verdict": "action", "reading": "52=2.1C 53=2.1C 54=1.5C"}
+{"day": 48, "tick": 2833135, "item": "armed-roster", "verdict": "action", "reading": "2/3 violence-capable armed: Lacey*=Gun_Revolver; Marco*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 48, "tick": 2833135, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0.6, rot_days=0.9"}
+{"day": 48, "tick": 2833135, "item": "apparel-margin", "verdict": "action", "reading": "worst worn hp: 77% 24% 84%"}
+{"day": 49, "tick": 2883315, "item": "barracks-heat", "verdict": "ok", "reading": "38=21.1C 52=-4.1C 53=-4.1C 54=-4.1C 64=4C 69=10C"}
+{"day": 49, "tick": 2883315, "item": "freezer-below-zero", "verdict": "action", "reading": "64=4C"}
+{"day": 49, "tick": 2883315, "item": "armed-roster", "verdict": "action", "reading": "2/3 violence-capable armed: Lacey*=Gun_Revolver; Marco*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 49, "tick": 2883315, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0, rot_days=0.3"}
+{"day": 49, "tick": 2883315, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 50, "tick": 2950148, "item": "barracks-heat", "verdict": "ok", "reading": "38=20.9C 52=1.3C 53=1.3C 54=1.3C 64=9.5C 69=15.5C"}
+{"day": 50, "tick": 2950148, "item": "freezer-below-zero", "verdict": "action", "reading": "52=1.3C 53=1.3C 54=1.3C"}
+{"day": 50, "tick": 2950148, "item": "armed-roster", "verdict": "action", "reading": "2/3 violence-capable armed: Lacey*=Gun_Revolver; Marco*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 50, "tick": 2950148, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0, rot_days=0"}
+{"day": 50, "tick": 2950148, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 51, "tick": 3006323, "item": "barracks-heat", "verdict": "ok", "reading": "38=21.2C 52=-1C 53=-1C 54=-1.1C 64=7.1C 69=13C"}
+{"day": 51, "tick": 3006323, "item": "freezer-below-zero", "verdict": "ok", "reading": "52=-1C 53=-1C 54=-1.1C"}
+{"day": 51, "tick": 3006323, "item": "armed-roster", "verdict": "action", "reading": "2/3 violence-capable armed: Lacey*=Gun_Revolver; Marco*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 51, "tick": 3006323, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0, rot_days=0"}
+{"day": 51, "tick": 3006323, "item": "apparel-margin", "verdict": "action", "reading": "worst worn hp: 76% 20% 80%"}
+{"day": 52, "tick": 3071048, "item": "barracks-heat", "verdict": "ok", "reading": "38=20.5C 52=3.1C 53=3.1C 54=3.2C 64=11.4C 69=17.3C"}
+{"day": 52, "tick": 3071048, "item": "freezer-below-zero", "verdict": "action", "reading": "52=3.1C 53=3.1C 54=3.2C"}
+{"day": 52, "tick": 3071048, "item": "armed-roster", "verdict": "action", "reading": "2/3 violence-capable armed: Lacey*=Gun_Revolver; Marco*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 52, "tick": 3071048, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0, rot_days=0"}
+{"day": 52, "tick": 3071048, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 53, "tick": 3129022, "item": "barracks-heat", "verdict": "ok", "reading": "38=20.7C 52=-0.7C 53=-0.7C 54=-0.6C 64=6.8C 69=13.4C"}
+{"day": 53, "tick": 3129022, "item": "freezer-below-zero", "verdict": "action", "reading": "52=-0.7C 53=-0.7C 54=-0.6C"}
+{"day": 53, "tick": 3129022, "item": "armed-roster", "verdict": "ok", "reading": "2/2 violence-capable armed: Lacey*=Gun_Revolver; Trev*=Gun_BoltActionRifle"}
+{"day": 53, "tick": 3129022, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0, rot_days=0"}
+{"day": 53, "tick": 3129022, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 54, "tick": 3182029, "item": "barracks-heat", "verdict": "ok", "reading": "38=8.1C 52=-0.3C 53=-0.3C 54=2.6C 64=6.6C 69=2.3C"}
+{"day": 54, "tick": 3182029, "item": "freezer-below-zero", "verdict": "action", "reading": "52=-0.3C 53=-0.3C 54=2.6C 69=2.3C"}
+{"day": 54, "tick": 3182029, "item": "armed-roster", "verdict": "ok", "reading": "2/2 violence-capable armed: Lacey*=Gun_Revolver; Trev*=Gun_BoltActionRifle"}
+{"day": 54, "tick": 3182029, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=1.3, rot_days=1.3"}
+{"day": 54, "tick": 3182029, "item": "apparel-margin", "verdict": "ok", "reading": "worst worn hp: 75% 80%"}
+{"day": 55, "tick": 3265004, "item": "barracks-heat", "verdict": "ok", "reading": "38=22.8C 52=15.1C 53=15.1C 54=15C 64=22.3C 69=23C"}
+{"day": 55, "tick": 3265004, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 55, "tick": 3265004, "item": "armed-roster", "verdict": "ok", "reading": "2/2 violence-capable armed: Lacey*=Gun_Revolver; Trev*=Gun_BoltActionRifle"}
+{"day": 55, "tick": 3265004, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=2.2, rot_days=2.2"}
+{"day": 55, "tick": 3265004, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 56, "tick": 3312000, "item": "barracks-heat", "verdict": "ok", "reading": "38=21.3C 52=5.4C 53=5.4C 54=5.3C 64=13.6C 69=19.7C"}
+{"day": 56, "tick": 3312000, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 56, "tick": 3312000, "item": "armed-roster", "verdict": "ok", "reading": "2/2 violence-capable armed: Lacey*=Gun_Revolver; Trev*=Gun_BoltActionRifle"}
+{"day": 56, "tick": 3312000, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0.9, rot_days=0.9"}
+{"day": 56, "tick": 3312000, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 57, "tick": 3364833, "item": "barracks-heat", "verdict": "ok", "reading": "38=20.8C 52=2.1C 53=3C 54=3.6C 64=10.5C 69=17C"}
+{"day": 57, "tick": 3364833, "item": "freezer-below-zero", "verdict": "action", "reading": "52=2.1C 53=3C 54=3.6C"}
+{"day": 57, "tick": 3364833, "item": "armed-roster", "verdict": "ok", "reading": "2/2 violence-capable armed: Lacey*=Gun_Revolver; Trev*=Gun_BoltActionRifle"}
+{"day": 57, "tick": 3364833, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0.4, rot_days=0.4"}
+{"day": 57, "tick": 3364833, "item": "apparel-margin", "verdict": "ok", "reading": "worst worn hp: 75% 78%"}
+{"day": 58, "tick": 3447518, "item": "barracks-heat", "verdict": "action", "reading": "69(Room) 27.6C", "note": "over the 26C ComfyTemperatureMax line where colonists sleep or work"}
+{"day": 58, "tick": 3447518, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 58, "tick": 3447518, "item": "armed-roster", "verdict": "ok", "reading": "2/2 violence-capable armed: Lacey*=Gun_Revolver; Trev*=Gun_BoltActionRifle"}
+{"day": 58, "tick": 3447518, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0.2, rot_days=0.2"}
+{"day": 58, "tick": 3447518, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 59, "tick": 3534825, "item": "barracks-heat", "verdict": "ok", "reading": "38=21.3C 52=12.4C 53=12.3C 54=12.4C 64=20.4C 69=23C"}
+{"day": 59, "tick": 3534825, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 59, "tick": 3534825, "item": "armed-roster", "verdict": "ok", "reading": "2/2 violence-capable armed: Lacey*=Gun_Revolver; Trev*=Gun_BoltActionRifle"}
+{"day": 59, "tick": 3534825, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0, rot_days=0"}
+{"day": 59, "tick": 3534825, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 60, "tick": 3556604, "item": "barracks-heat", "verdict": "ok", "reading": "38=22.9C 52=19.5C 53=19.3C 54=19.1C 64=22.9C 69=25.8C"}
+{"day": 60, "tick": 3556604, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 60, "tick": 3556604, "item": "armed-roster", "verdict": "ok", "reading": "2/2 violence-capable armed: Lacey*=Gun_Revolver; Trev*=Gun_BoltActionRifle"}
+{"day": 60, "tick": 3556604, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0, rot_days=0"}
+{"day": 60, "tick": 3556604, "item": "apparel-margin", "verdict": "ok", "reading": "worst worn hp: 75% 74%"}
+{"day": 61, "tick": 3606145, "item": "barracks-heat", "verdict": "ok", "reading": "38=21.4C 52=13.1C 53=13C 54=13.1C 64=20.3C 69=23.1C"}
+{"day": 61, "tick": 3606145, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 61, "tick": 3606145, "item": "armed-roster", "verdict": "ok", "reading": "2/2 violence-capable armed: Lacey*=Gun_Revolver; Trev*=Gun_BoltActionRifle"}
+{"day": 61, "tick": 3606145, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0, rot_days=0"}
+{"day": 61, "tick": 3606145, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 62, "tick": 3672941, "item": "barracks-heat", "verdict": "ok", "reading": "38=23C 52=17.3C 53=17.3C 54=17.3C 64=23.1C 69=24.6C"}
+{"day": 62, "tick": 3672941, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 62, "tick": 3672941, "item": "armed-roster", "verdict": "action", "reading": "1/2 violence-capable armed: Lacey*=none; Trev*=Gun_BoltActionRifle", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 62, "tick": 3672941, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0, rot_days=0"}
+{"day": 62, "tick": 3672941, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 1, "tick": 3704503, "item": "barracks-heat", "verdict": "ok", "reading": "38=23.1C 52=22.9C 53=22.9C 54=22.9C 64=23C 69=22.9C"}
+{"day": 1, "tick": 3704503, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 1, "tick": 3704503, "item": "armed-roster", "verdict": "ok", "reading": "1/1 violence-capable armed: Trev*=Gun_BoltActionRifle"}
+{"day": 1, "tick": 3704503, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0, rot_days=0"}
+{"day": 1, "tick": 3704503, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 62, "tick": 3718939, "item": "barracks-heat", "verdict": "ok", "reading": "38=22.7C 52=19.6C 53=19.6C 54=19.6C 64=22.8C 69=19.6C"}
+{"day": 62, "tick": 3718939, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 62, "tick": 3718939, "item": "armed-roster", "verdict": "ok", "reading": "1/1 violence-capable armed: Trev*=Gun_BoltActionRifle"}
+{"day": 62, "tick": 3718939, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0, rot_days=0"}
+{"day": 62, "tick": 3718939, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 1, "tick": 3719149, "item": "barracks-heat", "verdict": "ok", "reading": "38=23C 52=19.8C 53=19.8C 54=19.7C 64=22.5C 69=19.8C"}
+{"day": 1, "tick": 3719149, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 1, "tick": 3719149, "item": "armed-roster", "verdict": "ok", "reading": "1/1 violence-capable armed: Trev*=Gun_BoltActionRifle"}
+{"day": 1, "tick": 3719149, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0, rot_days=0"}
+{"day": 1, "tick": 3719149, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 63, "tick": 3720896, "item": "barracks-heat", "verdict": "ok", "reading": "38=22.8C 52=19.9C 53=19.9C 54=19.8C 64=22.9C 69=19.9C"}
+{"day": 63, "tick": 3720896, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 63, "tick": 3720896, "item": "armed-roster", "verdict": "ok", "reading": "1/1 violence-capable armed: Trev*=Gun_BoltActionRifle"}
+{"day": 63, "tick": 3720896, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0, rot_days=0"}
+{"day": 63, "tick": 3720896, "item": "apparel-margin", "verdict": "ok", "reading": "worst worn hp: 72%"}
+{"day": 64, "tick": 3786712, "item": "barracks-heat", "verdict": "ok", "reading": "38=23C 52=21.2C 53=21.2C 54=21.1C 64=23.1C 69=21.2C"}
+{"day": 64, "tick": 3786712, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 64, "tick": 3786712, "item": "armed-roster", "verdict": "ok", "reading": "1/1 violence-capable armed: Trev*=Gun_BoltActionRifle"}
+{"day": 64, "tick": 3786712, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0.1, rot_days=0.1"}
+{"day": 64, "tick": 3786712, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 65, "tick": 3840000, "item": "barracks-heat", "verdict": "ok", "reading": "38=23C 52=18.7C 53=18.8C 54=18.6C 64=23.1C 69=24.8C"}
+{"day": 65, "tick": 3840000, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 65, "tick": 3840000, "item": "armed-roster", "verdict": "ok", "reading": "1/1 violence-capable armed: Trev*=Gun_BoltActionRifle"}
+{"day": 65, "tick": 3840000, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0, rot_days=0"}
+{"day": 65, "tick": 3840000, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 66, "tick": 3919901, "item": "barracks-heat", "verdict": "action", "reading": "69(Room) 36.4C", "note": "over the 26C ComfyTemperatureMax line where colonists sleep or work"}
+{"day": 66, "tick": 3919901, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 66, "tick": 3919901, "item": "armed-roster", "verdict": "ok", "reading": "2/2 violence-capable armed: Trev*=Gun_BoltActionRifle; Kepler*=MeleeWeapon_Knife"}
+{"day": 66, "tick": 3919901, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=0, rot_days=0"}
+{"day": 66, "tick": 3919901, "item": "apparel-margin", "verdict": "action", "reading": "worst worn hp: 72% 43%"}

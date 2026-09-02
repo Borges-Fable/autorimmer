@@ -208,3 +208,78 @@ Whether the colony would have survived a raid. It never met one. Every defensive
 conclusion in this document — posture, armament, the barricade line, flak on the
 rifleman — is untested, and `history`'s `ThreatPoints` column says the
 storyteller was never in a position to test it.
+
+---
+
+# Addendum — the colony died. Days 32–66.
+
+The run continued past the graded 20 days under Evan's superseding goal and
+**ended in a total wipe at tick 3,948,132**. This addendum records what killed
+it, because the shape is not the one the M1 contract was built to catch.
+
+## The colony was never killed by a threat
+
+`history` closing window: `ThreatPoints` peaked at **6.86** (stored ÷10, so ~69
+real points). One raid in 66 days. The gate row G5 spent the whole graded run
+"not exercised" and, when the raid finally came, it took one colonist by
+**kidnap**, not by kill.
+
+What killed six colonists was **food that existed and could not be reached**,
+three times over, by three unrelated mechanisms:
+
+| # | mechanism | how it presented | cost |
+|---|---|---|---|
+| F1 | corpses and meals **forbidden** | `food_days: 0` with meat on the ground | near-miss ×3 |
+| F2 | targets **outside the `Area_Allowed`** | `designate hunt` → `accepted: 6`, nothing happens, ever | **Marco** |
+| F3 | the butcher bill **matched no ingredient** | `filter: null`, `suspended: false`, a corpse on the spot's own cell, `blocked: Missing 1x corpses` | **Lacey, Trev, Kepler** |
+
+F3 is the one that ended it. `bill-set {allow:["Corpses"]}` reported success and
+added 39 defs; the filter read back `null` on the next call — the
+`Bill.ExposeData` narrowing the verb's own note warns about. With `consume`
+answering **`cannot-eat: this pawn cannot ever eat this`** for raw carcasses,
+roughly 600 meat of corpses was permanently inedible and the colony starved
+surrounded by it.
+
+**Root-cause class: `verb-gap`.** Not policy, not execution. Three colonists
+died to a bill-filter defect with no protocol workaround.
+
+## My own errors, separated from the defects
+
+Two, and both cost lives:
+
+- **I sent Lacey at the creepjoiner at 56% health.** I read its def — 55–80 years
+  old, blind, a *poor* knife — and concluded she would win, ignoring that her 56%
+  was raid damage over seven untended wounds. She was down in 980 ticks, and she
+  was the second doctor. Wouter then fought it bare-handed because his hostility
+  response is `Flee` and fleeing put him in reach. Two deaths follow directly.
+- **I stalled the clock twice**, once by running duplicate drivers (each clearing
+  the journal watermark while the other's advance journaled more, so every
+  advance was refused `unread-journal`), once by editing a shell script *while it
+  was executing*. The game sat frozen ~20 minutes across the two.
+
+## The four instances of one defect
+
+`Alert`/letter handling ate, in order: **a bulk-goods trader** (800 silver
+unspent, steel and food short), **two expiring quests**, **Serenity's own joiner
+letter** (rejected a free colonist), and finally — on the closing letter stack —
+**`Quest failed: Breaking Jimmy Out`**. The rescue the kidnap letter promised did
+arrive and expired unread inside a batched driver turn. Jimmy could have come
+home. That is the strongest possible argument for the generalised lesson
+[[batching-turns-costs-you-the-trader]]: the predicate is not the letter's
+subject, it is whether the letter carries a choice.
+
+## Why the run could not be restarted
+
+The `GameEnded` letter offers **"Create new wanderers"**. Taking it opens
+`Dialog_ChooseNewWanderers`, which `dialog-choose` cannot address (not a node
+tree) and `dialog-dismiss` *cancels*. Filed as a second, terminal instance on
+`5cb1f9f`. Per Evan's instruction the game was closed.
+
+## Outputs owed by this addendum
+
+| # | output | rung | covers |
+|---|---|---|---|
+| A-1 | [[a-designation-outside-the-allowed-area-does-nothing]] — **landed**, indexed Critical | playbook | F2 |
+| A-2 | `5cb1f9f` comment: `Dialog_ChooseNewWanderers` is terminal, and `dialog-dismiss` destroys the offer | mod | the ending |
+| A-3 | **A spec issue is owed for F3** — `bill-add` produces a butcher bill matching nothing and `bill-set` does not persist a filter. This killed three colonists and has no workaround | mod | F3 |
+| A-4 | `PLAY-LOOP.md` needs a post-wipe branch: a wipe is not necessarily the end of a run, and `GameEnded` carries a recovery | checklist | the ending |

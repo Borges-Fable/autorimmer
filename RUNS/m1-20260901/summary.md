@@ -311,3 +311,74 @@ at 84% with the bench rebuild queued.
    where I had killed and restarted the driver, and nothing carried the
    obligation across the gap. An unattended run needs the halt to survive a
    driver restart, which no artifact currently guarantees.
+
+---
+
+# THE END — colony wiped at tick 3,948,132, day 66
+
+Six colonists, all dead. Jimmy kidnapped and never recovered.
+
+| tick | day | who | how |
+|---|---|---|---|
+| 1,942,678 | 32 | **Jimmy** | kidnapped by Buoink during the raid, carried off with the bolt-action rifle |
+| 2,028,803 | 33 | **Wouter** | bled out from the creepjoiner fight; no tender existed |
+| 2,043,293 | 34 | **Serenity** | killed by the same creepjoiner, aged 6 |
+| 3,072,772 | 51 | **Marco** | starved, bedridden with abasia |
+| 3,704,369 | 61 | **Lacey** | starved |
+| 3,948,058 | 66 | **Trev** | starved |
+| 3,948,116 | 66 | **Kepler** | starved 58 ticks after Trev — bedridden with abasia, nobody left to feed him |
+
+`history` over the closing window: `FreeColonists` 3 → **0**, `ColonistMood`
+27 → **0** (peak 69), `Wealth_Total` 19,248 → 14,204, `Wealth_Pawns` 2,095 → **0**.
+`ThreatPoints` never exceeded **6.86** (×10 = 69 real points) — this colony was
+never killed by the storyteller. It starved.
+
+## What actually killed it
+
+**Not raids.** One raid in 66 days, and it took one colonist by kidnap. The
+Anomaly creepjoiner took two more because I sent a 56%-health colonist with a
+knife against it. Everything after that was food.
+
+**Three separate mechanisms kept food invisible while it lay on the ground**,
+and each took a colonist to discover:
+
+1. **Forbidden.** `resources.food_days` read 0 with corpses and meals sitting
+   unclaimed. `unforbid` over a rect fixes cells that were forbidden *at the
+   time*; carcasses that appear later need `unforbid {things:[id]}`.
+2. **Outside the allowed area.** Hunt designations returned `accepted: 6` and
+   nothing happened, because the herd had migrated out of the `Area_Allowed`.
+   A designation is a wish; the area is the franchise. Marco starved during that
+   one, and it is now the playbook lesson
+   [[a-designation-outside-the-allowed-area-does-nothing]].
+3. **The butcher bill never matched an ingredient.** `filter: null`,
+   `suspended: false`, `ingredient_radius: unlimited`, a fresh boar corpse lying
+   **on the butcher spot's own cell**, and every `prioritize` returning
+   `blocked: Missing 1x corpses`. `bill-set {allow:["Corpses"]}` reported success,
+   added 39 defs — and read back `null` again, exactly the
+   `Bill.ExposeData NARROWS this filter during the SAVING pass` behaviour the
+   verb's own note warns about.
+
+With (3) unfixable from the protocol and `consume` answering
+**`cannot-eat: this pawn cannot ever eat this`** for raw carcasses, ~600 meat of
+corpses was permanently inedible. The colony died of a broken bill.
+
+## The end state, and why the run could not be continued
+
+The `GameEnded` letter offered **"Create new wanderers"** — Evan's contingency.
+Choosing it opens **`Dialog_ChooseNewWanderers`**, a selection window the protocol
+cannot answer: `dialog-choose` refuses (`no Dialog_NodeTree is open`) and
+`dialog-dismiss` *closes it without answering*, cancelling the new colony. The
+offer stays on the letter stack and re-opens the same unanswerable dialog. This
+is the second instance of `5cb1f9f` and the more serious one — the first merely
+wedged a run, this one **ends it permanently**.
+
+Per Evan's standing instruction — *"start a new one if you can accept the new
+colony prompt… if not, close the game"* — the game is closed here.
+
+## One more thing the record shows
+
+`Quest failed: Breaking Jimmy Out` is on the final letter stack. **The rescue
+opportunity the kidnap letter promised did arrive, and it expired unread inside
+a batched driver turn** — the fourth and last instance of the decision-letter
+defect that also cost Serenity's joiner letter, the bulk-goods trader, and two
+earlier quests. Jimmy could have come home.
