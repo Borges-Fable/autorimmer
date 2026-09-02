@@ -615,6 +615,19 @@ namespace AutoRimmer
                 try { removed = stack.TryRemove(w, doCloseSound: false); }
                 catch (Exception e) { row["error"] = e.GetType().Name + ": " + Journal.Truncate(e.Message, 160); }
                 row["removed"] = removed;
+                // 5cb1f9f: `removed` is true and answers a different question.
+                // Faction.FactionTick re-raises a Dialog_GiveName every 1,000
+                // ticks while the faction/settlement is unnamed, so dismissing
+                // one buys 1,000 ticks and nothing else.
+                if (removed && IsNameDialog(w))
+                {
+                    row["answered"] = false;
+                    row["re_raises_in_ticks"] = 1000;
+                    row["warning"] = "DISMISSED, NOT ANSWERED. RimWorld/Faction.FactionTick raises this "
+                        + "window on `TicksGame % 1000 == 200` while !Faction.OfPlayer.HasName / "
+                        + "!settlement.namedByPlayer, and closing it changes neither — it will be back "
+                        + "in at most 1,000 ticks, forever. Use `dialog-accept`.";
+                }
                 if (!removed && !row.ContainsKey("error"))
                     // The bool is READ, not discarded: a "dismissed" that
                     // silently did nothing is the exact failure mode the order-

@@ -4047,3 +4047,39 @@ queue by default (an agent flailing mid-experiment must not page triage).
   `unread-journal` case: read `unread_after` on the `journal` reply, and page
   from the LAST watermark rather than from seq 0 with a limit that cannot reach
   the tail.
+
+- 2026-09-02 — **The advance loop answers a naming dialog itself, with the
+  game's own generated name. It is the only window the mod answers unprompted,
+  and the reason is that the agent structurally cannot.** `RimWorld/Faction
+  .FactionTick` raises `Dialog_GiveName` on `TicksGame % 1000 == 200`, gated by
+  `NamePlayerFactionAndSettlementUtility.CanNameFactionNow()` /
+  `CanNameSettlementNow(...)`, whose bodies test `!Faction.OfPlayer.HasName` and
+  `!factionBase.namedByPlayer` — **nothing in that predicate is about the
+  window.** So `dialog-dismiss` reports a true `removed: true` and the dialog is
+  back 1,000 ticks later, forever; `dialog-choose` cannot address it at all
+  (a `Dialog_GiveName` has no `DiaOption`s), and no verb writes a text field.
+  An unattended run therefore cannot pass day 4.3, which is what happened in
+  `m1-20260901` (git-bug `5cb1f9f`): Evan typed the name by hand, an invariant
+  breach for a run whose contract says human input is watching only.
+
+  The carve-out is deliberately the narrowest one that clears it. **The widget
+  gate is NOT waived** — unlike waiver 2 above: `Dialog_GiveName
+  .DoWindowContents`' OK branch calls `IsValidName` and `IsValidSecondName`
+  before `Named`/`NamedSecond`, and `dialog-accept` calls both, in that order,
+  so a refusal is the game's refusal and carries its own
+  `invalidNameMessageKey`. What is accepted is the value the WINDOW already
+  holds — every subclass runs `nameGenerator()` in its constructor, so
+  `curName`/`curSecondName` arrive pre-filled with names
+  `NameGenerator.GenerateName(..., IsValidName)` already validated. The mod
+  invents nothing. The method is reproduced rather than called because
+  `DoWindowContents`' first statement reads `Event.current.type`, which is null
+  outside OnGUI; `Messages.Message` is dropped as presentation
+  (`historical:false`), which is 3.2's flick-tutorial rule again.
+
+  Every acceptance journals as an `action` row with `via: "auto"` or
+  `via: "verb"`, so a run report says when and to what the colony was named,
+  and `config.json`'s `autoAnswerNameDialogs:false` turns the sweep off and
+  restores the halt. **Choosing the name — the agent supplying its own text
+  through those same validators — is deliberately not in this change.** It is a
+  play decision rather than an un-wedging, and it is filed separately; accepting
+  the generated name is what makes an unattended run possible today.

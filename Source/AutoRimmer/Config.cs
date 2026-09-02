@@ -7,8 +7,8 @@ namespace AutoRimmer
     // knob has a shipped default; the file exists for bench tuning, not play.
     //
     //   {"alertScanFrames":30, "conditionScanFrames":30, "maxTpsCap":1000,
-    //    "stallFrames":300, "thermalHalveC":93, "thermalResumeC":90,
-    //    "thermalSustainS":30,
+    //    "stallFrames":300, "autoAnswerNameDialogs":true,
+    //    "thermalHalveC":93, "thermalResumeC":90, "thermalSustainS":30,
     //    "thermalPath":"/sys/class/hwmon/hwmon3/temp1_input"}
     //
     // `advanceBudgetMs` was 1.3's per-frame DoSingleTick budget and is GONE:
@@ -68,6 +68,14 @@ namespace AutoRimmer
         // 30 fps cap, ~5s watched.
         public static int StallFrames = 300;
 
+        // git-bug 5cb1f9f. The advance loop answers a `Dialog_GiveName` with
+        // the window's own generated name rather than halting on it, because
+        // the protocol has no other route: nothing writes a text field, and
+        // dismissing gets the window back 1,000 ticks later from
+        // Faction.FactionTick. Off, and every naming dialog halts the advance
+        // and waits for a human — which is what run m1-20260901 did.
+        public static bool AutoAnswerNameDialogs = true;
+
         public static double ThermalHalveC = 93;
         public static double ThermalResumeC = 90;
         public static double ThermalSustainS = 30;
@@ -92,6 +100,8 @@ namespace AutoRimmer
                 if (cfg.TryGetValue("thermalHalveC", out var h) && h is double hc) ThermalHalveC = hc;
                 if (cfg.TryGetValue("thermalResumeC", out var r) && r is double rc) ThermalResumeC = rc;
                 if (cfg.TryGetValue("thermalSustainS", out var s) && s is double sc) ThermalSustainS = Math.Max(1, sc);
+                if (cfg.TryGetValue("autoAnswerNameDialogs", out var an) && an is bool ab)
+                    AutoAnswerNameDialogs = ab;
                 ThermalPath = MiniJson.GetString(cfg, "thermalPath");
             }
             catch { }

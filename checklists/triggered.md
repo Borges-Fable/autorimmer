@@ -392,3 +392,25 @@ to execute.
 - retire-when: the mod stops advancing when its client goes away (a
   client-liveness deadline on `TimeDriver`), or `advance` becomes something
   a dead client rolls back.
+
+### colony-naming
+- when: event: a `Dialog_GiveName` appears — `interactions` or a `dialog` halt
+  payload reports `kind: "name-entry"`. It falls due at **day ~4.3, not at
+  colony start**, so the colony-start section is long since logged complete
+- read: the window's `current` / `second_current` — the game's own generated
+  names, already through its own validator
+- flag: any halt on this window. The advance loop accepts it automatically
+  (`action` row, `via: "auto"`), so a halt means the sweep refused; the `gate`
+  says why
+- act: `dialog-accept`. **Never `dialog-dismiss`** — it removes the window and
+  `Faction.FactionTick` raises it again 1,000 ticks later, forever, because the
+  predicate it re-checks is `!Faction.OfPlayer.HasName` /
+  `!settlement.namedByPlayer` and closing a window changes neither
+- why: run `m1-20260901` burnt three turns dismissing-and-halting before a
+  human typed the name — an invariant breach for a run whose contract says
+  human input is watching only, and ~940 more cycles were still owed
+  (git-bug `5cb1f9f`). The general lesson is the one this section exists for:
+  **a checklist section that closes before its work falls due hides that work
+  forever** (`9227839`)
+- retire-when: the observation surface publishes the naming step as pending
+  before the dialog raises, so it is a scheduled item rather than an interrupt

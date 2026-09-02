@@ -240,14 +240,25 @@ does topology, the game does geometry.
 subsequent advance halts at 0 ticks — the run looks alive and is wedged.
 So `reason:"dialog"` is handled deliberately, exactly once:
 
-- If dialog verbs exist (3.5: `letter choose/dismiss`, `dialog dismiss`),
-  read `halted_on` — the windows and letters are named — decide, act,
-  log the decision like any other act, and continue.
+- If dialog verbs exist (3.5: `letter choose/dismiss`, `dialog dismiss`,
+  `dialog accept`), read `halted_on` — the windows and letters are named —
+  decide, act, log the decision like any other act, and continue.
 - If they do not (3.5 unshipped or the window is one it cannot address):
   do NOT retry the advance. Write the end-of-session summary, note the
   bench is left paused-with-modal — visible-and-stuck is 1.7's designed
   failure mode, not a corruption — and escalate to Dorian with the
   `halted_on` payload verbatim.
+
+**The naming dialog is the exception, and it is handled for you.** A
+`Dialog_GiveName` (`kind: "name-entry"` in `interactions` and in the halt
+payload) is the one force-pausing window `dialog-dismiss` cannot answer:
+`Faction.FactionTick` re-raises it every 1,000 ticks while the faction and
+settlement are unnamed, so dismissing it buys 1,000 ticks and nothing else.
+The advance loop accepts the window's own generated name before it halts and
+journals it as an `action` row with `via: "auto"`; you should never see a halt
+on one. If you do, the sweep refused — read its `gate` and `dialog-accept` it
+by hand, and DO NOT dismiss it. **This is the shape to watch for generally:
+a dialog raised by a periodic predicate is not cleared by closing the window.**
 
 **The wedge rule, whatever the reason:** two consecutive advances returning
 `ticks_elapsed: 0` end the session and escalate. A 0-tick return demands a

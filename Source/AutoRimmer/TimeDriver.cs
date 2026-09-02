@@ -1489,6 +1489,31 @@ namespace AutoRimmer
             }
         }
 
+        // Main thread, per frame, and cheap: the `WindowsForcePause` scan it
+        // opens with is the same one Step already runs a few lines down.
+        private static void SweepNameDialogs()
+        {
+            if (!Config.AutoAnswerNameDialogs) return;
+            var stack = Find.WindowStack;
+            if (stack == null || !stack.WindowsForcePause) return;
+            var answered = PawnActs.AutoAnswerNameDialogs(stack);
+            if (answered == null || answered.Count == 0) return;
+            Journal.Emit("dialog_answered", new Dictionary<string, object>
+            {
+                ["via"] = "auto",
+                ["accepted"] = answered,
+                ["still_blocking"] = stack.WindowsForcePause,
+            });
+            if (stack.WindowsForcePause) return;
+            if (haltFlag && haltReason == "dialog")
+            {
+                haltFlag = false;
+                haltReason = null;
+                haltEvent = null;
+                haltSeq = 0;
+            }
+        }
+
         private static void Step()
         {
             var tm = Find.TickManager;
@@ -1513,6 +1538,22 @@ namespace AutoRimmer
                 else slowerSpans.Add(new List<object> { (double)slowerFromTick, (double)now });
                 slowerNow = slower;
             }
+
+            // ---- the naming dialog answers itself (git-bug 5cb1f9f) ------
+            //
+            // BEFORE the halt is honoured, and before the force-pause poll
+            // below, because a `Dialog_GiveName` is the one force-pausing
+            // window the agent has no route to answer: nothing in the protocol
+            // writes a text field, and `dialog-dismiss` gets it back 1,000
+            // ticks later from `Faction.FactionTick`. Halting on it stops an
+            // unattended run at day 4.3 and cannot be un-stopped from the
+            // protocol side. See PawnActs.AutoAnswerNameDialogs' header.
+            //
+            // It clears a halt Notice() already flagged, but ONLY that one:
+            // `haltReason == "dialog"` and only when the sweep left nothing
+            // force-pausing, so a naming dialog stacked under a real decision
+            // still halts on the real decision.
+            SweepNameDialogs();
 
             if (haltFlag) { Finish(haltReason); return; }
 
@@ -2033,6 +2074,19 @@ namespace AutoRimmer
             try { if (!string.IsNullOrEmpty(w.optionalTitle)) d["title"] = w.optionalTitle; }
             catch { }
             try { d["layer"] = w.layer.ToString(); }
+            catch { }
+            // 5cb1f9f: a naming dialog is answerable, and the halt payload is
+            // where an agent meets it. Without this it reads as one more opaque
+            // modal and the only route on offer is the one that re-wedges.
+            try
+            {
+                if (PawnActs.IsNameDialog(w))
+                {
+                    d["kind"] = "name-entry";
+                    d["answer_with"] = "dialog-accept";
+                    foreach (var kv in PawnActs.NameDialogState(w)) d[kv.Key] = kv.Value;
+                }
+            }
             catch { }
             return d;
         }

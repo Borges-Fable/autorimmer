@@ -382,6 +382,25 @@ namespace AutoRimmer
                 return d;
             }
 
+            // Text entry. `RimWorld/Dialog_GiveName` has no DiaOptions at all,
+            // so `dialog-choose` cannot address it and it used to fall through
+            // to `opaque` — with the answer sitting in the scraped fields and
+            // nothing saying so (git-bug 5cb1f9f). `current` / `second_current`
+            // are the game's OWN generated values, already passed through its
+            // own validator by `NameGenerator.GenerateName(..., IsValidName)`.
+            if (w is Dialog_GiveName)
+            {
+                d["kind"] = "name-entry";
+                foreach (var kv in PawnActs.NameDialogState(w)) d[kv.Key] = kv.Value;
+                d["answer_with"] = "dialog-accept";
+                d["hint"] = "a naming dialog. `dialog-dismiss` removes it and Faction.FactionTick "
+                    + "raises it again 1,000 ticks later, forever, because the predicate it re-checks "
+                    + "is !Faction.OfPlayer.HasName / !settlement.namedByPlayer and closing a window "
+                    + "changes neither. `dialog-accept` takes the value above. The advance loop does "
+                    + "this on its own unless config.json sets autoAnswerNameDialogs:false.";
+                return d;
+            }
+
             // Tier 3. Everything the bench's visitor cluster and the DLCs open
             // that we have never seen.
             d["kind"] = "opaque";
