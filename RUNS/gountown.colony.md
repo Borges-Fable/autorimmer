@@ -8,6 +8,31 @@ only, never lessons (`PLAY-LOOP.md` §Artifacts). A page, overwritten in place.
 — `5cb1f9f`). Run dir `RUNS/m1-20260901`, sid `20260902T002505`,
 `RWA_RUN=m1-20260901`. Tile 35914, TemperateForest, Cassandra Classic / Rough.
 
+## Roster — REWRITTEN after the day 32-34 collapse
+
+**Dead:** Wouter (tick 2,028,803), Serenity (2,043,293). **Kidnapped:** Jimmy, by
+faction Buoink at 1,942,678, carried off with the bolt-action rifle — the letter
+said an opportunity to rescue him may present itself, and it is worth taking:
+Lacey carries *"My fiance Jimmy lost −18"* and *"My friend Jimmy lost −10"*.
+
+**Trev** (46) is the colony. Shooting 11, Melee 12, Cooking 10, Plants 10,
+Social 10; traits Lazy, Gourmand, Body purist. Doctor 1, holds the bolt-action
+rifle, `attack-then-seek`. Everything runs through him.
+
+**Marco** is bedridden with **paralytic abasia** — and this was investigated
+rather than operated on. `surgery-options` offers `InstallPegLeg`, which would
+have been useless surgery on a healthy man: the Royalty def says abasia
+*"interferes with the motor cortex"*, i.e. it is a BRAIN condition, and that
+*"patients recover naturally as the brain rewires itself, but the process is
+slow. There is also a chance of a lucky early recovery."* The full cure needs
+**glitterworld medicine**, which the colony does not have. **The correct action
+is to wait.** When he stands up the colony gains Plants 12 and Shooting 5.
+
+**Lacey** is the fragile one: mood reached 0. Her negatives are almost all grief
+(−18/−14/−10/−10) which only time removes; Painism gives her `Blind +15` and
+`Intense pain +7` back. Watch her Food need — she hit 20% while downed because
+nobody was assigned to feed her.
+
 ## Roster
 
 | | Lacey 310 | Wouter 313 | Jimmy 323 |

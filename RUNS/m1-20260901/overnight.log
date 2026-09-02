@@ -122,3 +122,32 @@ daily ledger day 34: barracks-heat=ok freezer-below-zero=action armed-roster=act
 [23:56:00] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
 [23:56:03] advance reason=alert ticks=809 halted={"id":"Alert_LifeThreateningHediff","label":"Medical emergency","priority":"Critical","kind":"alert","armed_by":"default","tick":2048063,"detail":"Medical emergency (Alert_LifeThreateningHediff, priority Critical) went ON at tick 2048063 — a standing condition the colony did not have a moment ago, so the advance stopped rather than running on. If this one should stop waking the run, `alert-mute {ids:[\"Alert_LifeThreateningHediff\"], reason:\"<why>\"}` records that decision and `digest.alerts.muted` keeps it visible; `advance {through_news:\"<why>\"}` rides past every wake for ONE call."}
 [23:56:09] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:56:45] advance reason=letter ticks=26052 halted={"def":"NegativeEvent","label":"Food binge: Trev","text":"<color=#D09B61FF>Trev</color> is pigging out on food.\n\nThis happened because of poor mood.\n\nThe final straw was: Observed corpse","target":"Thing_Human91381","kind":"letter","armed_by":"until","tick":2074108,"detail":"Food binge: Trev (NegativeEvent) arrived at tick 2074108 — the letter this advance was waiting for."}
+[23:56:48] letters: Food binge: Trev[NegativeEvent]
+[23:56:52] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:57:02] advance reason=alert ticks=6745 halted={"id":"Alert_MajorOrExtremeBreakRisk","label":"Major break risk","priority":"Critical","kind":"alert","armed_by":"default","tick":2080860,"detail":"Major break risk (Alert_MajorOrExtremeBreakRisk, priority Critical) went ON at tick 2080860 — a standing condition the colony did not have a moment ago, so the advance stopped rather than running on. If this one should stop waking the run, `alert-mute {ids:[\"Alert_MajorOrExtremeBreakRisk\"], reason:\"<why>\"}` records that decision and `digest.alerts.muted` keeps it visible; `advance {through_news:\"<why>\"}` rides past every wake for ONE call."}
+[23:57:08] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:57:33] advance reason=letter ticks=20140 halted={"def":"NewQuest","label":"Quest available: Royal Ascent","text":"A new quest is available.\n\nThe quest is called 'Royal Ascent'.","kind":"letter","armed_by":"until","tick":2101000,"detail":"Quest available: Royal Ascent (NewQuest) arrived at tick 2101000 — the letter this advance was waiting for."}
+{"day":36,"t":2101000,"season":"Fall","food_days":4.7,"rot":13.3,"wood":241,"steel":0,"power":1000,"mood":[42,26,13],"posture_ok":false,"wc_ok":true,"threats":0,"alerts":["Alert_MajorOrExtremeBreakRisk","Alert_NeedWarmClothes","Alert_ColonistNeedsTend","Alert_LowMedicine","Alert_ColonistLeftUnburied","Alert_TatteredApparel","Alert_NeedResearchBench","Alert_DateRitualComing"]}
+[23:57:36] SAVED day-36.rws (nearest autosave; no save verb exists)
+daily ledger day 36: barracks-heat=ok freezer-below-zero=ok armed-roster=action production-still-runs=action apparel-margin=action
+  chop designated: 25
+  mine designated: 0
+[23:59:19] letters: Quest available: Royal Ascent[NewQuest]
+[23:59:23] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:59:54] advance reason=alert ticks=23978 halted={"id":"Alert_StarvationColonists","label":"Starvation","priority":"High","kind":"alert","armed_by":"default","tick":2124978,"detail":"Starvation (Alert_StarvationColonists, priority High) went ON at tick 2124978 — a standing condition the colony did not have a moment ago, so the advance stopped rather than running on. If this one should stop waking the run, `alert-mute {ids:[\"Alert_StarvationColonists\"], reason:\"<why>\"}` records that decision and `digest.alerts.muted` keeps it visible; `advance {through_news:\"<why>\"}` rides past every wake for ONE call."}
+[00:00:22] advance reason=letter ticks=17522 halted={"def":"NeutralEvent","label":"High Festival opportunity","text":"Every year on 12th of Septober, <color=#D96767FF>Hyper-Therists</color> can have a special celebration.\n\nTo begin the ritual, select one of the following and click the 'Begin High Festival' command:\n  - A lit campfire\n  - Ritual spot\n\nExpires in <color=#87F6F6FF><color=#87F6F6FF>9 days</color></color>, on 5th of Decembary.","target":"null","kind":"letter","armed_by":"until","tick":2142500,"detail":"High Festival opportunity (NeutralEvent) arrived at tick 2142500 — the letter this advance was waiting for."}
+[00:00:25] letters: High Festival opportunity[NeutralEvent]
+[00:01:41] advance reason=casualty ticks=42077 halted={"kind":"casualty","event":"downed","pawn":"Lacey","faction":"Southeastern Tedalor","player_faction":true,"tick":2184569,"pawn_id":310,"pawn_kind":"colonist","detail":"Lacey (Southeastern Tedalor) went DOWN at tick 2184569 — the advance stopped here rather than running on. `triage` has the bleed clock, the rescuers and the exact `rescue` call; `advance {through_casualties:\"<why>\"}` rides past it deliberately."}
+[00:01:41] !! CASUALTY - triaging
+{"name":"Lacey","verdict":"no-deadline","margin":null,"act":{"pawn":91381,"target":310}}
+{"name":"Marco","verdict":"no-rescuer","margin":null,"act":null}
+{"ok":true,"job":"rescuing Lacey."}
+{"day":37,"t":2184577,"season":"Fall","food_days":9.8,"rot":11.6,"wood":375,"steel":33,"power":1000,"mood":[0,28,67],"posture_ok":false,"wc_ok":false,"threats":0,"alerts":["Alert_ColonistNeedsRescuing","Alert_NeedWarmClothes","Alert_ColonistLeftUnburied","Alert_NeedMiner","Alert_TatteredApparel","Alert_NeedResearchBench"]}
+[00:01:46] SAVED day-37.rws (nearest autosave; no save verb exists)
+daily ledger day 37: barracks-heat=ok freezer-below-zero=n/a armed-roster=action production-still-runs=action apparel-margin=n/a
+  chop designated: 29
+  mine designated: 0
+[00:02:00] letters: Catatonic: Lacey[NegativeEvent]
+[00:02:41] advance reason=letter ticks=31432 halted={"def":"NegativeEvent","label":"Animal disease: Flu","text":"1 of your animals have gotten sick from flu.\n\nMake sure that they get proper treatment and rest as much as possible.\n\nThe following animals have gotten sick:\n\n  - <color=#D09B61FF>Yukiko</color>","target":"Thing_GuineaPig2520","kind":"letter","armed_by":"until","tick":2216000,"detail":"Animal disease: Flu (NegativeEvent) arrived at tick 2216000 — the letter this advance was waiting for."}
+[00:02:45] letters: Animal disease: Flu[NegativeEvent]
