@@ -127,3 +127,98 @@ Both failures are mine and neither is bad luck:
   it only from day 10, because I drove the loop off letter-halts instead of day
   boundaries for the first nine days. The criterion says *every* daily snapshot;
   I cannot show eight of them.
+
+---
+
+# Continuation past day 20 — Evan's superseding goal
+
+At day 21 the instruction changed: *"survive as long as possible, and unlock the
+full research tree… steel will become limited quick, so you need the deep mineral
+scanner built and researched before then"*, then *"arm your colonists, replace
+your cables with hidden ones so there's no spark… bionics, armor, weapons…
+I expect you to save right before every raid"*, then *"a wall, probably out of
+wood, around the whole base… killboxes… trim crops regularly so a fire can't
+ruin your run."*
+
+## The resource question, measured rather than assumed
+
+Evan's warning was that steel would run out and the drill had to come first. He
+also challenged the figure directly — *"are you sure the steel tiles aren't the
+limestones you selected?"* — and he was right to. My first number came from
+`nearest`'s `pool: 264`, which is its **unfiltered candidate list**; the
+fog-filtered truth from `things` is **`MineableSteel` = 128**, matching the
+whole-map render legend's "COMPACTED STEEL 128 CELLS" exactly. Half what I said.
+
+| resource | measured | the drill chain needs |
+|---|---|---|
+| steel | 128 cells × **40/cell** = **~5,120** minable, 20 cells east | **350** |
+| components | 21 on hand + **30 cells of compacted machinery × 2/cell = ~60**, at (139,132) | **16** |
+| wood (the wall) | 437 in stock + 3,269 trees | 715 for 143 wall cells |
+
+So **the wall and the drill never competed**: the wall is wood and costs zero
+steel and zero components. And the constraint was not steel at all — it was
+**components**, which the same read dissolved by finding the compacted machinery.
+The chain is `MicroelectronicsBasics` (3000) → build `HiTechResearchBench` (100
+steel + 150 stuff + 10 components) → `DeepDrilling` (1000) →
+`GroundPenetratingScanner` (1000).
+
+## What got built
+
+- **Perimeter wall** `ly-14`, x102–128 × z110–156, wood, with **exactly one gap
+  at (114,110)** — the single-entrance property is the whole mechanism, since
+  raiders path to the cheapest opening. Sited at x102 to clear the ancient ruin's
+  own walls and at z110 to clear the barricade line.
+- **Killbox** `ly-15`: barricade firing line along z113, firing step at z114,
+  wing walls at x105/x123 against enfilade. The field is z111–112 — three cells,
+  against the guides' recommended 10–20, because the base footprint starts at
+  z116. Recorded as a compromise, not a design.
+- The 20 original barricades were **deconstructed**: after the wall went up they
+  sat *inside* the killing field, giving cover to the attacker.
+- **Firebreak**: the driver re-issues a `cut` ring on all four sides every day
+  boundary. 109 fires reached within 16 cells on day 8 and only rain stopped
+  them, and the new wall is wood.
+
+## Roster changed — and two joiners were nearly thrown away
+
+Two `AcceptJoiner` letters arrived. **My driver's blanket `letter-dismiss`
+rejected the first one** (Serenity), which is the third instance of the same
+defect after the bulk-goods trader and two expired quests. Both were re-offered
+and accepted deliberately via `letter-choose`:
+
+- **Marco**, 64 — **Plants 12 with a major passion**, Shooting 5, Social 6. The
+  best grower and the best shooter on the roster. He arrived from a pod crash
+  with **Abasia** (cannot walk, permanent) and cataracts in both eyes, so he is
+  bedridden: a mouth to feed and, until prosthetics exist, no labour. Taking him
+  was still right — Plants 12 is the harvest bottleneck answered, if he can ever
+  be stood up.
+- **Serenity**, 6 — a child, most work types disabled. Arrived holding a knife,
+  which was taken off her, and her hostility response set explicitly to `Flee`
+  because `posture {seek:"auto"}` had given a six-year-old `attack-nearby`.
+
+Five colonists needed five beds: `triage` refused the rescue with the exactly
+useful gate **`no-bed` — "No reachable, un-reserved non-prisoner bed in safe
+temperature"** — two beds were built and the colonists carried Marco to his own.
+
+Armament now: Jimmy the bolt-action rifle, Lacey the plasteel knife, a revolver
+and a club spare, Wouter unarmable, Marco bedridden.
+
+## Food: fixed, and the fix was a priority not a project
+
+`food_days` ran 1.8–4.5 for the whole graded run. At day 30 it read **17.2**.
+Nothing was built to achieve that: **234 rice plants were standing at 100% growth
+while Growing sat at priority 2 behind four competing priority-1 jobs on the same
+two pawns.** Setting Growing to 1 on Lacey and Wouter emptied the field in a day.
+The lesson is the same one as C2 in the post-mortem — a floor met by an outranked
+pawn is met on paper — and it is now filed as `aa4391b`.
+
+## Two more blockers found, both fatal to an unattended run
+
+| id | pri | what |
+|---|---|---|
+| `5eba561` | p0 | **`rwa`'s transcript cap of 1000 steps** bricked the client at day 31 with a bare `RuntimeError` traceback instead of an envelope. Worked around by auto-rotating `RWA_RUN` segments in the wrapper — client policy in a shell script, which spec 1.4 forbids |
+| `aa4391b` | p1 | `work_coverage` cannot see an **outranked** doctor: a floor met only by pawns whose top priority lies elsewhere reads `ok`. This is post-mortem output OUT-4, and the direct cause of ~8,000 ticks of untended infection |
+
+Together with `bb931b9` (no save verb) and `5cb1f9f` (dialog wedge) that is
+**four separate ways a multi-day run stops for a reason that has nothing to do
+with the colony** — worth triaging as one theme: what a long run needs that a
+one-day acceptance never exercises.

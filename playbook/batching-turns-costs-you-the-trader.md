@@ -31,12 +31,36 @@ subsequent advance halts at 0 ticks and the run *looks* alive while wedged
 loop that then keeps going. A single-turn loop would have printed the same line
 and handed control back to a reader who could act.
 
-**How to apply.** Classify letters by **whether they are actionable and
-time-boxed**, not by their `def`:
+**It happened three more times before the lesson was general enough.** Two
+quests expired unread (`Alert_QuestExpiresSoon` fired twice), and on day 31 the
+driver dismissed **"Wanderer joins: Serenity"** — an `AcceptJoiner` letter — and
+**rejected a free colonist**, on a three-person roster where labour was the
+binding constraint on everything. Filing it under `trader|caravan` would not have
+caught that one. The real predicate is not the subject; it is **whether the letter
+carries a choice**.
 
-- **Stop the batch** on: any `ThreatBig`/`ThreatSmall`; any casualty halt; and
-  any letter whose label matches a trade or caravan (`trader|caravan|Trade`) —
-  those arrive with a visit window that closes.
+`interactions` publishes it directly. Every letter has an `options` array, and an
+inert letter's options are only ever closes:
+
+    "options":[{"label":"Close","closes":true},
+               {"label":"Jump to location","closes":true}]
+
+So a **decision letter is any letter with an option whose label is not one of
+`Close` / `OK` / `Dismiss` / `Jump to location`** — one jq expression, no
+per-`def` allow-list to keep up to date:
+
+    [.data.letters[]? | select([.options[]? |
+        select(.label|test("^(Close|OK|Dismiss|Jump to location)$")|not)
+      ]|length>0) | .label]
+
+**How to apply.** Classify letters by **whether they carry a decision, or are
+actionable and time-boxed** — never by their `def`:
+
+- **Stop the batch** on: any `ThreatBig`/`ThreatSmall`; any casualty halt; any
+  letter with a non-inert option (the jq above — this is the one that catches
+  joiners, and it is the check to write first); and any letter whose label
+  matches a trade or caravan (`trader|caravan|Trade`), which catches the
+  time-boxed visits whose letters happen to be inert.
 - **Also worth stopping on**, from the same run: a quest with an expiry
   (`Alert_QuestExpiresSoon` fired twice and both quests expired unread), and a
   trade *inspiration*, which is a multiplier on a visit that has not happened yet.

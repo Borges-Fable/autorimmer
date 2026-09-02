@@ -20,3 +20,13 @@
 {"day": 30, "tick": 1749054, "item": "armed-roster", "verdict": "ok", "reading": "2/2 violence-capable armed: Lacey*=Gun_Revolver; Wouter(non-violent)=none; Jimmy*=Gun_BoltActionRifle"}
 {"day": 30, "tick": 1749054, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=18.9, rot_days=19.8"}
 {"day": 30, "tick": 1749054, "item": "apparel-margin", "verdict": "ok", "reading": "worst worn hp: 90% 92% 92%"}
+{"day": 31, "tick": 1809081, "item": "barracks-heat", "verdict": "ok", "reading": "38=21C 52=12.7C 53=13.9C 54=13.2C 64=13.7C 69=23.2C"}
+{"day": 31, "tick": 1809081, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 31, "tick": 1809081, "item": "armed-roster", "verdict": "ok", "reading": "2/2 violence-capable armed: Lacey*=Gun_Revolver; Wouter(non-violent)=none; Jimmy*=Gun_BoltActionRifle"}
+{"day": 31, "tick": 1809081, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=18.1, rot_days=19"}
+{"day": 31, "tick": 1809081, "item": "apparel-margin", "verdict": "n/a", "reading": "3-day cadence; not due this day"}
+{"day": 33, "tick": 1930272, "item": "barracks-heat", "verdict": "ok", "reading": "38=20.4C 52=6.4C 53=6.1C 54=6.2C 64=5.3C 69=20.3C"}
+{"day": 33, "tick": 1930272, "item": "freezer-below-zero", "verdict": "n/a", "reading": "no freezer room exists (ly-7 shell built, coolers unpowered)"}
+{"day": 33, "tick": 1930272, "item": "armed-roster", "verdict": "action", "reading": "2/4 violence-capable armed: Lacey*=Gun_Revolver; Wouter(non-violent)=none; Jimmy*=Gun_BoltActionRifle; Serenity*=none; Marco*=none", "note": "a violence-capable colonist holds no primary; no alert will ever say so"}
+{"day": 33, "tick": 1930272, "item": "production-still-runs", "verdict": "ok", "reading": "1 meal bill(s), suspended=0, food_days=9.6, rot_days=10.2"}
+{"day": 33, "tick": 1930272, "item": "apparel-margin", "verdict": "action", "reading": "worst worn hp: 90% 90% 90% 57% 35%"}
