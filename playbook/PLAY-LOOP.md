@@ -316,6 +316,8 @@ ticks while a build queue settles are normal.
 ## Artifacts — what a run leaves behind
 
     transcripts/<RWA_RUN>/            every command + result, automatic (rwa)
+    transcripts/<RWA_RUN>-s01/        …and its later segments: rwa rotates
+                                      every 999 steps, chained through meta.json
     RUNS/<run>/checklist.ndjson       the ledger — one line per evaluation
     RUNS/<run>/digests/day-<N>.json   the digest at each day boundary
     RUNS/<run>/digests/final.json     the digest at session end
