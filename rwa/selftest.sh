@@ -288,7 +288,7 @@ run 0 "tail --json is NDJSON, one event per line" -- "$RWA" tail --once -n 2 --j
 hasre '^\{"seq"'
 
 
-section "9. transcripts and replay"
+section "9. transcripts, replay, and rotation at the segment cap"
 export RWA_RUN="acceptance"
 "$RWA" ping --quiet >/dev/null
 "$RWA" version --quiet >/dev/null
@@ -310,6 +310,91 @@ hasre "4 sent, 0 failed"
 unset RWA_RUN
 run 0 "with no --run, the run dir is the game session id" -- \
     sh -c '"$RWA" ping --quiet >/dev/null; ls "$RWA_TRANSCRIPTS" | grep -E "^[0-9]{8}T[0-9]{6}$"'
+
+# git-bug 5eba561. A run directory holds 999 steps and then the client used to
+# raise a bare RuntimeError — run m1-20260901 lost every call from in-game day
+# 31 on, to a Python traceback rather than an envelope. The cap is filled here
+# with empty step directories rather than with 999 round trips: `step()` counts
+# NNN- directories, so a filled directory is the same input either way, and the
+# round trips would cost a quarter of an hour to prove nothing extra.
+export RWA_RUN="capped"
+mkdir -p "$RWA_TRANSCRIPTS/capped"
+seq -w 1 999 | sed "s|^|$RWA_TRANSCRIPTS/capped/|; s|\$|-filler|" | xargs mkdir -p
+run 0 "a run directory filled to the 999-step cap" -- \
+    sh -c 'find "$RWA_TRANSCRIPTS/capped" -maxdepth 1 -type d -name "[0-9]*" | wc -l'
+has "999"
+
+run 0 "the 1000th call ROTATES and goes through" -- "$RWA" ping --json
+has "transcript capped is full (999 steps) — continuing in capped-s01"
+has '"ok": true'
+run 0 "…into a new segment holding that step" -- sh -c 'ls "$RWA_TRANSCRIPTS/capped-s01"'
+has "001-ping"
+run 0 "the segments are chained forwards" -- \
+    sh -c 'jq -r ".base, .segment, .prev, .next" "$RWA_TRANSCRIPTS/capped/meta.json"'
+hasre '^capped$'
+has "capped-s01"
+run 0 "…and backwards" -- \
+    sh -c 'jq -r ".base, .segment, .prev, .next" "$RWA_TRANSCRIPTS/capped-s01/meta.json"'
+has "capped"
+hasre '^1$'
+run 0 "the seam is in the log a consumer reads, not only in the meta it walks" -- \
+    sh -c 'grep rwa:rotate "$RWA_TRANSCRIPTS/capped/log.ndjson"'
+has '"from": "capped"'
+has '"to": "capped-s01"'
+
+# Every rwa call is its own process. If opening the run reopened its FIRST
+# segment, this second call would find that one full and rotate again — one
+# new segment per command, for the rest of the run.
+run 0 "the next call continues in the same segment, it does not rotate again" -- \
+    sh -c '"$RWA" version --quiet >/dev/null; ls -d "$RWA_TRANSCRIPTS"/capped*'
+has "capped-s01"
+lacks "capped-s02"
+run 0 "…and its step landed there" -- sh -c 'ls "$RWA_TRANSCRIPTS/capped-s01"'
+has "002-version"
+
+# The opt-out: exactly one directory, and the refusal wears the client's own
+# envelope. `results/` is counted either side because the fact this envelope
+# exists to state is that NOTHING WAS DISPATCHED.
+BEFORE_RESULTS="$(ls "$RWA_ROOT/results" 2>/dev/null | wc -l)"
+run 2 "--no-rotate on a full run: an envelope, not a traceback" -- \
+    "$RWA" ping --no-rotate --json
+has '"code": "rwa-transcript-full"'
+has '"ok": false'
+has '"run": "capped"'
+has '"cap": 999'
+has '"sent": false'
+has "command not sent"
+lacks "Traceback"
+if [ "$(ls "$RWA_ROOT/results" 2>/dev/null | wc -l)" = "$BEFORE_RESULTS" ]; then
+    ok "nothing was dispatched — the mod answered no new command"
+else
+    bad "a command reached the bench despite rwa-transcript-full"
+fi
+run 0 "…and the refusal is still recorded in the run's log" -- \
+    sh -c 'tail -1 "$RWA_TRANSCRIPTS/capped/log.ndjson"'
+has '"error": "rwa-transcript-full"'
+has '"sent": false'
+run 0 "RWA_NO_ROTATE is the same switch" -- \
+    sh -c 'RWA_NO_ROTATE=1 "$RWA" ping --json; exit 0'
+has '"code": "rwa-transcript-full"'
+
+# A chain the shell workaround left behind (git-bug 5eba561's own quoted
+# snippet) carries no links at all. Opening it once derives them, so the run
+# that provoked this fix is walkable by the same rule as a new one.
+LEG="$RWA_TRANSCRIPTS/legacy"
+for seg in "" "-s00" "-s01"; do
+    mkdir -p "$LEG$seg"
+    printf '{"run": "legacy%s", "client": "0.1.0", "started": "x"}\n' "$seg" > "$LEG$seg/meta.json"
+done
+run 0 "a link-less chain from the shell workaround is linked up on first use" -- \
+    sh -c 'RWA_RUN=legacy "$RWA" ping --quiet >/dev/null;
+           cur=legacy;
+           while [ -n "$cur" ] && [ "$cur" != "null" ]; do
+             printf "%s " "$cur";
+             cur=$(jq -r ".next" "$RWA_TRANSCRIPTS/$cur/meta.json");
+           done; echo'
+has "legacy legacy-s00 legacy-s01"
+unset RWA_RUN
 
 
 section "10. jq pipelines (the documented ones, pasted verbatim)"
