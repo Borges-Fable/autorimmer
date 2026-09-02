@@ -637,7 +637,7 @@ namespace AutoRimmer
                     + "journaled as an act. It bypasses ONE call and does not move the watermark, "
                     + "so the next advance asks again; only `journal` clears this.";
                 if (unreadOk == null)
-                    return Result.Fail(command.Id, command.Op, ErrUnreadJournal, detail);
+                    return Result.Fail(command.Id, command.Op, ErrUnreadJournal, detail, command.Args);
                 bypassed = bypassed ?? new Dictionary<string, object>();
                 block["reason"] = unreadOk;
                 bypassed["unread_journal"] = block;
@@ -653,7 +653,7 @@ namespace AutoRimmer
             {
                 string detail = DeadlineDetail(deadline);
                 if (throughCasualties == null)
-                    return Result.Fail(command.Id, command.Op, ErrBleedoutDeadline, detail);
+                    return Result.Fail(command.Id, command.Op, ErrBleedoutDeadline, detail, command.Args);
                 bypassed = bypassed ?? new Dictionary<string, object>();
                 var block = new Dictionary<string, object>
                 {
@@ -683,7 +683,8 @@ namespace AutoRimmer
                 return Result.Fail(command.Id, command.Op, ErrCannotSetSpeed,
                     $"the game refused {want} and stayed at {tm.CurTimeSpeed}: PlayerCanControl is "
                     + "false (screen fade, gravship cutscene, or landing-area confirmation). "
-                    + "Nothing was armed; retry when the game hands control back.");
+                    + "Nothing was armed; retry when the game hands control back.",
+                    command.Args);
 
             // THE ESCAPE IS AN ACT, so it is journaled the moment it is used —
             // present-but-unnecessary included, because a post-mortem asking
@@ -876,7 +877,7 @@ namespace AutoRimmer
             System.Threading.Interlocked.Exchange(ref cmd, null);
             watch = null;
             RestorePause();
-            return Result.Fail(command.Id, command.Op, code, detail);
+            return Result.Fail(command.Id, command.Op, code, detail, command.Args);
         }
 
         // ==================================================== git-bug 1113019 ==
@@ -1459,7 +1460,7 @@ namespace AutoRimmer
             // events are still in the file for a post-mortem.
             lastAdvanceEndSeq = 0;
             if (c == null) return false;
-            var r = Result.Fail(c.Id, c.Op, code, detail);
+            var r = Result.Fail(c.Id, c.Op, code, detail, c.Args);
             r.Data = null;
             Runtime.Outgoing.Enqueue(r);
             return true;
@@ -1687,7 +1688,7 @@ namespace AutoRimmer
             var c = System.Threading.Interlocked.Exchange(ref cmd, null);
             Teardown();
             if (c == null) return;
-            var r = Result.Fail(c.Id, c.Op, code, detail);
+            var r = Result.Fail(c.Id, c.Op, code, detail, c.Args);
             r.Data = null;
             Runtime.Outgoing.Enqueue(r);
         }

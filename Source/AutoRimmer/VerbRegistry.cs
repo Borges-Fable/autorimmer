@@ -491,11 +491,11 @@ namespace AutoRimmer
             }
             catch (VerbArgsException e)
             {
-                return Result.Fail(cmd.Id, cmd.Op, Err.BadArgs, e.Message);
+                return Result.Fail(cmd.Id, cmd.Op, Err.BadArgs, e.Message, cmd.Args);
             }
             catch (Exception e)
             {
-                return Result.Fail(cmd.Id, cmd.Op, Err.Exception, e.ToString());
+                return Result.Fail(cmd.Id, cmd.Op, Err.Exception, e.ToString(), cmd.Args);
             }
         }
     }

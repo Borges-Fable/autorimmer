@@ -202,6 +202,20 @@ cat transcripts/<run>/*/result.json |
   jq -r 'select(.ok==false) | "\(.error.class)\t\(.error.code)"' | sort | uniq -c
 ```
 
+And a failure repeated is a **`repeated`** block at the top level, absent until
+the same verb has been refused the same way with byte-identical arguments three
+times running (git-bug `f08dfc4`). It is not a rate limit and never a refusal —
+the mod answers as it always did and adds a count nobody can miss. It resets on
+a success of that verb, on any change to the arguments, on a different code, and
+at a game boundary.
+
+```bash
+# the wedge check on a finished run: a big count beside ticks 0 is a loop that
+# burned wall clock while the colony clock stood still
+cat transcripts/<run>/*/result.json |
+  jq -r 'select(.repeated) | "\(.op)\t\(.repeated.count)x \(.repeated.code)\tticks=\(.repeated.ticks)"'
+```
+
 Pretty mode is a **generic** JSON tree renderer. It has no verb-specific
 formatting, on purpose: a per-verb formatter would be game semantics on the
 client, which this spec forbids, and it would silently hide any field a later

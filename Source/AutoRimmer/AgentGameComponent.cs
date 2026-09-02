@@ -180,7 +180,8 @@ namespace AutoRimmer
                 if (TimeDriver.Active && cmd.Op != "pause")
                 {
                     Runtime.Outgoing.Enqueue(Result.Fail(cmd.Id, cmd.Op, Err.Busy,
-                        $"advance '{TimeDriver.ActiveId}' in flight ({TimeDriver.TicksDone} ticks done)"));
+                        $"advance '{TimeDriver.ActiveId}' in flight ({TimeDriver.TicksDone} ticks done)",
+                        cmd.Args));
                     continue;
                 }
                 activeOp = cmd.Op;

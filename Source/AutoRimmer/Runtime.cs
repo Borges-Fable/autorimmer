@@ -64,10 +64,15 @@ namespace AutoRimmer
             // `boundary` row to the durable sample file so the seam is visible
             // there too. See ColonySampler's SAVE / LOAD header.
             ColonySampler.Clear();
+            // git-bug f08dfc4, and it is here for the same reason as the four
+            // above: state indexed by a game that no longer exists. A streak's
+            // FirstTick was measured on a clock a load can move BACKWARD, and
+            // the refusal it counts was about a colony that is gone.
+            RefusalStreak.Clear();
             if (TimeDriver.Abandon(Err.NoActiveGame, detail)) answered++;
             while (Pending.TryDequeue(out var cmd))
             {
-                Outgoing.Enqueue(Result.Fail(cmd.Id, cmd.Op, Err.NoActiveGame, detail));
+                Outgoing.Enqueue(Result.Fail(cmd.Id, cmd.Op, Err.NoActiveGame, detail, cmd.Args));
                 answered++;
             }
             return answered;
@@ -221,12 +226,26 @@ namespace AutoRimmer
         // answer — a failed call can carry one too.
         public object IgnoredArgs;
 
+        // git-bug f08dfc4: the call's own arguments, carried so RefusalStreak
+        // can tell "the same refusal again" from "a different call that was
+        // also refused". NEVER SERIALIZED — the envelope already echoes what
+        // the caller sent, in the caller's own cmd.json, and a second copy in
+        // the result would be a new protocol surface for no reader. Null on a
+        // failure raised before any args were parsed (bad-json), which is
+        // correct: an unparseable envelope has no arguments to differ by.
+        public Dictionary<string, object> Args;
+
         public static Result Success(string id, string op, object data)
             => new Result { Id = id, Op = op, Ok = true, Data = data };
 
         // Takes an ErrCode and NOT a string, so a failure cannot be built
         // without saying what kind of failure it is (see ErrCode's header).
-        public static Result Fail(string id, string op, ErrCode code, string detail = null)
-            => new Result { Id = id, Op = op, Ok = false, ErrorCode = code, ErrorDetail = detail };
+        public static Result Fail(string id, string op, ErrCode code, string detail = null,
+                                  Dictionary<string, object> args = null)
+            => new Result
+            {
+                Id = id, Op = op, Ok = false,
+                ErrorCode = code, ErrorDetail = detail, Args = args,
+            };
     }
 }

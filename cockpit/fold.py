@@ -270,6 +270,15 @@ def sections(step, prev):
         for k, v in err.items():
             if k != "code":
                 out.append(Section(f"error.{k}", brief(v), raw(v), False, red))
+        # git-bug f08dfc4. The one thing on a refused envelope that IS alarming
+        # however correct the refusal was: the same call, refused the same way,
+        # N times running. It goes first and it is always warned.
+        rep = res.get("repeated")
+        if isinstance(rep, dict):
+            out.insert(0, Section("repeated", f"{rep.get('count', '?')}x the same refusal"
+                                  + (f", {rep.get('ticks')} ticks" if rep.get("ticks") else
+                                     ", clock frozen"),
+                                  raw(rep), False, True))
         return out
 
     data = res.get("data")

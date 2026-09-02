@@ -274,6 +274,53 @@ it becomes. Ledger: log only firings (`verdict:"action"`), per
 - retire-when: cc8988c's mod procedure owns the transition; this trip-wire
   then only arms the emergency posture.
 
+### repeated-refusal
+- when: turn — and unlike everything above it, on **every envelope**, not only
+  on the digest. This one is a fact about your own calls.
+- read: the envelope's **`repeated`** block. Absent on a healthy call; present
+  from the third consecutive identical refusal of the same verb onward, with
+  `count`, `code`, `since_tick` and `ticks`.
+- flag: the key is present. There is no threshold to apply here — the mod has
+  already applied it (`RefusalStreak.Threshold`, 3 calls = 3 turns ≈ 15 in-game
+  hours on m1-20260901's cadence).
+- act: **escalate, do not retry.** The answer is deterministic in the arguments
+  you are sending; a fourth identical call gets a fourth identical refusal.
+  Three routes and the envelope tells you which:
+  - `code: "bad-args"` — the call is malformed for this target and no amount of
+    repetition fixes it. Read `error.detail`; it names the reason
+    (`'DeepDrill' is not made from stuff` — drop `stuff`).
+  - `code: "unread-journal"` — your `journal` calls are not reaching the tail.
+    **Read `unread_after` on the `journal` reply**, not just `ok`: nonzero
+    means the next advance is blocked and you already know it. The measured
+    cause on m1-20260901 was `journal {since_seq:0, limit:2000}` sent every
+    turn — a truncated read only moves the watermark as far as the rows it
+    handed over, so it stopped nine rows short of the tail sixty turns running
+    while `unread_after: 9` sat in every reply. Page from the LAST
+    `read_watermark`, not from 0.
+  - `code: "busy"` — an advance is genuinely in flight. This one is `flow` and
+    retrying is correct; `count` is telling you the advance is longer than you
+    think, not that you are doing something wrong.
+- and: **`ticks: 0` beside a `count` in double figures is a WEDGE.** It says
+  the colony clock has not moved since the streak began — you are burning wall
+  clock and the world is frozen. Escalate to the human gate rather than
+  continuing the turn script.
+- why: run m1-20260901 sent `build {def:"DeepDrill", at:"122,130",
+  stuff:"Steel"}` **238 times** and was told `'DeepDrill' is not made from
+  stuff` 238 times. Every refusal was correct. Nothing stopped it, nothing
+  escalated, and the repetition existed only in a transcript nobody read until
+  the run was over. The same run also spent **60 consecutive advances** — five
+  minutes of wall clock, `TicksGame` frozen at 3,704,384 — being refused
+  `unread-journal` with a byte-identical detail while calling `journal` in
+  between. Neither wedge was visible to the agent that was in it (git-bug
+  f08dfc4; `5cb1f9f` §4 argues the same shape for a re-raising dialog, which
+  the two-consecutive-0-tick rule cannot see because those advances DO run
+  ticks).
+- becomes: nothing. This is a fact about the protocol conversation, not a state
+  predicate, so 1.6's `until:condition` cannot carry it.
+- retire-when: never, while an unattended agent drives the loop. The mod holds
+  the count precisely so the caller does not have to remember to derive it —
+  the same argument `construction-stalled` makes about ages.
+
 ## How far to trust the alert readout
 
 The digest's `alerts.active` is the game's own attention model, and it is

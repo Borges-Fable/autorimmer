@@ -87,6 +87,13 @@ AnalyzerBridge's, generalized:
   mod never saw the command). The class is carried BY the code
   (`Runtime.ErrCode`), so a code cannot be declared without one and there is no
   lookup table to drift.
+- **`repeated`** (git-bug f08dfc4): a top-level block, absent until the same
+  verb has been refused with the same code and byte-identical arguments
+  `RefusalStreak.Threshold` (3) times running, carrying `count`, `code`,
+  `since_tick` and `ticks`. Not a refusal and not a rate limit — the mod makes
+  the repetition visible and has no opinion about how long a driver may loop.
+  Resets on a success of that verb, on any change to the arguments, on a
+  different code, and at a game boundary.
 
 ## Time model
 
@@ -3954,3 +3961,89 @@ queue by default (an agent flailing mid-experiment must not page triage).
   envelope from before this shipped has no class, keeps today's red, and reads
   as `error · <code>` exactly as it did. No new palette tier — a cockpit that
   colours every kind is the christmas tree that file's header refuses.
+
+- 2026-09-02 (repair round, worker; git-bug f08dfc4) — **A repeated identical
+  outcome is one event, and the table that counts it is keyed by OP even though
+  the streak is keyed by `(op, code, args)`.** Run m1-20260901 sent `build
+  {def:"DeepDrill", at:"122,130", stuff:"Steel"}` 238 times and was told
+  `'DeepDrill' is not made from stuff` 238 times. Correct every time. The
+  defect is that nothing ever said so.
+
+  **The number that decided the design: the 238 were NEVER ADJACENT.** Not once
+  in 4,599 steps. Every one sat inside its own turn, between a `things` and a
+  `journal`, in a fixed loop — `things → build → journal → advance → digest`.
+  So a streak counter over consecutive ENVELOPES would have counted 1, every
+  time, and published nothing. The streak has to be per key and survive other
+  traffic, which is what the shipped `RefusalStreak` does.
+
+  **Keyed by op, holding the (code, fingerprint) the streak is running on.**
+  f08dfc4 asks for a count per `(op, error code, normalised args)`; that is what
+  the streak IS. The TABLE is keyed by op alone, so a refusal that differs —
+  different code, different arguments — resets rather than opening a second row.
+  The issue's three reset rules fall straight out (success drops the entry,
+  changed args mismatch the fingerprint, a changed code mismatches too), the
+  table is bounded by the number of ops without an eviction policy to get
+  wrong, and there is no scan to clear an op's rows. **The cost is measured and
+  accepted**: a caller alternating two doomed calls to one verb builds no
+  streak, and the DeepDrill run reaches 94 rather than 238 because other `build`
+  calls interrupted it. That under-reports and never over-reports, which is the
+  right direction for a field whose whole value is being trustworthy when it
+  appears — and 94 is not a number anybody reads as normal.
+
+  **The detail string is deliberately NOT part of the key.** `busy`'s detail
+  carries the in-flight advance's id and its ticks-done, so it differs on every
+  single call; keying on it would mean the counter could never fire on `busy` —
+  200 of that run's 691 failures, and one of the two codes most likely to be
+  looped on.
+
+  **Threshold 3, stated in the terms a driver loops in.** The unit is calls of
+  the same verb, and on this bench one such call is one TURN, because the turn
+  is a fixed script that issues each verb at most once — which the "never
+  adjacent" measurement above proves rather than assumes. A turn on m1-20260901
+  was a mean 12,525 ticks of advance, so three is about fifteen in-game hours
+  during which nothing about the refusal changed. Not 2, because a second
+  identical call is an ordinary retry and `busy` is *meant* to be retried (it is
+  `flow`; git-bug e440676). Not 10, because the wedges that actually happened
+  reached 94 and 60 — anything from 3 to 20 catches both, and the smaller number
+  catches a NEW one sooner.
+
+  **What is not modelled, and why that is the safe direction.** "The game state
+  the refusal depends on changed" is served by the three resets and by a clear
+  at the game boundary, NOT by a per-code notion of which state each code
+  watches. That would be a table beside the codes, which the e440676 entry above
+  refused an hour earlier for the same reason; and its failure mode is silencing
+  the field on the exact wedge it exists to name, since a state term that ticks
+  would reset the counter every call. The honest signal is already published:
+  `repeated.ticks` is how far the colony clock moved since the streak began, and
+  a large `count` beside `ticks: 0` is the strongest statement this surface can
+  make.
+
+  **THE SECOND WEDGE, found while measuring the first and not in the issue.**
+  The same run spent **sixty consecutive advances** — `m1-20260901-s02/695` to
+  `m1-20260901-s03/047`, five minutes of wall clock, across a transcript
+  rotation — sending `advance {until:{letter:true}, timeout_ticks:60000}` and
+  being refused `unread-journal` with a byte-identical detail. `TicksGame` was
+  3,704,384 at the first and 3,704,384 at the last: sixty turns, ZERO in-game
+  ticks.
+
+  **The mod was right on every one of those sixty, and this was nearly written
+  up as a mod defect.** The loop called `journal` between every pair — so
+  "the loop never read" is wrong — but it called `journal {since_seq:0,
+  limit:2000}` each time. From seq 0 the limit is exhausted at seq 2024, nine
+  rows short of the tail, and a truncated read only moves the watermark as far
+  as the rows it actually handed over (`rwa/README.md`: *"a FILTERED read or a
+  truncated one only moves the watermark as far as the events it actually
+  handed over"*). Every reply published `count: 2000, read_watermark: 2024,
+  **unread_after: 9**` and the loop advanced anyway. The blocking events were
+  seq 2025..2028, `death 1, letter 3` — a colonist death the run never read,
+  which is `722c951`'s founding case exactly.
+
+  So the envelope already carried the answer twice per turn and nobody read it
+  sixty times. That is the argument for this issue in one paragraph: the mod
+  publishing a true field is not the same as a caller noticing it, and a count
+  of consecutive identical refusals is the one signal that cannot be mistaken
+  for noise. Under this counter it is named on turn three, with `ticks: 0`.
+  `checklists/turn.md`'s `repeated-refusal` item carries the diagnosis for the
+  `unread-journal` case: read `unread_after` on the `journal` reply, and page
+  from the LAST watermark rather than from seq 0 with a limit that cannot reach
+  the tail.

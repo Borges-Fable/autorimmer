@@ -206,7 +206,7 @@ namespace AutoRimmer
                 if (verb == null)
                 {
                     sink.Add(Result.Fail(id, op, Err.UnknownOp,
-                        "known ops: " + string.Join(", ", VerbRegistry.Ops)));
+                        "known ops: " + string.Join(", ", VerbRegistry.Ops), args));
                     continue;
                 }
 
@@ -218,7 +218,7 @@ namespace AutoRimmer
                 else if (!GameLoaded())
                 {
                     sink.Add(Result.Fail(id, op, Err.NoActiveGame,
-                        "load a save first; this verb runs at the in-game safe point"));
+                        "load a save first; this verb runs at the in-game safe point", args));
                 }
                 else
                 {
@@ -318,6 +318,12 @@ namespace AutoRimmer
         private static string BuildResultJson(Result r)
         {
             var snap = Runtime.GameState;
+            // git-bug f08dfc4. FIRST, before a byte is written: this call both
+            // reads and ADVANCES the streak, and the streak must move for every
+            // result exactly once whatever the serializer does with the rest of
+            // the envelope. A success resets; a repeat past the threshold comes
+            // back as a block to publish below.
+            var repeated = RefusalStreak.Note(r);
             var sb = new StringBuilder(512);
             sb.Append("{\"id\":").Append(MiniJson.J(r.Id))
               .Append(",\"op\":").Append(MiniJson.J(r.Op))
@@ -348,6 +354,17 @@ namespace AutoRimmer
             {
                 sb.Append(",\"ignored_args\":");
                 MiniJson.Write(sb, r.IgnoredArgs);
+            }
+            // The streak, noted at the top of this method. Present only once
+            // the same verb has been refused the same way with the same
+            // arguments RefusalStreak.Threshold times running — absent on the
+            // overwhelmingly common call, exactly like `ignored_args` above,
+            // and top-level for the same reason: it is a statement about the
+            // CALL, not about the verb's answer.
+            if (repeated != null)
+            {
+                sb.Append(",\"repeated\":");
+                MiniJson.Write(sb, repeated);
             }
             bool loaded = GameLoaded() && snap.gameLoaded;
             sb.Append(",\"state\":{\"gameLoaded\":").Append(loaded ? "true" : "false")
