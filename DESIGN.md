@@ -3144,3 +3144,61 @@ queue by default (an agent flailing mid-experiment must not page triage).
      *bedroom* question. It is not wrong; it answers "whose room is this",
      while the mod was asking "who sleeps in here". Two different questions
      that agree on every room with fewer than two owned beds.
+
+- 2026-09-02 (repair round) — **Layout enclosure is fully decidable today, and
+  there are TWO ways the freezer failed, not one.** `a1644d6` (B-3) asks for
+  enclosure reporting on a placed layout. Resolved by investigation before
+  dispatch, because the issue does not say what "enclosed" means and a worker
+  would have had to choose.
+
+  **The enclosure test is the game's own `ProperRoom`**, `Verse/Room.cs`:
+
+  ```csharp
+  public bool ProperRoom {
+    get {
+      if (TouchesMapEdge) return false;
+      for (int i = 0; i < districts.Count; i++)
+        if (districts[i].RegionType == RegionType.Normal) return true;
+      return false;
+    }
+  }
+  ```
+
+  A layout that never closed leaks into the map-wide outdoor room, which
+  touches the map edge, so `ProperRoom` is false. This is exactly what run
+  `m1-20260901` saw: `room-at` on the freezer returned `outdoors: true` with
+  `cells: 60082` — the whole outdoors, not a 60,000-cell freezer. Do not invent
+  a flood fill; call the game's member and cite it, per the standing
+  "the gate lives in the widget" rule.
+
+  **The second failure mode, which the issue does not name.** A room can be
+  properly enclosed and still be thermally outdoors:
+
+  ```csharp
+  public bool UsesOutdoorTemperature =>
+      TouchesMapEdge || OpenRoofCount >= Mathf.CeilToInt(CellCount * 0.25f);
+  ```
+
+  A quarter of the roof missing puts the room on outdoor temperature with
+  `ProperRoom` still true. For a FREEZER — the whole point of B-3 — that is the
+  same colony outcome by a different mechanism, and a check that only reports
+  `ProperRoom` would pass a freezer that cannot hold cold. Both must be
+  reported, distinctly. `PsychologicallyOutdoors` is a third, mood-facing
+  reading with different thresholds and is not the enclosure question.
+
+  **The layout to cells link already exists and needs no new IR field.**
+  `LayoutVerbs.Layouts.Open(...)` records a `CellRect` per placed layout and it
+  survives across days — run `m1-20260901` called
+  `construction {layout_id:"ly-1"}` on day 40+ successfully. Intended interior
+  cells are the record's rect minus the cells occupied by declared `Wall` and
+  `Door` elements; intended roofed cells are the IR's own `roof` mask, which
+  every shipped template already carries.
+
+  **Naming the gap is therefore a comparison, not a search.** A declared `Wall`
+  or `Door` cell with no edifice standing (or with an unbuilt blueprint or
+  frame) is the hole, and a declared roofed cell that is unroofed is the
+  thermal hole. Both are answerable from data the mod already holds, so
+  acceptance item 2's "name the gap" does not require pathfinding.
+
+  Note a door does NOT break enclosure — an unbuilt door does. The gap check is
+  about what stands at the cell, not about the def's type.
