@@ -3652,3 +3652,136 @@ Fixture facts that each cost a cycle: `dev:unfog` needs `{all:true}`;
 a bare `--quicktest` map's only sealed roofed room is the ancient danger;
 `status.json` persists across restarts so a waiter must require the sid to
 CHANGE; `pkill -f RimWorldLinux` kills its own shell.
+
+## Session 22 — 2026-09-02 (dorian's Linux box). The repair round after the wipe
+
+Six workers, six merges, five standalone `Build:` commits, one park. The brief was
+section A of `RUNS/m1-20260901/next-run.md` plus nine unfiled signal gaps; the
+round ended having refuted three of its own issues' headline diagnoses.
+
+### The three false headlines
+
+The most valuable thing this round did was disbelieve its own tickets.
+
+**`eef837a` (p0, "the butcher bill matched nothing")** — two of three premises
+false, verified against the run's own saves. `day-46.rws` holds the bill at
+`loadID 6` with **115 `Corpse_*` defs**, `Corpse_Human` absent — exactly
+`ButcherCorpseFlesh.defaultIngredientFilter` (`CorpsesAnimal`). `bill-add` was
+never broken. `bill-set` *did* persist (`day-66.rws`, 127 entries, humans now
+allowed); what was wrong was the arithmetic — 115+39=154 reported against 127
+stored, so **27 evaporated**, exactly the `CorpsesMechanoid`/`CorpsesDrone` the
+recipe excludes. What actually killed three colonists:
+`fixedIngredientFilter.specialFiltersToDisallow: [AllowRotten]` against
+`ThingDefGenerator_Corpses.daysToRotStart = 2.5f` (150,000 ticks). `day-62.rws`:
+`Corpse_WildBoar` at **(114,0,138)** — the butcher spot's own cell, the exact
+cell the issue calls "fresh (hp 95%)" — at `rotProg 183767`. **Hit points are
+not rot.** And `filter: null` was never a shape `bills` emitted: the key is
+`ingredient_filter`, and a throw in a bare try/catch left it *absent* while a
+null filter renders as *null*. Identical in the envelope; twenty days lost to it.
+
+**`855117a`** — "mostly sandstone and marble" is contradicted by the save's
+thing grid: **13 MineableSteel, 8 Marble, 0 sandstone** in that rect. The rect
+*under-covered* the ore, and those 13 steel cells were still standing 20 days
+later. Opposite failure, same fix.
+
+**`15842b9` — the orchestrator's own, filed and corrected the same evening.**
+It claimed `Materials.cs` was blind to the allowed area and that
+`place-layout --dry-run`'s `available` counted unreachable material. False:
+`Materials.cs` uses `IsForbidden(Thing, Pawn)` and `CanReach` per builder, and
+publishes `availability_basis: "reachable-unforbidden-by-a-colonist"` vs
+`"faction-unforbidden"` depending on which question it could answer. The filing
+generalised from a grep for `IsForbidden(Faction` without reading what each hit
+was for. Downgraded p1→p2, correction written into the body rather than edited
+away. **Three false headlines in one round is the pattern, not the exception:
+check the artifacts before accepting a cause, including your own.**
+
+### Merged
+
+`5eba561` (rwa transcript rotation, **closed**) · `eef837a`+`d9d6c12` (bill
+ingredient diagnosis) · `a1644d6`+`daa269a` (layout enclosure, room owners) ·
+`f9dadc7`+`e08c3e5` (stall clock, skill ceiling) · `b7359fa`+`855117a`+`bb931b9`
+(designate reachability, composition, the save verb — `b7359fa` and `bb931b9`
+**closed**) · `df378fa` (the cockpit, **closed**) · `e440676`+`f08dfc4` (error
+class, repeated-refusal counter).
+
+`f1a1700` **parked** (`state:blocked`) — and the park write-up corrected the
+issue's premise too: `Room.ID` is stable across ordinary play
+(`TryRebuildDirtyRegionsAndRooms` early-returns on `!AnyDirty`); a **load** is
+what destroys it. A durable handle already ships (`Spatial.cs`'s
+`LandmarkComponent`, a `GameComponent` *with* `ExposeData`). The open question
+is the **baseline**, which is new scribed state, which is Evan's call.
+
+### Bench sitting — 3 of 6 proven, 1 partial
+
+`bb931b9` **PASS** in full (path, tick matching `digest`, autosave slots
+untouched, duplicate refused). `b7359fa` **PASS both directions** — the negative
+case names the excluding area, the target and the fix; widening the area flips
+it to `actionable: 1, warning: None`. `5eba561` **PASS** offline (envelope with
+`sent:false`, exit 2, rotation, chain links).
+
+`eef837a` **partial**: the protocol half is proven live — `filter_state:
+published`, 115 defs, `health` moving `no-matching-ingredient` → `workable` →
+`asleep-no-matching-ingredient` as the ingredient came and went, with `remedy`
+naming `NO BILL LEVER FIXES THIS` for the rot clause. **"Meat appears" was not
+demonstrated**: a wild animal ate the corpse. That produced `a8d8ada`.
+
+`a1644d6` produced the round's best single envelope — `enclosed: true` with
+`uses_outdoor_temp: true`, a sealed room with no roof, which is the second
+mechanism a `ProperRoom`-only check would have passed clean. **But `gaps` comes
+back as a .NET type name** (`4950f14`, p1): `MiniJson` matches
+`case List<object>` exactly, so `List<Dictionary<string,object>>` falls to the
+default and is `ToString()`'d, silently. The one field that says *where* the
+hole is, on the p0 freezer fix.
+
+Items 2 (wall half) and 3 (stalled blueprint) were **not** demonstrated.
+
+### What the round cost, and what to do differently
+
+**8,093 lines of acceptance Python against 4,824 lines of mod source**, none of
+the bench halves run. The cause is in the orchestrator's own worker template,
+which pointed every worker at `accept/eef837a-bill-filter.py` (1,327 lines) as
+"the strongest model" — a ratchet where each worker matches the previous
+exemplar. Evan stopped it mid-round. **The orchestrator has the game; a worker
+writing a harness for something the orchestrator can check by hand is duplicated
+effort at ten times the cost.** The last two workers were told to deliver a
+numbered markdown command list instead (`accept/repair-designate-save.md`,
+`accept/e440676-error-class.md`), which is the right artifact and ~200 lines.
+
+**Worktree isolation cut every worker ~100 commits behind `main`** (measured:
+97, 103, 112, 116, 105). One would have reverted `accept/4.2-play-loop.py` by
+426 lines had it not caught it. Every dispatch after the first carried an
+explicit rebase-first step, and every merge was gated on
+`git merge-base --is-ancestor main <branch>`.
+
+**The disk hit 0 bytes twice**, killing one worker mid-commit and leaving a
+stale `git-bug` lock. ~3GB was reclaimed by removing merged agent worktrees
+(each ~1GB, carrying a full copy of `RUNS/`). A worker independently worked
+around it with a sparse-checkout excluding `RUNS/*/saves/`.
+
+### Filed this round
+
+Section B as nine spec issues (`f9dadc7` `f1a1700` `a1644d6` `4c12e5d`
+`b7359fa` `d9d6c12` `e811574` `91bc250` `9227839`), plus, from the work itself:
+`927be4f` (two age vocabularies shipped in one round — the cost of splitting one
+idea across two workers), `1de2fbe`, `33bc796`, `1d381be`, `9c68756`, `3d53df2`,
+`e440676`, `f08dfc4`, `9dcaa`, `15842b9`, `a8d8ada`, `4950f14`.
+
+Also recorded: `git-bug bug new -t "…" -F file` **silently discards the title**
+and promotes the body's first line — the mechanism behind the duplicate
+`53846a8`. Now in `ORCHESTRATION-PROMPT.md`'s worker template.
+
+### What the next session inherits
+
+**Not demonstrated anywhere: `error.class` and `repeated` have never been
+written to a result file by a live poller.** The DLL carrying them was built
+after the bench came down.
+
+Acceptance items 2 (wall half) and 3 (stalled blueprint) still owe a bench, and
+both want a staged fixture rather than a `--quicktest` map that was starving
+with a dead colonist by the time it was used. `4950f14` blocks item 2's gap
+clause outright.
+
+Open and worth the next pick: `4950f14` (p1, silent serializer failure),
+`9dcaa` (a truncated `journal` under-moves the watermark and sixty turns of
+`advance` refusals hid a colonist death), `15842b9` (`BillIngredients` declares
+`clauses_not_checked` with the area silently missing from it).
