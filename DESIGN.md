@@ -3624,3 +3624,46 @@ queue by default (an agent flailing mid-experiment must not page triage).
   by `construction`'s items, `digest.construction.stalled[]` and `advance
   {until:{layout}}`'s `unresolved_items`. Split across two workers they would
   have been two answers to "why is there no worker".
+
+- 2026-09-02 (repair round) — **`f9dadc7`'s age vocabulary is CANONICAL; the
+  enclosure roll-up's `unenclosed_for` is the one that moves.** Both landed in
+  the same round, on different objects (per-element vs per-layout), and they
+  disagree on every field name and on the shape of the verdict. Ruled by the
+  orchestrator rather than left to whoever edits next.
+
+  | | `a1644d6` `unenclosed_for` | `f9dadc7` (canonical) |
+  |---|---|---|
+  | start | `since_tick` | `state_since_tick` |
+  | elapsed | `ticks` | `state_age_ticks` |
+  | age unit | `day_boundaries` (int) | `state_age_days` (float) |
+  | tracking start | `tracked_since` | `tracked_since_tick` |
+  | verdict | `stale` — **bool** | `stalled` — **tri-state true/false/null** |
+  | epistemics | `floor_note` (string, conditional) | `age_basis` (enum) |
+  | sampling | on READ | on TICK (2500 cadence) |
+
+  **Why the tri-state wins.** The worker reported the enclosure side as
+  emitting `stale: false` on an untracked layout. Checked: it does not.
+  `LayoutEnclosureWatch.Age` returns `null` when the layout is not in
+  `firstFail`, and both callers set the key only when `age != null`. So an
+  untracked layout produces **no `unenclosed_for` key at all**.
+
+  That is the same defect wearing the other costume, and it is worse for a
+  reader: an ABSENT key reads as clean exactly the way `eef837a`'s absent
+  `ingredient_filter` read as `null` and cost that run twenty days.
+  `eq(dig(env,"unenclosed_for.stale"), None)` passes on it. A tri-state
+  `stalled: null` plus `age_basis: not-tracked` cannot be misread the same way,
+  and it is what this round's own B-1 resolution specified: *stalled*, *not
+  stalled*, and *not known yet* must never collapse into each other.
+
+  **What moves and what does not.** The field NAMES and the tri-state verdict
+  move to `f9dadc7`'s form. The **thresholds do not have to match** — an
+  unenclosed room is alarming at one day boundary and a stalled blueprint at
+  two, and that difference is a judgement about the game, not an inconsistency.
+  Nesting need not match either; they hang off different objects.
+
+  **Shipped incoherent, deliberately.** Both are on `main` as of `5170677` and
+  the reconciliation is filed rather than rushed, because the round's remaining
+  budget belongs to bench acceptance. An agent reading both surfaces today
+  learns two vocabularies for one idea — which is precisely what batching the
+  two issues into one worker was supposed to prevent, and did not, because they
+  went to different workers on my dispatch.
