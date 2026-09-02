@@ -3202,3 +3202,36 @@ queue by default (an agent flailing mid-experiment must not page triage).
 
   Note a door does NOT break enclosure — an unbuilt door does. The gap check is
   about what stands at the cell, not about the def's type.
+- 2026-09-02 (session 22) — **The transcript cap is the WIDTH OF THE STEP
+  COUNTER, so the fix for a full run is to rotate rather than to raise it.**
+  `rwa`'s `Transcript.step` refused a 1,001st step with a bare `RuntimeError`,
+  and run `m1-20260901` lost every call from in-game day 31 onward to a Python
+  traceback rather than an envelope (`5eba561`). Two questions came with it —
+  how big should the cap be, and what should the client do at it — and the
+  first one answers itself once you look at who reads the directory. Every
+  consumer orders steps by SORTING the directory names (`rwa replay`,
+  `accept/4.2-play-loop.py`, and any `ls`), the names are zero-padded to three
+  digits, and `1000-ping` sorts BEFORE `999-ping`. Widening the field would
+  silently reorder every transcript on disk; a cap at the end of the field
+  costs nothing once the client keeps going past it. So the cap stays at
+  **999** — one fewer than the old message claimed, because the counter starts
+  at 001 — and rotation makes it a non-event: `<run>` is segment 0, and the
+  client continues in `<run>-s01`, `-s02`, … with `prev`/`next` in each
+  segment's `meta.json` and an `rwa:rotate` line in both logs. **The suffix
+  scheme is the shell workaround's, deliberately**: `m1-20260901` and
+  `-s00`..`-s03` are already on disk and a consumer has to walk what exists,
+  so a prettier `-002` would have orphaned the only run this has ever
+  happened to. The general rule the bug is an instance of: **client policy in
+  a caller's shell script is a defect in the client** (spec 1.4), and the
+  workaround that unblocked the run — pick the highest `-sNN` under 940 steps
+  — was policy, in bash, in the run's own wrapper. **`--no-rotate` is the
+  opt-out and is now the only way to reach the cap**; it answers
+  `rwa-transcript-full` in the client's own envelope shape with `sent:false`,
+  because the step directory is claimed BEFORE the inbox write and "nothing
+  was dispatched" is the most useful thing the refusal can say. Exit 2, with
+  the usage errors, not 1: a full directory is a fact about the invocation and
+  must not be confused with `ok:false` from the colony. The consumer side
+  moved with it — `--transcript` takes a glob or a chain — because auditing
+  the head of a chain is the dangerous shape rather than the incomplete one:
+  on `m1-20260901` it reports `113 advances within policy` where the whole run
+  FAILs the wedge rule. `5eba561`.

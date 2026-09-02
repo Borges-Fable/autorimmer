@@ -146,7 +146,8 @@ set is deliberately kept out of the verbs' namespace:
 
 ```
 --root --timeout --cmd-id --run --transcripts --stale-secs --fps-floor
---poll-ms --json --pretty --no-transcript --quiet --version --help -h
+--poll-ms --json --pretty --no-transcript --no-rotate --quiet --version
+--help -h
 ```
 
 `id` is the only argument name in the whole verb registry that ever collided
@@ -425,6 +426,81 @@ envelope — one game session, one transcript, one journal, no correlation table
 `--no-transcript` / `RWA_NO_TRANSCRIPT` switches recording off. `RWA_TRANSCRIPTS`
 moves the root; it defaults to `<repo>/transcripts/`, which is gitignored.
 
+### The 999-step cap, and segments
+
+**A run directory holds 999 steps and then the client starts a new one.** The
+step counter is zero-padded to three digits and every consumer orders steps by
+sorting the directory names — `rwa replay`, `accept/4.2-play-loop.py`, and any
+`ls` you run — so a four-digit name would sort *before* every three-digit one
+(`1000-ping` < `999-ping`) and silently reorder every transcript already on
+disk. 999 is the width of that field. It is not a claim about how many
+directories a filesystem should hold, and it is not a limit on a run:
+
+```
+transcripts/m1-20260901       999 steps   meta.next = m1-20260901-s01
+transcripts/m1-20260901-s01   999 steps   meta.prev = m1-20260901
+                                          meta.next = m1-20260901-s02
+transcripts/m1-20260901-s02   …
+```
+
+The base directory is segment 0; rotation appends `-s01`, `-s02`, … . Each
+segment's `meta.json` carries `base`, `segment`, `cap`, `prev` and `next`, so
+the chain walks from any member in either direction, and the seam is also an
+`rwa:rotate` line in both segments' `log.ndjson` — a log-only consumer sees a
+run that continued, not one that stopped. Opening a run resolves to its **last**
+segment, so `RWA_RUN=<run>` keeps appending to it across calls, sessions and
+bench relaunches. Naming a segment (`RWA_RUN=<run>-s02`) resolves to the same
+place: `-sNN` is the client's own syntax for "part of `<run>`".
+
+Rotation happens because the alternative is a multi-day run stopping dead for a
+reason that has nothing to do with the colony. Until git-bug `5eba561` the
+client raised a bare `RuntimeError` here, and run `m1-20260901` lost every call
+from in-game day 31 onward to a Python traceback instead of an envelope.
+
+`--no-rotate` / `RWA_NO_ROTATE` keeps a scripted scenario in **exactly one**
+directory. That is now the only way to reach the cap, and it answers in the
+client's own envelope shape rather than by crashing:
+
+```json
+{"id": "ping-081634-2451", "op": "ping", "ok": false,
+ "error": {"code": "rwa-transcript-full",
+           "detail": "transcript run capped holds its full 999 steps and rotation is off
+                      (--no-rotate / RWA_NO_ROTATE) — command not sent. …"},
+ "rwa": {"run": "capped", "cap": 999, "sent": false, "rotate": false}}
+```
+
+`sent: false` is the load-bearing field: the step directory is claimed *before*
+the inbox write, so a refusal here means nothing reached the bench and there is
+no ghost command to surface as `stale-on-restart`. The exit code is **2**, with
+the other usage errors — a full directory is a fact about the invocation, not a
+verdict from the colony, so it must not share an exit code with `ok:false` from
+the mod.
+
+**Auditing a run that rotated**: `accept/4.2-play-loop.py --transcript` takes a
+directory, a glob, or several of either, and follows the `meta.json` links —
+any of these names the whole run:
+
+```bash
+python accept/4.2-play-loop.py RUNS/m1-20260901 --transcript transcripts/m1-20260901
+python accept/4.2-play-loop.py RUNS/m1-20260901 --transcript 'transcripts/m1-20260901*'
+```
+
+Its `transcript-chain` line always names the segments it read, in order. Watch
+it: auditing the head of a chain alone reports `113 advances within policy` on
+`m1-20260901` where the whole run FAILs the wedge rule, and a green line over a
+fifth of a run is worse than no line at all.
+
+The segments the shell workaround wrote before this fix (`m1-20260901-s00`
+through `-s03`) carry no links. `rwa` derives them the first time it opens that
+run — a `-s00` reads as segment 0 like the bare directory, which is not a
+conflict, because the bare one ran first and sorts first. Until then, use the
+glob spelling for a pre-fix run.
+
+`rwa replay` still replays **one** segment: re-sending a multi-day run because
+the directory happened to be its first segment is not something to do by
+accident. It warns and names the successor when the segment it was given has
+one.
+
 ```bash
 export RWA_RUN=food-crisis
 rwa journal-selftest --steps stockpile
@@ -622,6 +698,7 @@ scopes are two questions.
 | `RWA_TRANSCRIPTS` | transcript root | `<repo>/transcripts` |
 | `RWA_RUN` | transcript run-dir name | the game session id |
 | `RWA_NO_TRANSCRIPT` | disable recording | unset |
+| `RWA_NO_ROTATE` | keep a run in exactly one directory (refuse at the 999-step cap instead of starting `<run>-s01`) | unset |
 | `RWA_OUTPUT` | `json` or `pretty` | tty-dependent |
 
 ## Self-test
