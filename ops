@@ -1,1 +1,1 @@
-{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":3,"timestamp":1788351205,"nonce":"wDWiKDSpjVAUkdVD8Ki4M3+d53c=","message":"CLOSING. Every acceptance bullet green, save/load included — bench `20260901T221926`, envelopes `08`/`09` at `accept/runs/s21-20260901/posture/`. Merged `cb5de43`, built `db6656b`.","files":null}]}
+{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":4,"timestamp":1788351209,"nonce":"Xjq2VpAy/cZVxwABRR5ye7Mu0Ms=","status":2}]}
