@@ -1,1 +1,1 @@
-{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":5,"timestamp":1788384630,"nonce":"790n7FWqon/zHqrTO425Feu0igc=","added":["priority:p2","state:backlog","type:bug"],"removed":null}]}
+{"author":{"id":"127a58c7f014820991be95805df42525db12c92e2d7319d04d4df105a9aa3444"},"ops":[{"type":2,"timestamp":1788384675,"nonce":"jSeWKCjJS6BRpDtaBl5WA6AU5K8=","title":"0.1 Spike: profile, headless boot, throughput","was":"baseviz view prints the grid upside down while its header says north up"}]}
