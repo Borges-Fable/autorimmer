@@ -44,7 +44,9 @@ Everything else is protocol plumbing, plus transcripts: every command and
 result is mirrored into a run directory keyed by the game's session id, so the
 transcript, the journal file (`journal/<sid>.ndjson`) and every result's `sid`
 field share one key. `rwa replay <run-dir>` re-sends a transcript's commands in
-order, which is what makes "replayable" a testable claim rather than a hope.
+order, which is what makes "replayable" a testable claim rather than a hope. A
+run longer than 999 calls continues in `<run>-s01`, `-s02`, … , each segment's
+meta.json naming the one before and the one after.
 
 House style: stdlib only, python3, no third-party deps — this has to run from a
 bare shell on either bench.
@@ -113,6 +115,23 @@ E_NO_ROOT = "rwa-no-root"
 E_BAD_RESULT = "rwa-bad-result"
 E_USAGE = "rwa-usage"
 E_IO = "rwa-io"
+E_TRANSCRIPT_FULL = "rwa-transcript-full"
+
+# A run directory holds at most this many steps, and then the client starts a
+# new SEGMENT rather than refusing to work (git-bug 5eba561: run m1-20260901
+# hit the old limit on in-game day 31 and every subsequent call died with a
+# bare RuntimeError traceback instead of an envelope).
+#
+# 999, and the number is the width of the counter, not a guess about how many
+# files a directory should hold. Every consumer orders steps by SORTING the
+# directory names — `cmd_replay` here, `accept/4.2-play-loop.py`, and any `ls`
+# a human runs — and the names are zero-padded to three digits, so the first
+# four-digit name sorts BEFORE every three-digit one ("1000-ping" < "999-ping").
+# Widening the field would silently reorder every transcript already on disk;
+# rotating at the end of the field costs nothing and keeps one format. The old
+# code called this "1000 steps" in its error message and then refused at 999,
+# because the counter starts at 001.
+STEPS_PER_SEGMENT = 999
 
 # Exit codes. 0/1 is the spec's "non-zero exit on ok:false"; the rest split the
 # client-side failures apart so a script can tell "the colony said no" from
@@ -166,7 +185,7 @@ KEY_RE = re.compile(r"^--([A-Za-z_][A-Za-z0-9_.-]*)(?::(str|num|bool|json))?(=(?
 GLOBALS = {
     "--root": 1, "--timeout": 1, "--cmd-id": 1, "--run": 1, "--transcripts": 1,
     "--stale-secs": 1, "--fps-floor": 1, "--poll-ms": 1,
-    "--json": 0, "--pretty": 0, "--no-transcript": 0, "--quiet": 0,
+    "--json": 0, "--pretty": 0, "--no-transcript": 0, "--no-rotate": 0, "--quiet": 0,
     "--version": 0, "--help": 0, "-h": 0,
 }
 
@@ -569,7 +588,11 @@ def env_exit(env):
         return EXIT_TIMEOUT
     if code in (E_DOWN, E_NO_ROOT):
         return EXIT_DOWN
-    if code == E_USAGE:
+    # A full run directory is only reachable with rotation switched OFF, i.e.
+    # the caller asked for exactly one directory and got what it asked for. It
+    # is a fact about the invocation, not a verdict from the colony, so it must
+    # not share an exit code with "the mod said no".
+    if code in (E_USAGE, E_TRANSCRIPT_FULL):
         return EXIT_USAGE
     return EXIT_NOT_OK
 
@@ -660,6 +683,59 @@ def emit(env, opts, pretty_body=None):
 
 # --- transcripts -------------------------------------------------------------
 
+class TranscriptFull(Exception):
+    """The segment is full and rotation is off. Carries what the envelope needs."""
+
+    def __init__(self, run, cap):
+        super().__init__(f"transcript run {run} is full ({cap} steps)")
+        self.run = run
+        self.cap = cap
+
+
+def read_meta(path):
+    """<path>/meta.json as a dict, or {} — a missing or broken one is not fatal."""
+    try:
+        m = json.loads((Path(path) / "meta.json").read_text())
+        return m if isinstance(m, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def merge_meta(path, fields, defaults=None):
+    """Merge into <path>/meta.json, writing only when something actually changes.
+
+    Merging rather than clobbering, because a segment written by an older
+    client holds only run/client/started and the chain links have to be added
+    to it without dropping what is there. Writing only on a change, because
+    every `rwa` call opens the transcript and a rewrite per call is mtime noise
+    on an artefact people read by timestamp.
+    """
+    meta = Path(path) / "meta.json"
+    cur = read_meta(path)
+    merged = dict(cur)
+    for k, v in (defaults or {}).items():
+        merged.setdefault(k, v)
+    merged.update(fields)
+    if merged == cur:
+        return False
+    meta.write_text(json.dumps(merged, indent=2) + "\n")
+    return True
+
+
+def split_segment(run):
+    """`foo-s03` -> ("foo", 3); `foo` -> ("foo", 0).
+
+    The base directory is segment 0 and rotation appends `-s01`, `-s02`, … .
+    A `-s00` written by the shell workaround this fix replaces (git-bug
+    5eba561) therefore reads as segment 0 as well — run m1-20260901 has both
+    `m1-20260901` and `m1-20260901-s00` on disk. That is not a conflict to
+    resolve, it is the order they actually ran in, and it falls out of sorting
+    ties by name: the bare directory sorts before the suffixed one.
+    """
+    m = re.fullmatch(r"(.*)-s(\d+)", run)
+    return (m.group(1), int(m.group(2))) if m else (run, 0)
+
+
 class Transcript:
     """A run directory: every command and result, byte for byte, in order.
 
@@ -667,30 +743,129 @@ class Transcript:
     join key for the journal file (`journal/<sid>.ndjson`) and for every result
     envelope. One game session, one transcript, one journal — a post-mortem or
     an rwtest report can line all three up without a correlation table.
+
+    A run longer than `STEPS_PER_SEGMENT` calls spans SEGMENTS: `<run>`,
+    `<run>-s01`, `<run>-s02`, … . Each segment's meta.json names its
+    predecessor and successor, so the chain is walkable from any member in
+    either direction and "the transcript of this run" stays a well-defined
+    artefact however long the run goes. Rotation is the default because the
+    alternative — what shipped until git-bug 5eba561 — is a multi-day run that
+    stops dead for a reason that has nothing to do with the colony.
     """
 
-    def __init__(self, base, run):
-        self.dir = Path(base) / run
-        self.dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self, base, run, rotate=True):
+        self.root = Path(base)
+        self.rotate = rotate
+        self.cap = STEPS_PER_SEGMENT
+        self.base, self.index = split_segment(run)
         self.run = run
-        meta = self.dir / "meta.json"
-        if not meta.exists():
-            meta.write_text(json.dumps({
-                "run": run, "client": VERSION,
+        legacy = False
+        if rotate:
+            # Resume the run rather than reopening its first segment: every
+            # `rwa` call is its own process, so without this the second call
+            # after a rotation would land back in the full directory and
+            # rotate again, one new segment per command.
+            segs = self.ordered()
+            if segs:
+                self.index, self.run = segs[-1][0], segs[-1][1]
+                legacy = len(segs) > 1 and "base" not in read_meta(segs[-1][2])
+        self.dir = self.root / self.run
+        self.dir.mkdir(parents=True, exist_ok=True)
+        # A chain the shell workaround left behind has no links at all. It is
+        # still a chain — the order is in the names — so derive the links once,
+        # on the first call after the upgrade, rather than leaving run
+        # m1-20260901 unwalkable forever. Gated on the tail predating this
+        # format, so it runs once and never on the hot path again.
+        if legacy:
+            self.link_chain()
+        self.write_meta()
+
+    def segments(self):
+        """Every existing segment of this run as (index, name, path), unordered."""
+        out = []
+        if (self.root / self.base).is_dir():
+            out.append((0, self.base, self.root / self.base))
+        for p in self.root.glob(self.base + "-s*"):
+            m = re.fullmatch(re.escape(self.base) + r"-s(\d+)", p.name)
+            if m and p.is_dir():
+                out.append((int(m.group(1)), p.name, p))
+        return out
+
+    def ordered(self):
+        """Segments in the order they ran: by index, ties broken by name."""
+        return sorted(self.segments(), key=lambda s: (s[0], s[1]))
+
+    def predecessor(self):
+        below = [s for s in self.segments() if (s[0], s[1]) < (self.index, self.run)]
+        return max(below, key=lambda s: (s[0], s[1]))[1] if below else None
+
+    def meta_for(self, name, index, prev, nxt):
+        return {"run": name, "client": VERSION,
                 "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            }, indent=2) + "\n")
+                "base": self.base, "segment": index, "cap": self.cap,
+                "prev": prev, "next": nxt}
+
+    def write_meta(self, **fields):
+        merge_meta(self.dir, fields,
+                   self.meta_for(self.run, self.index, self.predecessor(), None))
+
+    def link_chain(self):
+        segs = self.ordered()
+        for i, (idx, name, path) in enumerate(segs):
+            merge_meta(path, {}, self.meta_for(
+                name, idx,
+                segs[i - 1][1] if i else None,
+                segs[i + 1][1] if i + 1 < len(segs) else None))
+
+    def next_index(self):
+        return 1 + sum(1 for p in self.dir.iterdir()
+                       if p.is_dir() and re.match(r"^\d{3}-", p.name))
 
     def step(self, op):
-        """Claim the next NNN-<op>/ directory. mkdir is the lock."""
-        n = 1 + sum(1 for p in self.dir.iterdir() if p.is_dir() and re.match(r"^\d{3}-", p.name))
-        while n < 1000:
-            path = self.dir / f"{n:03d}-{re.sub(r'[^A-Za-z0-9_-]', '_', op)}"
-            try:
-                path.mkdir()
-                return path
-            except FileExistsError:
-                n += 1
-        raise RuntimeError("transcript run is full (1000 steps)")
+        """Claim the next NNN-<op>/ directory, rotating segments as needed.
+
+        mkdir is still the lock. Raises TranscriptFull only when rotation is
+        off — `send` turns that into an envelope, and the command is not sent.
+        """
+        name = re.sub(r"[^A-Za-z0-9_-]", "_", op)
+        for _ in range(4):   # one rotation is enough; the rest is race margin
+            n = self.next_index()
+            while n <= self.cap:
+                path = self.dir / f"{n:03d}-{name}"
+                try:
+                    path.mkdir()
+                    return path
+                except FileExistsError:
+                    n += 1
+            if not self.rotate:
+                raise TranscriptFull(self.run, self.cap)
+            self.rotate_now()
+        raise TranscriptFull(self.run, self.cap)
+
+    def rotate_now(self):
+        """Start the next segment and link it to this one, both ways."""
+        prev_run, prev_dir = self.run, self.dir
+        nxt = max([i for i, _, _ in self.segments()] + [self.index]) + 1
+        self.index = nxt
+        self.run = f"{self.base}-s{nxt:02d}"
+        self.dir = self.root / self.run
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.write_meta(prev=prev_run)
+        # The predecessor's forward link, written into whatever it already has.
+        try:
+            merge_meta(prev_dir, {"next": self.run})
+        except OSError as e:
+            warn(f"could not link {prev_run} -> {self.run} ({e})")
+        # The seam, in the log a consumer reads as well as in the meta a
+        # consumer walks: log.ndjson alone should not look like a run that
+        # simply stopped.
+        entry = {"op": "rwa:rotate", "ok": True, "sent": False, "source": "rwa",
+                 "reason": "segment full", "cap": self.cap,
+                 "from": prev_run, "to": self.run}
+        self.note_in(prev_dir, entry)
+        self.note(entry)
+        warn(f"transcript {prev_run} is full ({self.cap} steps) — "
+             f"continuing in {self.run}")
 
     def request(self, step_dir, cmd_text):
         """cmd.json, written BEFORE the command is dispatched.
@@ -720,9 +895,15 @@ class Transcript:
         post-mortem still wants to see that the agent tried to talk to a bench
         that was not there and when.
         """
+        self.note_in(self.dir, entry)
+
+    def note_in(self, where, entry):
         entry = dict(entry, ts=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
-        with (self.dir / "log.ndjson").open("a") as fh:
-            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        try:
+            with (Path(where) / "log.ndjson").open("a") as fh:
+                fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError as e:
+            warn(f"transcript log line dropped ({e})")
 
 
 def open_transcript(opts, root, h):
@@ -734,8 +915,9 @@ def open_transcript(opts, root, h):
         sid = (h.get("status") or {}).get("sid")
         run = sid if sid else "nogame-" + time.strftime("%Y%m%dT%H%M%S")
     run = re.sub(r"[^A-Za-z0-9_.-]", "_", str(run))
+    rotate = not (opts.get("--no-rotate") or os.environ.get("RWA_NO_ROTATE"))
     try:
-        return Transcript(base, run)
+        return Transcript(base, run, rotate=rotate)
     except OSError as e:
         warn(f"transcripts disabled ({e})")
         return None
@@ -802,7 +984,27 @@ def send(root, op, args, opts, h, transcript=None):
     # so a partially written command is never even a candidate. (It also has a
     # 250ms minimum-age heuristic, but that is its belt, not our braces.)
     tmp = inbox / f".rwa-{cid}.tmp"
-    step_dir = transcript.step(op) if transcript else None
+    # The step directory is claimed BEFORE the inbox write, so a transcript
+    # that cannot take another step stops the call here — with an envelope,
+    # and with nothing dispatched. Only reachable with rotation off; the
+    # default path starts a new segment instead and never gets here.
+    try:
+        step_dir = transcript.step(op) if transcript else None
+    except TranscriptFull as e:
+        env = envelope(op, False, code=E_TRANSCRIPT_FULL, cid=cid, detail=(
+            f"transcript run {e.run} holds its full {e.cap} steps and rotation is off "
+            "(--no-rotate / RWA_NO_ROTATE) — command not sent. Drop --no-rotate to "
+            f"continue in {split_segment(e.run)[0]}-sNN, or pass --run NAME for a fresh "
+            "run directory, or --no-transcript to stop recording."),
+            extra={"run": e.run, "cap": e.cap, "sent": False, "rotate": False})
+        transcript.note({"op": op, "id": cid, "ok": False,
+                         "error": E_TRANSCRIPT_FULL, "sent": False, "source": "rwa"})
+        return env
+    except OSError as e:
+        # Same policy as open_transcript: a transcript problem must never be
+        # what stops the colony. The call goes through, unrecorded and said so.
+        warn(f"transcript step dropped ({e}) — the command is still being sent")
+        step_dir, transcript = None, None
     if step_dir:
         transcript.request(step_dir, text)   # before the inbox write, not after
     started = time.time()
@@ -1425,6 +1627,16 @@ def cmd_replay(opts, root, tokens):
     steps = sorted(p for p in src.iterdir() if p.is_dir() and (p / "cmd.json").exists())
     if not steps:
         die(f"{src} has no NNN-<op>/cmd.json steps to replay", EXIT_USAGE)
+    # A replay is ONE segment on purpose: re-sending a multi-day run because
+    # the directory happened to be its first segment is not a thing to do by
+    # accident. But it must not look like the whole run either, so say so.
+    try:
+        nxt = (json.loads((src / "meta.json").read_text()) or {}).get("next")
+    except (OSError, ValueError):
+        nxt = None
+    if nxt:
+        warn(f"{src.name} is one segment of a longer run — it continues in {nxt}. "
+             "Replaying this segment only; replay the rest by name if you want it.")
 
     h = health(root, float(opts.get("--stale-secs") or STALE_SECS),
                float(opts.get("--fps-floor") or FPS_FLOOR))
@@ -1999,15 +2211,20 @@ Global flags:
   --run NAME            transcript run directory name (also RWA_RUN)
   --transcripts DIR     transcript root (also RWA_TRANSCRIPTS)
   --no-transcript       do not record this command
+  --no-rotate           keep the run in exactly ONE directory: at 999 steps
+                        the call is refused with rwa-transcript-full instead
+                        of continuing in <run>-sNN (also RWA_NO_ROTATE)
   --stale-secs N        heartbeat age that means "down" (default 10)
   --fps-floor N         fps below which the bench counts as frame-starved (default 5)
   --quiet               suppress pretty output (exit code still speaks)
 
-Exit codes: 0 ok · 1 the mod said ok:false · 2 bad usage · 3 no live bench ·
-4 timed out waiting for a result.
+Exit codes: 0 ok · 1 the mod said ok:false · 2 bad usage (incl. a full run
+directory under --no-rotate) · 3 no live bench · 4 timed out waiting for a
+result.
 
 Environment: RIMWORLD_VAULT (workspace, default /home/dorian/projects/rimworld),
-RWA_ROOT, RWA_TRANSCRIPTS, RWA_RUN, RWA_OUTPUT=json|pretty, RWA_NO_TRANSCRIPT.
+RWA_ROOT, RWA_TRANSCRIPTS, RWA_RUN, RWA_OUTPUT=json|pretty, RWA_NO_TRANSCRIPT,
+RWA_NO_ROTATE.
 See rwa/README.md for the protocol, jq recipes and the transcript layout."""
 
 
