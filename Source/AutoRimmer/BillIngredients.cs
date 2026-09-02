@@ -120,12 +120,20 @@ namespace AutoRimmer
             var d = new Dictionary<string, object>();
             if (bill?.recipe == null)
             {
+                // THE DEGRADED SHAPE IS THE SAME SHAPE. Nine keys here and nine
+                // keys below, because a block that drops fields when it cannot
+                // answer is the `filter: null` defect wearing a different hat:
+                // the consumer cannot tell "no answer" from "no such field".
                 d["filter_state"] = "unavailable";
                 d["ingredient_filter"] = null;
+                d["recipe_default_defs"] = null;
+                d["filter_defs"] = null;
                 d["ingredient_search"] = BillWatch.Block(bill);
                 d["ingredient_match"] = null;
                 d["health"] = "unknown";
                 d["remedy"] = null;
+                d["health_note"] = "this bill has no recipe, so nothing about its ingredients can "
+                    + "be answered. A Bill with a null recipe is a modded or half-loaded object.";
                 return d;
             }
 
@@ -312,6 +320,7 @@ namespace AutoRimmer
                 ["usable"] = 0,
                 ["usable_sample"] = new List<object>(),
                 ["rejected"] = new Dictionary<string, object>(),
+                ["rejected_top"] = null,
                 ["rejected_sample"] = new List<object>(),
                 ["truncated"] = false,
                 ["clauses_not_checked"] = new List<object> { "reachable", "reservable" },
