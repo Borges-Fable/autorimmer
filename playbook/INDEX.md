@@ -19,7 +19,7 @@ no opinion).
 | [[a-room-is-not-a-room-until-the-game-says-so]] | Critical | observed-at-bench | any `place-layout` meant to enclose — `done:true` is not `enclosed:true`, and a sealed room with a quarter of its roof missing is still thermally outdoors (**cited**: `turn.md §room-that-is-not-a-room`, `templates/freezer-kitchen.md` §Placement) |
 | [[read-every-return-or-lose-a-colonist]] | Critical | observed-at-bench | any back-to-back short advances — a narrowed read is a blind loop |
 | [[seek-off-is-a-decision-to-flee]] | Critical | verified-in-source | choosing a combat posture — `hostility_response` is decided ABOVE seek, so `Flee` beats it |
-| [[a-designation-outside-the-allowed-area-does-nothing]] | Critical | observed-at-bench | any designation on a MOVING target — a hunt designation went inert when the herd migrated and a colonist starved |
+| [[a-designation-outside-the-allowed-area-does-nothing]] | Critical | observed-at-bench | any designation on a MOVING target, and any `area`/`posture` change (**half graduated to CODE**: `designate` publishes `accepted_actionable`/`accepted_unreachable` + `reach`, and refuses an all-unreachable batch — git-bug `b7359fa`. The note keeps the standing re-check, which nothing does yet) |
 | [[stockpile-scope-hides-your-own-supplies]] | Critical | observed-at-bench | any `resources.*` reading 0 — it is stockpiles-only, and three different problems all look like this |
 | [[batching-turns-costs-you-the-trader]] | Important | observed-at-bench | driving several advances unattended — a batch must break on opportunities, not just threats |
 | [[materials-are-a-standing-loop]] | Important | evan-stated | any input trending to zero — designate, don't retry the bill |

@@ -3667,3 +3667,68 @@ queue by default (an agent flailing mid-experiment must not page triage).
   learns two vocabularies for one idea — which is precisely what batching the
   two issues into one worker was supposed to prevent, and did not, because they
   went to different workers on my dispatch.
+
+- 2026-09-02 (repair round, worker; git-bug b7359fa) — **The allowed-area test
+  is PER PAWN, so `designate` cannot state "outside the allowed area" as one
+  fact, and the number that decides a refusal is quantified over the CAPABLE
+  ROSTER.** `RimWorld/ForbidUtility.InAllowedArea(IntVec3, Pawn)` reads
+  `forPawn.playerSettings.EffectiveAreaRestrictionInPawnCurrentMap` — there is
+  no colony-wide area to compare a designation against. A check written against
+  a single global or Home area would have reported clean on the exact colony it
+  was written for, which is the failure that cost `Marco`.
+
+  Three shapes follow, and each was a decision:
+
+  1. **`accepted` is split rather than replaced.** `accepted_actionable` and
+     `accepted_unreachable` sit beside it, and the `reach` block carries the
+     roster, the areas (id, label, cells, which pawns, how many targets each
+     shuts out) and a capped list of the unreachable targets. `accepted` keeps
+     its old meaning — the gate took N — because a consumer that reads it today
+     is not reading it wrong, only incompletely.
+  2. **The refusal is narrow and has a door.** A batch where NOT ONE target is
+     workable by ANY capable colonist is refused before anything is written,
+     from a DRY PREFLIGHT (a throwaway designator run with `dryRun:true`), so
+     the refusal is a refusal and not an apology for a mutation already made. A
+     mixed batch reports and proceeds. `allow_unreachable:true` overrides:
+     painting ahead of an area expansion is a thing players do, and a wall with
+     no door is worse than a loud report.
+  3. **The franchise is CAPABILITY, not assignment.** `!WorkTypeIsDisabled(w)`
+     decides who counts, because a capable colonist with the work switched off
+     is one `work-priorities` call away, while an incapable one never will be.
+     `enabled` (`WorkIsActive`) is published beside it and raises a `warning`
+     when it is zero — that is the OTHER half of what run m1-20260901 got wrong
+     (128 designated `MineableSteel` cells, never mined) and there is nowhere
+     else the agent sees it at the moment it designates.
+
+  **The designation → work type link is data, not a table of ours.** The
+  designator table names the `WorkGiver_*` CLASS that consumes each designation
+  (verified in the decompile by member name); `DesignateReach.WorkTypeFor` looks
+  that class up in `DefDatabase<WorkGiverDef>` by `giverClass` and reads the
+  def's own `workType`. A mod that re-homes `WorkGiver_Miner` is honoured for
+  free, and a class no def claims yields `applies:false` with a reason rather
+  than a guess. `Mine` and `MineVein` share `WorkGiver_Miner` —
+  `MineAIUtility.PotentialMineables` unions both designations — so the two verbs
+  answer with one roster.
+
+  **What it deliberately does NOT test, said in the envelope's own `test`
+  field: pathing.** A cell inside a pawn's area can still be unroutable, and
+  `Pawn.CanReach` is O(cells × pawns) region traversal against a 20,000-cell
+  ceiling. Naming the field `reach` and quietly meaning "area" would have been
+  the same class of defect the issue is about, so the envelope says which
+  question it answered. Filed separately.
+
+- 2026-09-02 (repair round, worker; git-bug b7359fa/855117a) — **`accepted` is
+  not the count of designations created, and exactly one designator makes that
+  true.** `Designator_MineVein.DesignateSingleCell` calls
+  `FloodFillDesignations`, which paints `MineVein` over every contiguous
+  non-fogged cell whose edifice def matches the clicked one — so one accepted
+  cell can create forty designations, and every later cell in the same drag then
+  comes back already-designated and is REJECTED. Any rollup keyed on `accepted`
+  — the reach report, a per-def composition — would therefore be measuring the
+  wrong set, and would say "1" about a call that did forty cells of work.
+
+  `DesignateEngine.Landed` is the fix and it is a set, not a count:
+  `CellSnapshot` before and after, delta for a Cell-targeted def, the accepted
+  things for a Thing-targeted one, and `designated_from` names which reading the
+  caller got. `designations_before`/`designations_now` already reported the same
+  truth as a pair of counts; this is that pair with the cells in hand.

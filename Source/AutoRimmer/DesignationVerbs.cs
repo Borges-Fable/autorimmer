@@ -52,6 +52,19 @@ namespace AutoRimmer
                                            // designator acts immediately (claim)
             public string Cite;             // the class whose gate we run
             public string Note;             // published when the verb is not a designation
+            // WHICH WorkGiver CONSUMES THIS DESIGNATION (git-bug b7359fa).
+            // The CLASS, not the work type: `DesignateReach.WorkTypeFor` looks
+            // it up in DefDatabase<WorkGiverDef> by `giverClass` and reads the
+            // def's own `workType`, so a mod that re-homes a giver is honoured
+            // and nothing here hardcodes a work type. null means the designator
+            // produces no pawn work at all (claim acts on the spot; cancel and
+            // the smooth chooser are not one giver's), and the reach block then
+            // publishes `applies:false` with the reason.
+            //
+            // Every entry below was verified against the decompiled 1.6 source
+            // by member name: the named class is the one that reads this
+            // designation out of `designationManager`.
+            public Type Giver;
         }
 
         private static Dictionary<string, DesEntry> table;
@@ -61,82 +74,101 @@ namespace AutoRimmer
             if (table != null) return table;
             var t = new Dictionary<string, DesEntry>(StringComparer.Ordinal);
 
-            void Add(string name, Func<Designator> make, DesignationDef def, string cite, string note = null)
-                => t[name] = new DesEntry { Make = make, Def = def, Cite = cite, Note = note };
+            void Add(string name, Func<Designator> make, DesignationDef def, string cite,
+                Type giver, string note = null)
+                => t[name] = new DesEntry
+                { Make = make, Def = def, Cite = cite, Giver = giver, Note = note };
 
             // --- rock and ore ---------------------------------------------
+            // Mine and MineVein are ONE giver: `MineAIUtility.PotentialMineables`
+            // unions SpawnedDesignationsOfDef(Mine) with (MineVein) and
+            // `WorkGiver_Miner.ShouldSkip` bails only when both are empty, so
+            // the two designations are interchangeable for job generation.
             Add("mine", () => new Designator_Mine(), DesignationDefOf.Mine,
-                "RimWorld/Designator_Mine.CanDesignateCell");
+                "RimWorld/Designator_Mine.CanDesignateCell", typeof(WorkGiver_Miner));
             // ONE designate paints a whole vein — cheaper than painting cells,
             // and the reason the session-4 amendment named it.
             Add("mine-vein", () => new Designator_MineVein(), DesignationDefOf.MineVein,
-                "RimWorld/Designator_MineVein.CanDesignateCell");
+                "RimWorld/Designator_MineVein.CanDesignateCell", typeof(WorkGiver_Miner));
 
             // --- plants ----------------------------------------------------
+            // HarvestPlant and CutPlant are both `WorkGiver_PlantsCut`'s:
+            // its PotentialWorkThingsGlobal walks designationsByDef for each.
             Add("chop", () => new Designator_PlantsHarvestWood(), DesignationDefOf.HarvestPlant,
-                "RimWorld/Designator_PlantsHarvestWood.CanDesignateThing");
+                "RimWorld/Designator_PlantsHarvestWood.CanDesignateThing", typeof(WorkGiver_PlantsCut));
             Add("harvest-wood", () => new Designator_PlantsHarvestWood(), DesignationDefOf.HarvestPlant,
-                "RimWorld/Designator_PlantsHarvestWood.CanDesignateThing");
+                "RimWorld/Designator_PlantsHarvestWood.CanDesignateThing", typeof(WorkGiver_PlantsCut));
             Add("harvest", () => new Designator_PlantsHarvest(), DesignationDefOf.HarvestPlant,
-                "RimWorld/Designator_PlantsHarvest.CanDesignateThing");
+                "RimWorld/Designator_PlantsHarvest.CanDesignateThing", typeof(WorkGiver_PlantsCut));
             Add("cut", () => new Designator_PlantsCut(), DesignationDefOf.CutPlant,
-                "RimWorld/Designator_PlantsCut.CanDesignateThing");
+                "RimWorld/Designator_PlantsCut.CanDesignateThing", typeof(WorkGiver_PlantsCut));
             Add("cut-plants", () => new Designator_PlantsCut(), DesignationDefOf.CutPlant,
-                "RimWorld/Designator_PlantsCut.CanDesignateThing");
+                "RimWorld/Designator_PlantsCut.CanDesignateThing", typeof(WorkGiver_PlantsCut));
             Add("extract-tree", () => new Designator_ExtractTree(), DesignationDefOf.ExtractTree,
-                "RimWorld/Designator_ExtractTree.CanDesignateThing");
+                "RimWorld/Designator_ExtractTree.CanDesignateThing", typeof(WorkGiver_ExtractTree));
 
             // --- hauling and animals ---------------------------------------
+            // No WorkGiver names DesignationDefOf.Haul; the designation makes a
+            // thing haulable (`ListerHaulables.ShouldBeHaulable`,
+            // `HaulAIUtility.PawnCanAutomaticallyHaulFast`) and
+            // WorkGiver_HaulGeneral is what then picks it up.
             Add("haul", () => new Designator_Haul(), DesignationDefOf.Haul,
-                "RimWorld/Designator_Haul.CanDesignateThing");
+                "RimWorld/Designator_Haul.CanDesignateThing", typeof(WorkGiver_HaulGeneral));
             Add("hunt", () => new Designator_Hunt(), DesignationDefOf.Hunt,
-                "RimWorld/Designator_Hunt.CanDesignateThing");
+                "RimWorld/Designator_Hunt.CanDesignateThing", typeof(WorkGiver_HunterHunt));
             Add("slaughter", () => new Designator_Slaughter(), DesignationDefOf.Slaughter,
-                "RimWorld/Designator_Slaughter.CanDesignateThing");
+                "RimWorld/Designator_Slaughter.CanDesignateThing", typeof(WorkGiver_Slaughter));
             Add("tame", () => new Designator_Tame(), DesignationDefOf.Tame,
-                "RimWorld/Designator_Tame.CanDesignateThing");
+                "RimWorld/Designator_Tame.CanDesignateThing", typeof(WorkGiver_Tame));
             Add("release-to-wild", () => new Designator_ReleaseAnimalToWild(), DesignationDefOf.ReleaseAnimalToWild,
-                "RimWorld/Designator_ReleaseAnimalToWild.CanDesignateThing");
+                "RimWorld/Designator_ReleaseAnimalToWild.CanDesignateThing",
+                typeof(WorkGiver_ReleaseAnimalsToWild));
 
             // --- things and buildings --------------------------------------
             Add("strip", () => new Designator_Strip(), DesignationDefOf.Strip,
-                "RimWorld/Designator_Strip.CanDesignateThing");
+                "RimWorld/Designator_Strip.CanDesignateThing", typeof(WorkGiver_Strip));
             Add("open", () => new Designator_Open(), DesignationDefOf.Open,
-                "RimWorld/Designator_Open.CanDesignateThing");
+                "RimWorld/Designator_Open.CanDesignateThing", typeof(WorkGiver_Open));
             // Claim is the ONE entry with no designation: Designator_Claim
             // .DesignateThing calls t.SetFaction(Faction.OfPlayer) on the spot.
             // Session-4 amendment ranks it M1 — without it the agent cannot use
             // anything it did not build (ancient-ruins furniture, abandoned bases).
             Add("claim", () => new Designator_Claim(), null,
-                "RimWorld/Designator_Claim.CanDesignateThing (ClaimableBy)",
+                "RimWorld/Designator_Claim.CanDesignateThing (ClaimableBy)", null,
                 "claim takes effect IMMEDIATELY — Designator_Claim.DesignateThing calls "
                 + "SetFaction(player); there is no designation and no colonist walks anywhere");
             Add("deconstruct", () => new Designator_Deconstruct(), DesignationDefOf.Deconstruct,
-                "RimWorld/Designator_Deconstruct.CanDesignateThing (DeconstructibleBy)");
+                "RimWorld/Designator_Deconstruct.CanDesignateThing (DeconstructibleBy)",
+                typeof(WorkGiver_Deconstruct));
             Add("deconstruct-conduit", () => new Designator_DeconstructConduit(), DesignationDefOf.Deconstruct,
-                "RimWorld/Designator_DeconstructConduit.CanDesignateThing");
+                "RimWorld/Designator_DeconstructConduit.CanDesignateThing", typeof(WorkGiver_Deconstruct));
             Add("uninstall", () => new Designator_Uninstall(), DesignationDefOf.Uninstall,
-                "RimWorld/Designator_Uninstall.CanDesignateThing");
+                "RimWorld/Designator_Uninstall.CanDesignateThing", typeof(WorkGiver_Uninstall));
             Add("eject-fuel", () => new Designator_EjectFuel(), DesignationDefOf.EjectFuel,
-                "RimWorld/Designator_EjectFuel.CanDesignateThing (CompRefuelable.CanEjectFuel)");
+                "RimWorld/Designator_EjectFuel.CanDesignateThing (CompRefuelable.CanEjectFuel)",
+                typeof(WorkGiver_EjectFuel));
             Add("fill-in", () => new Designator_FillIn(), DesignationDefOf.FillIn,
-                "RimWorld/Designator_FillIn.CanDesignateThing");
+                "RimWorld/Designator_FillIn.CanDesignateThing", typeof(WorkGiver_FillIn));
             Add("extract-skull", () => new Designator_ExtractSkull(), DesignationDefOf.ExtractSkull,
-                "RimWorld/Designator_ExtractSkull.CanDesignateThing (+ its Visible gate)");
+                "RimWorld/Designator_ExtractSkull.CanDesignateThing (+ its Visible gate)",
+                typeof(WorkGiver_ExtractSkull));
 
             // --- terrain ---------------------------------------------------
             Add("smooth", () => new Designator_SmoothSurface(), null,
-                "RimWorld/Designator_SmoothSurface.CanDesignateCell",
+                "RimWorld/Designator_SmoothSurface.CanDesignateCell", null,
                 "smooth picks wall or floor per cell (SmoothSurfaceDesignatorUtility), so the "
-                + "designation is SmoothWall on an edifice and SmoothFloor otherwise");
+                + "designation is SmoothWall on an edifice and SmoothFloor otherwise — and for "
+                + "the same reason it has no single work-giver, so the reach block does not "
+                + "apply; use smooth-floor / smooth-wall to get one");
             Add("smooth-floor", () => new Designator_SmoothFloors(), DesignationDefOf.SmoothFloor,
-                "RimWorld/Designator_SmoothFloors.CanDesignateCell");
+                "RimWorld/Designator_SmoothFloors.CanDesignateCell", typeof(WorkGiver_ConstructSmoothFloor));
             Add("smooth-wall", () => new Designator_SmoothWalls(), DesignationDefOf.SmoothWall,
-                "RimWorld/Designator_SmoothWalls.CanDesignateCell");
+                "RimWorld/Designator_SmoothWalls.CanDesignateCell", typeof(WorkGiver_ConstructSmoothWall));
             Add("remove-floor", () => new Designator_RemoveFloor(), DesignationDefOf.RemoveFloor,
-                "RimWorld/Designator_RemoveFloor.CanDesignateCell");
+                "RimWorld/Designator_RemoveFloor.CanDesignateCell", typeof(WorkGiver_ConstructRemoveFloor));
             Add("remove-foundation", () => new Designator_RemoveFoundation(), DesignationDefOf.RemoveFoundation,
-                "RimWorld/Designator_RemoveFoundation.CanDesignateCell");
+                "RimWorld/Designator_RemoveFoundation.CanDesignateCell",
+                typeof(WorkGiver_ConstructRemoveFoundation));
 
             // --- undo ------------------------------------------------------
             // `cancel` scopes to WHAT IT IS POINTED AT and nothing else (open
@@ -149,7 +181,7 @@ namespace AutoRimmer
             // and a verb that clears the whole map by default is the kind of
             // god-hand this spec exists to avoid.
             Add("cancel", () => new Designator_Cancel(), null,
-                "RimWorld/Designator_Cancel.CanDesignateCell / CanDesignateThing",
+                "RimWorld/Designator_Cancel.CanDesignateCell / CanDesignateThing", null,
                 "cancel removes every cancelable designation on the target and destroys "
                 + "player blueprints/frames there (Designator_Cancel.DesignateThing)");
 
@@ -167,7 +199,33 @@ namespace AutoRimmer
         // ------------------------------------------------------------------
         // designate
         // ------------------------------------------------------------------
-        // designate {type, rect|cells|things|filter, dry_run?, max_cells?}
+        // designate {type, rect|cells|things|filter, dry_run?, max_cells?,
+        //            allow_unreachable?}
+        //
+        // ------------------- THE ALLOWED-AREA GATE (b7359fa) ------------------
+        // `designate hunt` once returned `accepted: 6` and a colonist starved
+        // beside five designated deer, because every one stood outside the
+        // hunters' `Area_Allowed`. Six designations were genuinely created; no
+        // pawn would ever step outside its area to reach one. So this verb now
+        // asks the game's own `ForbidUtility.InAllowedArea` per target, over
+        // the roster of colonists who can actually do that work, and:
+        //
+        //   * a MIXED batch reports — `accepted_actionable` and
+        //     `accepted_unreachable` beside `accepted`, plus a `reach` block
+        //     naming the areas and how many targets each shuts out;
+        //   * a batch where NOT ONE target is workable by ANY capable colonist
+        //     is REFUSED, before anything is designated, with the correction in
+        //     `refused.hint`. `allow_unreachable:true` overrides — a player
+        //     legitimately paints ahead of an area expansion, and a wall with
+        //     no door is worse than a loud report.
+        //
+        // The refusal decision is made from a DRY PREFLIGHT — a second
+        // designator instance run with `dryRun:true`, so `CanDesignate*` is the
+        // only thing called and nothing is written. It runs the gate twice for
+        // a batch that will proceed, which is cheap next to the resolve, and it
+        // is the only way a refusal can be a refusal rather than an apology for
+        // a mutation already made. See DesignateReach's header for the three
+        // facts about `InAllowedArea` that decide the shape.
         [Verb("designate")]
         public static object Designate(VerbContext ctx)
         {
@@ -177,6 +235,7 @@ namespace AutoRimmer
             if (!Table().TryGetValue(type, out var entry))
                 throw new VerbArgsException($"unknown designation type '{type}' ({TypeWords()})");
             bool dryRun = a.Bool("dry_run", false);
+            bool allowUnreachable = a.Bool("allow_unreachable", false);
             var targets = DesignateEngine.Resolve(map, a, DesignateEngine.MaxCellsArg(a));
 
             var des = entry.Make();
@@ -195,10 +254,37 @@ namespace AutoRimmer
                     $"'{type}' is not available in this game ({des.GetType().Name}.Visible is false — "
                     + "the designator is hidden from the architect menu, e.g. a missing DLC, research or precept)");
 
+            // ------------------------------------------------- b7359fa ----
+            // THE PREFLIGHT. Roster first (cheap, and it decides whether the
+            // question applies at all), then the gate DRY over the targets, on
+            // a throwaway designator so the real run below gets a virgin one.
+            var reach = DesignateReach.Roster(map, entry.Giver);
+            if (reach.Applies)
+            {
+                var probe = entry.Make();
+                probe.isOrder = true;
+                var pCells = new List<IntVec3>();
+                var pThings = new List<Thing>();
+                var pRejects = new List<DesignateEngine.Reject>();
+                if (targets.IsThings)
+                    DesignateEngine.RunThings(map, probe, targets.Things, true, pThings, pRejects, entry.Def);
+                else
+                    DesignateEngine.RunCells(map, probe, targets.Cells, true, pCells, pRejects, entry.Def);
+                DesignateReach.Score(reach, map,
+                    targets.IsThings ? null : pCells, targets.IsThings ? pThings : null);
+
+                if (reach.NothingActionable && !allowUnreachable)
+                    return Unreachable(map, type, entry, des, targets, reach, dryRun);
+            }
+
             // null, not -1, when the type has no designation at all (claim,
             // smooth): "there is no such count" and "the count is zero" must
             // not read alike.
             object before = entry.Def == null ? null : (object)DesignateEngine.CountOf(map, entry.Def);
+            // The CELLS carrying this def before the call, so `Landed` can name
+            // what mine-vein's flood-fill actually painted rather than the one
+            // cell the gate accepted. Null for a Thing-targeted def.
+            var beforeCells = DesignateEngine.CellSnapshot(map, entry.Def);
             var acceptedCells = new List<IntVec3>();
             var acceptedThings = new List<Thing>();
             var rejects = new List<DesignateEngine.Reject>();
@@ -229,6 +315,21 @@ namespace AutoRimmer
             if (!dryRun) DesignateEngine.FinalizeSucceeded(des, acceptedCount > 0);
             object after = entry.Def == null ? null : (object)DesignateEngine.CountOf(map, entry.Def);
 
+            // What the call actually PUT ON THE MAP — the designation delta for
+            // a cell-targeted def, the accepted things otherwise. The reach
+            // report is re-scored over it, because `accepted` is not the work
+            // set for mine-vein (see DesignateEngine.Landed). A dry run put
+            // nothing on the map, so it keeps the preflight's score, which was
+            // taken over exactly the set it would have created.
+            var landed = DesignateEngine.LandedOf(map, entry.Def, targets,
+                acceptedCells, acceptedThings, beforeCells);
+            if (reach.Applies && !dryRun)
+            {
+                reach = DesignateReach.Roster(map, entry.Giver);
+                DesignateReach.Score(reach, map,
+                    landed.IsThings ? null : landed.Cells, landed.IsThings ? landed.Things : null);
+            }
+
             // Cells for the echo: everything we aimed at, so a total rejection
             // still shows the ground it was aimed at.
             var echoCells = new List<IntVec3>();
@@ -252,6 +353,16 @@ namespace AutoRimmer
                 ["target_scope"] = targets.Detail,
                 ["accepted"] = acceptedCount,
                 ["dry_run"] = dryRun,
+                // b7359fa acceptance item 2: `accepted` is no longer one number
+                // covering both cases. These two are about what LANDED (the
+                // designation delta), which for mine-vein is not `accepted`;
+                // null when the reach question does not apply to this type.
+                ["accepted_actionable"] = reach.Applies ? (object)reach.Actionable : null,
+                ["accepted_unreachable"] = reach.Applies ? (object)reach.Unreachable : null,
+                ["designated"] = landed.Count,
+                ["designated_from"] = landed.Source,
+                ["reach"] = DesignateReach.Out(reach, map),
+                ["allow_unreachable"] = allowUnreachable,
             };
             if (entry.Note != null) data["note"] = entry.Note;
             if (targets.IsThings)
@@ -286,11 +397,87 @@ namespace AutoRimmer
                         ["targeted"] = targets.Count,
                         ["accepted"] = acceptedCount,
                         ["rejected"] = rejects.Count,
+                        // b7359fa: a post-mortem reads the JOURNAL, not the
+                        // envelope the agent saw and discarded. The row that
+                        // records "we designated six deer" now also records
+                        // that none of them was workable.
+                        ["designated"] = landed.Count,
+                        ["actionable"] = reach.Applies ? (object)reach.Actionable : null,
+                        ["unreachable"] = reach.Applies ? (object)reach.Unreachable : null,
                     },
                     ["designation"] = entry.Def?.defName,
                     ["cells"] = data.TryGetValue("cells", out var cs) ? cs : null,
                     ["ids"] = data.TryGetValue("ids", out var ids) ? ids : null,
                     ["rejected_by_reason"] = data["rejects_by_reason"],
+                });
+            return data;
+        }
+
+        // ------------------------------------------------------------------
+        // THE ALL-UNREACHABLE REFUSAL                          (git-bug b7359fa)
+        // ------------------------------------------------------------------
+        // Nothing has been designated when this runs — the preflight was dry —
+        // so `accepted` is 0 and `designations_now` equals `designations_before`
+        // by construction, both published so a caller can see that for itself
+        // rather than take our word.
+        //
+        // IT JOURNALS. `PawnEmergencyVerbs` set the precedent (a refused order
+        // journals the same way an accepted one does, git-bug 4087644): a run
+        // that tried to designate 128 mining cells and was told no must appear
+        // in the transcript, or the post-mortem sees a gap where a decision was.
+        // A dry run still journals nothing, same as every other dry run.
+        private static object Unreachable(Map map, string type, DesEntry entry, Designator des,
+            DesignateEngine.Targets targets, DesignateReach.Verdict reach, bool dryRun)
+        {
+            int standing = entry.Def == null ? -1 : DesignateEngine.CountOf(map, entry.Def);
+            var refused = DesignateReach.Refusal(reach);
+            var data = new Dictionary<string, object>
+            {
+                ["verb"] = "designate",
+                ["type"] = type,
+                ["designator"] = des.GetType().Name,
+                ["gate"] = entry.Cite,
+                ["designation"] = entry.Def?.defName,
+                ["targeted"] = targets.Count,
+                ["requested"] = targets.Requested,
+                ["capped"] = targets.Capped,
+                ["target_scope"] = targets.Detail,
+                ["accepted"] = 0,
+                ["accepted_actionable"] = 0,
+                ["accepted_unreachable"] = reach.Unreachable,
+                ["designated"] = 0,
+                ["designated_from"] = "nothing was designated — refused before the write",
+                ["dry_run"] = dryRun,
+                ["allow_unreachable"] = false,
+                ["refused"] = refused,
+                ["reach"] = DesignateReach.Out(reach, map),
+                ["designations_before"] = entry.Def == null ? null : (object)standing,
+                ["designations_now"] = entry.Def == null ? null : (object)standing,
+            };
+            if (entry.Note != null) data["note"] = entry.Note;
+            // The ground it was aimed at, same echo a total rejection gets.
+            var echoCells = new List<IntVec3>();
+            if (targets.IsThings)
+            {
+                for (int i = 0; i < targets.Things.Count; i++)
+                    if (targets.Things[i].Spawned) echoCells.Add(targets.Things[i].Position);
+            }
+            else echoCells.AddRange(targets.Cells);
+            data["crop"] = DesignateEngine.Echo(map, echoCells);
+            data["action"] = dryRun
+                ? NoAction()
+                : Act("designate", type, DesignateEngine.Describe(targets), new Dictionary<string, object>
+                {
+                    ["refused"] = refused["code"],
+                    ["counts"] = new Dictionary<string, object>
+                    {
+                        ["targeted"] = targets.Count,
+                        ["accepted"] = 0,
+                        ["designated"] = 0,
+                        ["actionable"] = 0,
+                        ["unreachable"] = reach.Unreachable,
+                    },
+                    ["designation"] = entry.Def?.defName,
                 });
             return data;
         }

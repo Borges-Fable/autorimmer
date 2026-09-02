@@ -710,6 +710,85 @@ namespace AutoRimmer
             return n;
         }
 
+        // ------------------------------------------------------------------
+        // WHAT THE CALL ACTUALLY PUT ON THE MAP        (git-bug b7359fa, 855117a)
+        // ------------------------------------------------------------------
+        // `accepted` is the count of TARGETS the game's gate took, and for one
+        // designator in the table that is NOT the count of designations
+        // created. `Designator_MineVein.DesignateSingleCell` calls
+        // `FloodFillDesignations`, which paints `MineVein` over every
+        // contiguous non-fogged cell whose edifice def matches — so ONE
+        // accepted cell can designate a whole vein, and every later cell in the
+        // same drag then comes back already-designated and is REJECTED. A
+        // report keyed on `accepted` would say "1" about a call that created
+        // forty designations, and a reach or composition rollup built on it
+        // would be measuring the wrong set.
+        //
+        // So for a CELL-targeted designation the subject is the DELTA: the
+        // cells carrying this def after the call, minus the cells carrying it
+        // before. For a THING-targeted one the accepted things are exact and
+        // are used directly. `designations_before`/`designations_now` have
+        // always reported the same truth as a pair of counts; this is that
+        // pair as a SET, so the cells themselves can be looked at.
+        public sealed class Landed
+        {
+            public readonly List<IntVec3> Cells = new List<IntVec3>();
+            public readonly List<Thing> Things = new List<Thing>();
+            public bool IsThings;
+            public string Source;
+            public int Count => IsThings ? Things.Count : Cells.Count;
+        }
+
+        // The cells carrying `def` right now, or null when the question does
+        // not apply (no def, or a Thing-targeted def, whose designations are
+        // not addressed by cell). Copied out immediately: see the class
+        // header's Class E note on the manager's shared statics —
+        // `SpawnedDesignationsOfDef` iterates the per-def list, which is the
+        // cheap and safe route, but nothing may be held across another call in.
+        public static HashSet<IntVec3> CellSnapshot(Map map, DesignationDef def)
+        {
+            if (def == null || map?.designationManager == null) return null;
+            if (def.targetType != TargetType.Cell) return null;
+            var set = new HashSet<IntVec3>();
+            try
+            {
+                foreach (var d in map.designationManager.SpawnedDesignationsOfDef(def))
+                    if (d != null) set.Add(d.target.Cell);
+            }
+            catch { return null; }
+            return set;
+        }
+
+        // `before` is CellSnapshot's answer from before the designator ran, or
+        // null when it did not apply. A null `before` falls back to the
+        // accepted set, and `Source` says which reading the caller got — the
+        // two are the same number for every designator except mine-vein, and a
+        // consumer that cannot tell them apart cannot tell a flood-fill from a
+        // straight drag.
+        public static Landed LandedOf(Map map, DesignationDef def, Targets targets,
+            List<IntVec3> acceptedCells, List<Thing> acceptedThings, HashSet<IntVec3> before)
+        {
+            var l = new Landed { IsThings = targets.IsThings };
+            if (targets.IsThings)
+            {
+                l.Things.AddRange(acceptedThings);
+                l.Source = "accepted things";
+                return l;
+            }
+            var after = before == null ? null : CellSnapshot(map, def);
+            if (before == null || after == null)
+            {
+                l.Cells.AddRange(acceptedCells);
+                l.Source = def == null
+                    ? "accepted cells (this designator adds no designation)"
+                    : "accepted cells (no cell-indexed designation to diff)";
+                return l;
+            }
+            foreach (var c in after) if (!before.Contains(c)) l.Cells.Add(c);
+            l.Source = "designation delta (" + def.defName + " cells now, minus before)";
+            return l;
+        }
+
         public static Map Map()
             => Find.CurrentMap ?? throw new VerbArgsException("no current map");
 
