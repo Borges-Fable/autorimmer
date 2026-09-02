@@ -8,7 +8,24 @@ Audits a finished run against playbook/PLAY-LOOP.md's auditable invariants:
         [--repo <repo-root>]
     python accept/4.2-play-loop.py --selftest
 
+`--transcript` takes directories, shell globs or a chain, and a run longer than
+999 calls is all three: `rwa` rotates into `<run>-s01`, `-s02`, … (git-bug
+5eba561), so "the transcript" of a multi-day run is a chain of segments and
+auditing only the first one would call a run green having read a fifth of it.
+Any of these name the whole run:
+
+    --transcript transcripts/m1-20260901            # follows meta.json links
+    --transcript 'transcripts/m1-20260901*'         # a quoted glob
+    --transcript transcripts/m1-20260901*           # …or let the shell expand it
+
+Segments are ordered by (base, segment index, name), which is the order they
+ran; put run_dir first on the command line so the glob does not swallow it.
+Every adjacency rule below — the wedge, the casualty response — reads the
+flattened chain, so a rotation between two commands does not separate them.
+
 Checks (PASS/FAIL/WARN per check, exit 0 iff no FAIL):
+  transcript-chain    every --transcript spec resolved to at least one segment;
+                      names the segments audited, in order
   ledger-valid        checklist.ndjson parses; keys + verdict enum per 4.1's schema
   item-ids-known      every ledger item id exists in checklists/*.md (### ids,
                       or colony-start-<n> within the colony-start step count)
@@ -55,6 +72,7 @@ The journal file passed in should be the session's own journal/<sid>.ndjson
 """
 
 import argparse
+import glob as globlib
 import json
 import re
 import sys
@@ -102,36 +120,101 @@ def daily_item_ids(repo):
     return set(re.findall(r"^### +(\S+)", text, re.M))
 
 
-def transcript_steps(tr):
+# ---------------------------------------------------------------- transcripts
+# A run longer than 999 calls is a CHAIN of segment directories — `<run>`,
+# `<run>-s01`, … — because `rwa` rotates at the step cap rather than dying
+# (git-bug 5eba561). Everything below reads the chain as one ordered sequence.
+SEGMENT_RE = re.compile(r"(.*)-s(\d+)")
+
+
+def seg_meta(path):
+    try:
+        m = json.loads((Path(path) / "meta.json").read_text(encoding="utf-8"))
+        return m if isinstance(m, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def seg_key(path):
+    """(base, segment index, name) — the order the segments actually ran in.
+
+    Read from meta.json where the client wrote it, derived from the directory
+    name where it did not: the segments the shell workaround left behind carry
+    only run/client/started. A `-s00` from that workaround and the bare base
+    directory both key to index 0, which is not a conflict — the bare one ran
+    first and sorts first on the name tiebreak.
+    """
+    meta = seg_meta(path)
+    base, idx = meta.get("base"), meta.get("segment")
+    if not isinstance(base, str) or not isinstance(idx, int):
+        m = SEGMENT_RE.fullmatch(path.name)
+        base, idx = (m.group(1), int(m.group(2))) if m else (path.name, 0)
+    return base, idx, path.name
+
+
+def follow_chain(path, found):
+    """Add a segment and everything meta.json links it to, both directions."""
+    path = Path(path)
+    if path.name in found or not path.is_dir():
+        return
+    found[path.name] = path
+    meta = seg_meta(path)
+    for key in ("prev", "next"):
+        nxt = meta.get(key)
+        if isinstance(nxt, str) and nxt:
+            follow_chain(path.parent / nxt, found)
+
+
+def resolve_transcripts(specs):
+    """Directories, globs and chains -> (ordered segments, unmatched specs)."""
+    found, missing = {}, []
+    for spec in specs or []:
+        p = Path(spec)
+        hits = [p] if p.is_dir() else [Path(h) for h in sorted(globlib.glob(str(spec)))
+                                       if Path(h).is_dir()]
+        if not hits:
+            missing.append(str(spec))
+        for h in hits:
+            follow_chain(h, found)
+    return sorted(found.values(), key=seg_key), missing
+
+
+def transcript_steps(segments):
     """Every command dir in order as (name, op, cmd, res). op comes from
     cmd.json when it is there and from the directory name otherwise, because a
     client that died before writing cmd.json still left the directory — and
-    which op it WAS is the thing the adjacency rules below turn on."""
+    which op it WAS is the thing the adjacency rules below turn on.
+
+    Takes the whole CHAIN, segment-first: the step counter restarts at 001 in
+    each segment, so flattening in segment order is what keeps "the very next
+    command" meaning the very next command across a rotation."""
     out = []
-    for d in sorted(tr.iterdir()):
-        if not d.is_dir():
-            continue
-        m = re.fullmatch(r"\d+-(.+)", d.name)
-        if not m:
-            continue
-        cmd = res = None
-        for fn, slot in (("cmd.json", "cmd"), ("result.json", "res")):
-            p = d / fn
-            if p.is_file():
-                try:
-                    v = json.loads(p.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    v = None
-                if slot == "cmd":
-                    cmd = v
-                else:
-                    res = v
-        op = (cmd or {}).get("op") or m.group(1)
-        out.append((d.name, op, cmd, res))
+    multi = len(segments) > 1
+    for seg in segments:
+        for d in sorted(seg.iterdir()):
+            if not d.is_dir():
+                continue
+            m = re.fullmatch(r"\d+-(.+)", d.name)
+            if not m:
+                continue
+            cmd = res = None
+            for fn, slot in (("cmd.json", "cmd"), ("result.json", "res")):
+                f = d / fn
+                if f.is_file():
+                    try:
+                        v = json.loads(f.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        v = None
+                    if slot == "cmd":
+                        cmd = v
+                    else:
+                        res = v
+            op = (cmd or {}).get("op") or m.group(1)
+            out.append((f"{seg.name}/{d.name}" if multi else d.name, op, cmd, res))
     return out
 
 
-def advance_discipline(tr):
+def advance_discipline(segments):
     """git-bug 722c951 — THE DISCRIMINATOR.
 
     `advance` now has three distinguishable early returns that all used to be
@@ -157,7 +240,7 @@ def advance_discipline(tr):
     advances against ZERO `journal` calls. Any advancing at all with no journal
     op in the transcript is the shape, escape or no escape.
     """
-    steps = transcript_steps(tr)
+    steps = transcript_steps(segments)
     if not steps:
         report("WARN", "advance-discipline", "no command dirs in transcript — skipped")
         return
@@ -284,8 +367,29 @@ def advance_discipline(tr):
         report("WARN", "advance-discipline", "no advances in transcript")
 
 
-def audit(run_dir, repo, journal_path=None, transcript_dir=None):
+def audit(run_dir, repo, journal_path=None, transcript=None):
     run_dir, repo = Path(run_dir), Path(repo)
+
+    # -- transcript-chain --------------------------------------------------
+    # One `--transcript` used to mean one directory. A run that rotated is a
+    # chain of them, and auditing the head alone would report on a fifth of a
+    # run without saying so — hence this line, which always names what was
+    # read. A spec that matched nothing is a FAIL, not a silent skip: the
+    # checks below would go green on an empty audit.
+    if transcript is None:
+        specs = []
+    elif isinstance(transcript, (str, Path)):
+        specs = [transcript]
+    else:
+        specs = list(transcript)
+    segments, missing = resolve_transcripts(specs)
+    if specs:
+        if missing:
+            report("FAIL", "transcript-chain",
+                   f"no directory matched: {', '.join(missing)}")
+        else:
+            report("PASS", "transcript-chain",
+                   f"{len(segments)} segment(s): " + " -> ".join(s.name for s in segments))
 
     # -- ledger-valid ------------------------------------------------------
     ledger_path = run_dir / "checklist.ndjson"
@@ -401,16 +505,22 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
                    + (f" ({pardoned} of {hostiles} pardoned)" if pardoned else ""))
 
     # -- advance-invariants (needs the transcript's result envelopes) ------
-    if transcript_dir and Path(transcript_dir).is_dir():
+    if segments:
         advances = []
         problems = []
         # One entry per advance DIRECTORY, in order: True/False for a readable
         # envelope, None for one we could not read. The None is load-bearing —
         # see the wedge check below.
         zeros = []
-        for cmd_dir in sorted(Path(transcript_dir).iterdir()):
+        # Segments first, steps within a segment second. The step counter
+        # restarts at 001 in each segment, so flattening the chain in segment
+        # order is what keeps "consecutive" meaning consecutive: two 0-tick
+        # advances either side of a rotation are as adjacent as any other pair.
+        multi = len(segments) > 1
+        for cmd_dir in [d for seg in segments for d in sorted(seg.iterdir())]:
             if not cmd_dir.is_dir() or not re.search(r"-advance$", cmd_dir.name):
                 continue
+            label = f"{cmd_dir.parent.name}/{cmd_dir.name}" if multi else cmd_dir.name
             cmd_file, res_file = cmd_dir / "cmd.json", cmd_dir / "result.json"
             # rwa writes cmd.json to disk BEFORE dispatching, so the two ways a
             # directory can come up short are distinguishable and they do not
@@ -421,14 +531,14 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
                 # and no envelope to name, so the cause is unrecoverable — all
                 # this can honestly say is that an advance is missing here.
                 report("WARN", "advance-invariants",
-                       f"{cmd_dir.name}: empty command dir — cause unrecoverable, "
+                       f"{label}: empty command dir — cause unrecoverable, "
                        "the client wrote nothing before dying")
                 zeros.append(None)
                 continue
             try:
                 cmd = json.loads(cmd_file.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as e:
-                report("WARN", "advance-invariants", f"{cmd_dir.name}: cmd.json unreadable ({e})")
+                report("WARN", "advance-invariants", f"{label}: cmd.json unreadable ({e})")
                 zeros.append(None)
                 continue
             if not res_file.is_file():
@@ -438,7 +548,7 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
                 # over that span. In m1-20260831 that cost ~60000 unobserved
                 # ticks, more than once. This is a FAIL, not a WARN.
                 problems.append(
-                    f"{cmd_dir.name}: client died mid-call — cmd.json has verb "
+                    f"{label}: client died mid-call — cmd.json has verb "
                     f"'{cmd.get('op', '?')}' {cmd.get('args', {})}, no result.json "
                     "(the advance ran unobserved)")
                 zeros.append(None)
@@ -446,11 +556,11 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
             try:
                 res = json.loads(res_file.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as e:
-                report("WARN", "advance-invariants", f"{cmd_dir.name}: result.json unreadable ({e})")
+                report("WARN", "advance-invariants", f"{label}: result.json unreadable ({e})")
                 zeros.append(None)
                 continue
             data = res.get("data", {}) or {}
-            advances.append((cmd_dir.name, cmd.get("args", {}), data))
+            advances.append((label, cmd.get("args", {}), data))
             zeros.append(data.get("ticks_elapsed", None) == 0)
         for name, args, data in advances:
             if args.get("timeout_ticks", 0) > MAX_ADVANCE_TICKS or args.get("ticks", 0) > MAX_ADVANCE_TICKS:
@@ -506,8 +616,8 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
             report("PASS", "advance-invariants", f"{len(advances)} advances within policy")
         else:
             report("WARN", "advance-invariants", "no advance envelopes found in transcript")
-        advance_discipline(Path(transcript_dir))
-    else:
+        advance_discipline(segments)
+    elif not specs:
         report("WARN", "advance-invariants", "no transcript dir given — skipped")
         report("WARN", "advance-discipline", "no transcript dir given — skipped")
 
@@ -520,10 +630,18 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
         else:
             report("PASS", "zero-red-errors", f"{len(events)} events, 0 red")
 
-        if transcript_dir and (Path(transcript_dir) / "log.ndjson").is_file():
+        logs = [seg / "log.ndjson" for seg in segments if (seg / "log.ndjson").is_file()]
+        if logs:
             ops = {}
-            for e in load_ndjson(Path(transcript_dir) / "log.ndjson"):
-                ops[e.get("op")] = ops.get(e.get("op"), 0) + 1
+            for log in logs:
+                for e in load_ndjson(log):
+                    op = e.get("op")
+                    # `rwa:*` lines are the client talking about itself — the
+                    # rotation seam, mostly. They are not dispatched ops and
+                    # must not stand in for one.
+                    if isinstance(op, str) and op.startswith("rwa:"):
+                        continue
+                    ops[op] = ops.get(op, 0) + 1
             # "journal count <= transcript count per verb" holds only for verbs
             # the agent issued ITSELF. A composite verb calls other verbs
             # internally and each nested call journals its own line, so the
@@ -564,7 +682,8 @@ def audit(run_dir, repo, journal_path=None, transcript_dir=None):
                 report("FAIL", "transcript-journal", "; ".join(gaps) + note)
             else:
                 report("PASS", "transcript-journal",
-                       f"{sum(jverbs.values())} journaled mutations all covered by transcript ops" + note)
+                       f"{sum(jverbs.values())} journaled mutations all covered by transcript ops"
+                       + (f" across {len(logs)} segments" if len(logs) > 1 else "") + note)
         else:
             report("WARN", "transcript-journal", "no transcript log.ndjson — skipped")
     else:
@@ -601,32 +720,61 @@ def build_fixture(root, repo):
     }), encoding="utf-8")
     (run / "summary.md").write_text("# selftest run\nlast seq read: 7\n0 drafted, 0 red.\n", encoding="utf-8")
 
+    # A ROTATED run, because that is what a long one looks like now (git-bug
+    # 5eba561): two segments, linked by meta.json, with the step counter
+    # restarting at 001 in the second. The clean fixture being a chain is the
+    # point — a resolver that quietly audited only the head would show up here
+    # as a missing advance rather than as a green run somebody trusts.
     tr = root / "transcripts" / "selftest-run"
-    for i, (op, args, data) in enumerate([
-        # A `journal` read BEFORE the first advance, and one after every
-        # advance that produced anything. git-bug 722c951 made that the mod's
-        # rule; the clean fixture is the shape a compliant run has, so it has
-        # to carry the reads or `advance-discipline` would be asserting on a
-        # fixture nobody could actually produce.
-        ("journal", {"since_seq": 0}, {"count": 2, "read_watermark": 2, "unread_after": 0}),
-        ("advance", {"until": {"letter": True}, "timeout_ticks": 60000},
-         {"reason": "letter", "ticks_elapsed": 41000, "journal_unread": 1}),
-        ("journal", {"since_seq": 2}, {"count": 1, "read_watermark": 3, "unread_after": 0}),
-        ("designate", {"kind": "harvest"}, {}),
-        # A timeout advance that lands PAST the cap by less than the bound the
-        # envelope itself publishes. This is legal — the stop check is per
-        # frame — and the clean fixture must stay green on it.
-        ("advance", {"until": {"letter": True}, "timeout_ticks": 60000},
-         {"reason": "timeout", "ticks_elapsed": 60021, "overshoot_bound": 30}),
-    ], 1):
-        d = tr / f"{i:03d}-{op}"
-        d.mkdir(parents=True)
-        (d / "cmd.json").write_text(json.dumps({"id": f"c{i}", "op": op, "args": args}), encoding="utf-8")
-        (d / "result.json").write_text(json.dumps({"id": f"c{i}", "op": op, "ok": True, "data": data}), encoding="utf-8")
+    tr2 = root / "transcripts" / "selftest-run-s01"
+    segs = [
+        (tr, [
+            # A `journal` read BEFORE the first advance, and one after every
+            # advance that produced anything. git-bug 722c951 made that the
+            # mod's rule; the clean fixture is the shape a compliant run has,
+            # so it has to carry the reads or `advance-discipline` would be
+            # asserting on a fixture nobody could actually produce.
+            ("journal", {"since_seq": 0}, {"count": 2, "read_watermark": 2, "unread_after": 0}),
+            ("advance", {"until": {"letter": True}, "timeout_ticks": 60000},
+             {"reason": "letter", "ticks_elapsed": 41000, "journal_unread": 1}),
+            ("journal", {"since_seq": 2}, {"count": 1, "read_watermark": 3, "unread_after": 0}),
+            ("designate", {"kind": "harvest"}, {}),
+        ]),
+        (tr2, [
+            # A timeout advance that lands PAST the cap by less than the bound
+            # the envelope itself publishes. This is legal — the stop check is
+            # per frame — and the clean fixture must stay green on it.
+            ("advance", {"until": {"letter": True}, "timeout_ticks": 60000},
+             {"reason": "timeout", "ticks_elapsed": 60021, "overshoot_bound": 30}),
+        ]),
+    ]
+    n = 0
+    for seg, steps in segs:
+        for i, (op, args, data) in enumerate(steps, 1):
+            n += 1
+            d = seg / f"{i:03d}-{op}"
+            d.mkdir(parents=True)
+            (d / "cmd.json").write_text(
+                json.dumps({"id": f"c{n}", "op": op, "args": args}), encoding="utf-8")
+            (d / "result.json").write_text(
+                json.dumps({"id": f"c{n}", "op": op, "ok": True, "data": data}), encoding="utf-8")
+    (tr / "meta.json").write_text(json.dumps({
+        "run": "selftest-run", "base": "selftest-run", "segment": 0, "cap": 999,
+        "prev": None, "next": "selftest-run-s01"}), encoding="utf-8")
+    (tr2 / "meta.json").write_text(json.dumps({
+        "run": "selftest-run-s01", "base": "selftest-run", "segment": 1, "cap": 999,
+        "prev": "selftest-run", "next": None}), encoding="utf-8")
     (tr / "log.ndjson").write_text(
+        "\n".join(json.dumps(e) for e in [
+            {"op": "journal", "ok": True},
+            {"op": "advance", "ok": True},
+            {"op": "journal", "ok": True},
+            {"op": "designate", "ok": True},
+            {"op": "rwa:rotate", "ok": True, "from": "selftest-run", "to": "selftest-run-s01"},
+        ]) + "\n", encoding="utf-8")
+    (tr2 / "log.ndjson").write_text(
         "\n".join(json.dumps({"op": op, "ok": True})
-                  for op in ("journal", "advance", "journal", "designate", "advance",
-                             "dev:starter-kit")) + "\n",
+                  for op in ("advance", "dev:starter-kit")) + "\n",
         encoding="utf-8")
 
     journal = root / "journal.ndjson"
@@ -644,7 +792,7 @@ def build_fixture(root, repo):
         {"seq": 6, "tick": 700, "type": "dev",
          "payload": {"verb": "dev:starter-kit", "step": "starter-kit", "caused_seqs": [4, 5]}},
     ]) + "\n", encoding="utf-8")
-    return run, journal, tr
+    return run, journal, tr, tr2
 
 
 def strip_journal_ops(tr):
@@ -679,27 +827,27 @@ def ride_past_casualty(tr):
          "data": {"reason": "ticks", "ticks_elapsed": 2500}}), encoding="utf-8")
 
 
-def escape_fixture(tr):
+def escape_fixture(step):
     """An advance carrying both per-call escapes. Not a FAIL — the escape is
     legal by design — but it must never pass in SILENCE, so it is asserted as
     a WARN naming the reason. An opt-out nobody can see in the audit is the
     silent bypass the issue exists to prevent."""
     why = "burning 3 days unattended to reach the caravan window"
-    (tr / "005-advance" / "cmd.json").write_text(json.dumps(
+    (step / "cmd.json").write_text(json.dumps(
         {"id": "c5", "op": "advance",
          "args": {"ticks": 60000, "unread_ok": why, "through_casualties": why}}), encoding="utf-8")
-    (tr / "005-advance" / "result.json").write_text(json.dumps(
+    (step / "result.json").write_text(json.dumps(
         {"id": "c5", "op": "advance", "ok": True,
          "data": {"reason": "ticks", "ticks_elapsed": 60000,
                   "unread_ok": why, "through_casualties": why}}), encoding="utf-8")
     return why
 
 
-def bleedout_fixture(tr):
+def bleedout_fixture(step):
     """A bleedout-deadline refusal. WARN, not FAIL: the loop could not have
     known without running a pathfinder itself, so being told is the mod doing
     its job — but the pawn and both numbers must reach the audit."""
-    (tr / "005-advance" / "result.json").write_text(json.dumps(
+    (step / "result.json").write_text(json.dumps(
         {"id": "c5", "op": "advance", "ok": False,
          "error": {"code": "bleedout-deadline",
                    "detail": "Captain bleeds out in 9040 ticks and the nearest capable "
@@ -708,7 +856,7 @@ def bleedout_fixture(tr):
         encoding="utf-8")
 
 
-def wake_fixture(tr):
+def wake_fixture(step):
     """git-bug 280fb78. One advance carrying all three of the new facts: it was
     WOKEN by an alert, a standing `alert-mute` swallowed two other wakes, and
     the call declared `through_news`.
@@ -719,10 +867,10 @@ def wake_fixture(tr):
     through the raid" if the audit cannot see what woke it, what it had decided
     to ignore, and where it turned the wake off."""
     why = "burning 3 days unattended to reach the caravan window"
-    (tr / "005-advance" / "cmd.json").write_text(json.dumps(
+    (step / "cmd.json").write_text(json.dumps(
         {"id": "c5", "op": "advance",
          "args": {"ticks": 60000, "through_news": why}}), encoding="utf-8")
-    (tr / "005-advance" / "result.json").write_text(json.dumps(
+    (step / "result.json").write_text(json.dumps(
         {"id": "c5", "op": "advance", "ok": True,
          "data": {"reason": "alert", "ticks_elapsed": 4120,
                   "through_news": why,
@@ -741,7 +889,7 @@ def selftest(repo):
     failures = []
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        run, journal, tr = build_fixture(root, repo)
+        run, journal, tr, tr2 = build_fixture(root, repo)
 
         print("== selftest: clean fixture must pass every check ==")
         results = []
@@ -778,8 +926,12 @@ def selftest(repo):
                 "colonists": {"list": [{"name": "A", "drafted": False}]},
                 "threats": {"hostiles": 6}}), encoding="utf-8"),
              "final-undrafted"),
-            ("two 0-tick advances back to back",
-             lambda: [(tr / "005-advance" / "result.json").write_text(json.dumps(
+            # The two advances are in DIFFERENT segments, either side of the
+            # rotation seam, and no other advance ran between them. A resolver
+            # that audited segments separately, or in the wrong order, would
+            # miss this — which is why the fixture is a chain.
+            ("two 0-tick advances back to back across a segment seam",
+             lambda: [(tr2 / "001-advance" / "result.json").write_text(json.dumps(
                 {"id": "c5", "op": "advance", "ok": True,
                  "data": {"reason": "dialog", "ticks_elapsed": 0}}), encoding="utf-8"),
                 (tr / "002-advance" / "result.json").write_text(json.dumps(
@@ -790,7 +942,7 @@ def selftest(repo):
             # before dispatching, so this shape means the client died mid-call
             # and the advance ran unobserved. FAIL, not WARN.
             ("the client died mid-call",
-             lambda: (tr / "005-advance" / "result.json").unlink(),
+             lambda: (tr2 / "001-advance" / "result.json").unlink(),
              "advance-invariants"),
             # ---- git-bug 722c951: the three early returns, told apart -------
             # A BLIND ADVANCE. The mod refused; no ticks ran. The FAIL is on
@@ -798,7 +950,7 @@ def selftest(repo):
             # skipped — and this is m1-20260831's exact failure, now
             # mechanically detectable for the first time.
             ("an advance the mod refused as blind",
-             lambda: (tr / "005-advance" / "result.json").write_text(json.dumps(
+             lambda: (tr2 / "001-advance" / "result.json").write_text(json.dumps(
                 {"id": "c5", "op": "advance", "ok": False,
                  "error": {"code": "unread-journal",
                            "detail": "the previous advance journaled 4 event(s) that no "
@@ -821,7 +973,7 @@ def selftest(repo):
                 if p.exists():
                     import shutil
                     shutil.rmtree(p)
-            run, journal, tr = build_fixture(root, repo)
+            run, journal, tr, tr2 = build_fixture(root, repo)
             mutate()
             results = []
             audit(run, repo, journal, tr)
@@ -848,8 +1000,8 @@ def selftest(repo):
                 if p.exists():
                     import shutil
                     shutil.rmtree(p)
-            run, journal, tr = build_fixture(root, repo)
-            mutate(tr)
+            run, journal, tr, tr2 = build_fixture(root, repo)
+            mutate(tr2 / "001-advance")
             results = []
             audit(run, repo, journal, tr)
             warns = [d for s, c, d in results
@@ -874,8 +1026,8 @@ def selftest(repo):
             if p.exists():
                 import shutil
                 shutil.rmtree(p)
-        run, journal, tr = build_fixture(root, repo)
-        wake_fixture(tr)
+        run, journal, tr, tr2 = build_fixture(root, repo)
+        wake_fixture(tr2 / "001-advance")
         results = []
         audit(run, repo, journal, tr)
         lines = [(s_, c_, d_) for s_, c_, d_ in results]
@@ -904,6 +1056,39 @@ def selftest(repo):
                             "all three are legal, not defects")
         print("")
 
+        # -- how --transcript is SPELLED must not change what gets audited --
+        print("== selftest: every spelling of --transcript reaches every segment ==")
+        for p in (root / "RUNS", root / "transcripts"):
+            if p.exists():
+                import shutil
+                shutil.rmtree(p)
+        run, journal, tr, tr2 = build_fixture(root, repo)
+        want = ["selftest-run", "selftest-run-s01"]
+        for label, spec in [
+            ("the head of the chain", tr),
+            ("the tail of the chain (links walk backwards)", tr2),
+            ("a quoted glob", str(root / "transcripts" / "selftest-run*")),
+            ("a shell-expanded list", [str(tr), str(tr2)]),
+        ]:
+            results = []
+            audit(run, repo, journal, spec)
+            got = [d.split(": ", 1)[1].split(" -> ") for s_, c_, d in results
+                   if c_ == "transcript-chain" and s_ == "PASS"]
+            fails = {c_ for s_, c_, _ in results if s_ == "FAIL"}
+            good = got == [want] and not fails
+            if not good:
+                failures.append(f"--transcript as {label}: resolved {got}, FAILs {sorted(fails)}")
+            print(f"-- --transcript as {label}: {'ok' if good else 'WRONG'}\n")
+
+        # A spec that matches nothing must be loud. Every other check would go
+        # green on an empty audit, which is the worst possible way to pass.
+        results = []
+        audit(run, repo, journal, str(root / "transcripts" / "no-such-run"))
+        missed = "transcript-chain" not in {c_ for s_, c_, _ in results if s_ == "FAIL"}
+        if missed:
+            failures.append("a --transcript spec matching nothing did not FAIL transcript-chain")
+        print(f"-- a spec matching nothing -> transcript-chain: {'MISSED' if missed else 'ok'}\n")
+
     if failures:
         print("SELFTEST FAIL:", *failures, sep="\n  ")
         return 1
@@ -915,7 +1100,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("run_dir", nargs="?", help="RUNS/<run> to audit")
     ap.add_argument("--journal", help="the session's journal/<sid>.ndjson")
-    ap.add_argument("--transcript", help="transcripts/<run> dir")
+    ap.add_argument("--transcript", action="append", nargs="+", metavar="DIR|GLOB",
+                    help="transcripts/<run> — a directory, a glob, or any segment of a "
+                         "rotated run (meta.json links are followed in both directions). "
+                         "Repeatable, and takes several values at once so a shell-expanded "
+                         "glob works too.")
     ap.add_argument("--repo", default=str(Path(__file__).resolve().parent.parent),
                     help="repo root (for checklists/)")
     ap.add_argument("--selftest", action="store_true", help="audit a pinned synthetic run, then prove each check can fail")
@@ -925,7 +1114,8 @@ def main():
         sys.exit(selftest(Path(a.repo)))
     if not a.run_dir:
         ap.error("run_dir required (or --selftest)")
-    audit(a.run_dir, a.repo, a.journal, a.transcript)
+    specs = [t for group in (a.transcript or []) for t in group]
+    audit(a.run_dir, a.repo, a.journal, specs)
     sys.exit(1 if any(s == "FAIL" for s, _, _ in results) else 0)
 
 
