@@ -38,3 +38,6 @@ Thumbs.db
 
 # acceptance evidence (raw result envelopes, per-run)
 .accept-evidence/
+
+# MCP tool scratch — playwright writes this to cwd, not to a temp dir
+.playwright-mcp/
