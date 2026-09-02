@@ -28,6 +28,11 @@ namespace AutoRimmer
     // 60-room base costs `cap` analyses, not 60, and the cap is a cost ceiling
     // rather than only a context one. `analysed` is published so that is
     // checkable from the output.
+    //
+    // `Room.Owners` IS NO LONGER CALLED HERE AT ALL (git-bug daa269a). It was
+    // both the wrong question — see `Brief`'s comment — and the third-most
+    // expensive read in the file, re-entering ContainedAndAdjacentThings three
+    // times per room. The rollup now shares the ONE bed snapshot.
     public static class PlaceVerbs
     {
         public const int RoomCap = 12;
@@ -164,38 +169,63 @@ namespace AutoRimmer
             }
             d["contains"] = ThingVerbs.Rollups(map, contents, RoomThingCap, false, 0);
 
+            // Same snapshot-first rule as the rollup in `Brief`, and for the
+            // same reason: ContainedBeds yields out of the shared
+            // ContainedAndAdjacentThings list.
+            var bedThings = new List<Building_Bed>();
             var beds = new List<object>();
             try
             {
-                foreach (var bed in room.ContainedBeds)
-                {
-                    if (bed?.def == null) continue;
-                    var owners = new List<object>();
-                    try
-                    {
-                        var list = bed.OwnersForReading;
-                        for (int i = 0; i < list.Count && i < OwnerCap; i++)
-                            owners.Add(new Dictionary<string, object>
-                            {
-                                ["id"] = list[i].thingIDNumber,
-                                ["name"] = PawnSafe.Name(list[i]),
-                            });
-                    }
-                    catch { }
-                    beds.Add(new Dictionary<string, object>
-                    {
-                        ["id"] = bed.thingIDNumber,
-                        ["def"] = bed.def.defName,
-                        ["at"] = Positions.Out(bed.Position),
-                        ["for_prisoners"] = WorldSafe.SafeObj(() => (object)bed.ForPrisoners) ?? false,
-                        ["medical"] = WorldSafe.SafeObj(() => (object)bed.Medical) ?? false,
-                        ["owners"] = owners,
-                    });
-                    if (beds.Count >= OwnerCap) break;
-                }
+                foreach (var bed in room.ContainedBeds) if (bed?.def != null) bedThings.Add(bed);
             }
-            catch { }
+            catch (Exception e)
+            {
+                Journal.EmitWarning("room: bed enumeration threw for room "
+                    + room.ID + ": " + e.Message);
+                d["beds_error"] = "the bed enumeration threw and was caught; the "
+                    + "`beds` list is a FLOOR. See the journal warning.";
+            }
+            for (int b = 0; b < bedThings.Count && beds.Count < OwnerCap; b++)
+            {
+                var bed = bedThings[b];
+                var owners = new List<object>();
+                try
+                {
+                    var list = bed.OwnersForReading;
+                    for (int i = 0; list != null && i < list.Count && i < OwnerCap; i++)
+                    {
+                        if (list[i] == null) continue;
+                        owners.Add(new Dictionary<string, object>
+                        {
+                            ["id"] = list[i].thingIDNumber,
+                            ["name"] = PawnSafe.Name(list[i]),
+                        });
+                    }
+                }
+                catch (Exception e)
+                {
+                    // git-bug daa269a acceptance item 2: no bare catch around an
+                    // owner enumeration. An eaten throw here reads as an
+                    // unclaimed bed.
+                    Journal.EmitWarning("room: bed " + bed.thingIDNumber
+                        + " owner enumeration threw: " + e.Message);
+                }
+                beds.Add(new Dictionary<string, object>
+                {
+                    ["id"] = bed.thingIDNumber,
+                    ["def"] = bed.def.defName,
+                    ["at"] = Positions.Out(bed.Position),
+                    ["for_prisoners"] = WorldSafe.SafeObj(() => (object)bed.ForPrisoners) ?? false,
+                    ["medical"] = WorldSafe.SafeObj(() => (object)bed.Medical) ?? false,
+                    ["owners"] = owners,
+                });
+            }
             d["beds"] = beds;
+            // The list is capped at OwnerCap beds and `beds_total` (from Brief)
+            // is not, so the truncation is published rather than left to be
+            // inferred from a length — otherwise a seventh bed's owner appears
+            // in `owners_total` with no row to explain it.
+            d["beds_more"] = Math.Max(0, bedThings.Count - beds.Count);
             return d;
         }
 
@@ -222,25 +252,83 @@ namespace AutoRimmer
             try { role = room.Role; }
             catch (Exception e) { Journal.EmitWarning("rooms: Room.Role threw for room " + room.ID + ": " + e.Message); }
 
+            // ================= WHO SLEEPS HERE (git-bug daa269a) =============
+            // NOT `Room.Owners`, and the difference is the whole bug.
+            // `Verse/Room.cs` `Owners`, by member name:
+            //
+            //   if (TouchesMapEdge || IsHuge || (Role != Bedroom && Role !=
+            //       PrisonCell && Role != Barracks && Role != PrisonBarracks))
+            //       yield break;
+            //   var beds = ContainedBeds.Where(x => x.def.building.bed_humanlike);
+            //   if (beds.Count() > 1 && (Role == Barracks || Role == PrisonBarracks)
+            //       && beds.Where(b => b.OwnersForReading.Any()).Count() > 1)
+            //       yield break;
+            //
+            // Run m1-20260901's room 38 — a Barracks with three owned beds —
+            // takes the SECOND `yield break` exactly, so this field published
+            // `owners_total: 0` beside a `beds[]` block naming all three
+            // colonists, and nothing threw. The gate is not the Barracks role,
+            // it is MORE THAN ONE OWNED BED, which is why a two-colonist
+            // barracks never showed it. `TouchesMapEdge` and `IsHuge` are two
+            // further silent-empty conditions on the same getter.
+            //
+            // Vanilla is not broken; it answers "WHOSE ROOM IS THIS", a
+            // bedroom-ownership question with an honest empty answer for a
+            // shared barracks. This field is asked "who sleeps in here", so it
+            // comes off `ContainedBeds` / `OwnersForReading` — the same route
+            // `room`'s own `beds[]` block uses and gets right, which is what
+            // makes the two incapable of disagreeing. (DESIGN decisions log
+            // 2026-09-02.) Vanilla's reading is still recoverable from what is
+            // published here: it is `owners` whenever `beds_owned <= 1`, and
+            // `role` already carries the room-role verdict it feeds.
             var owners = new List<object>();
-            int ownerTotal = 0;
+            var ownerIds = new HashSet<int>();
+            int bedCount = 0, ownedBeds = 0;
+            bool ownersThrew = false;
             try
             {
-                // Materialised immediately and never held: Room.Owners
-                // re-enters ContainedAndAdjacentThings three times, and its
-                // shared list must not be live while we do anything else.
-                foreach (var p in room.Owners)
+                // SNAPSHOT FIRST. Room.ContainedBeds yields LAZILY out of
+                // ContainedAndAdjacentThings, whose backing list is cleared and
+                // refilled on every access (WorldSafe Class E), so the
+                // enumeration must not be live while anything else reaches the
+                // room. Materialise, then read owners off the snapshot.
+                var beds = new List<Building_Bed>();
+                foreach (var bed in room.ContainedBeds) if (bed?.def != null) beds.Add(bed);
+                bedCount = beds.Count;
+                for (int i = 0; i < beds.Count; i++)
                 {
-                    ownerTotal++;
-                    if (owners.Count >= OwnerCap || p == null) continue;
-                    owners.Add(new Dictionary<string, object>
+                    // Building_Bed.OwnersForReading is
+                    // CompAssignableToPawn.AssignedPawnsForReading — a plain
+                    // list read behind a GetComp, no lazy assignment.
+                    var list = beds[i].OwnersForReading;
+                    if (list == null || list.Count == 0) continue;
+                    ownedBeds++;
+                    for (int j = 0; j < list.Count; j++)
                     {
-                        ["id"] = p.thingIDNumber,
-                        ["name"] = PawnSafe.Name(p),
-                    });
+                        var p = list[j];
+                        // DISTINCT PAWNS, not bed-slots: a double bed lists the
+                        // same two owners twice across the pair and `owners_total`
+                        // is a headcount.
+                        if (p == null || !ownerIds.Add(p.thingIDNumber)) continue;
+                        if (owners.Count >= OwnerCap) continue;
+                        owners.Add(new Dictionary<string, object>
+                        {
+                            ["id"] = p.thingIDNumber,
+                            ["name"] = PawnSafe.Name(p),
+                        });
+                    }
                 }
             }
-            catch { }
+            catch (Exception e)
+            {
+                // NOT a bare `catch {}` (git-bug daa269a acceptance item 2). A
+                // swallowed throw here presents as a legitimately empty room,
+                // which is exactly the reading that made the original defect
+                // undiagnosable from the envelope.
+                ownersThrew = true;
+                Journal.EmitWarning("rooms: bed-owner rollup threw for room "
+                    + room.ID + ": " + e.Message);
+            }
 
             IntVec3 at = IntVec3.Invalid;
             try { foreach (var c in room.Cells) { at = c; break; } }
@@ -266,9 +354,26 @@ namespace AutoRimmer
                 ["temp_c"] = WorldSafe.SafeObj(() => (object)WorldSafe.R(room.Temperature, 1)),
                 ["uses_outdoor_temp"] = SafeBool(() => room.UsesOutdoorTemperature),
                 ["owners"] = owners,
-                ["owners_total"] = ownerTotal,
+                ["owners_total"] = ownerIds.Count,
+                ["owners_more"] = Math.Max(0, ownerIds.Count - owners.Count),
+                // The route, named, PawnSafe-style — so a reader never has to
+                // guess which of the game's two ownership questions this
+                // answers. `room.Owners` is the other one.
+                ["owners_source"] = "contained-beds",
+                // The denominator that makes a zero readable. `owners_total: 0`
+                // with `beds_total: 0` is an empty room; with `beds_total: 3`
+                // and `beds_owned: 0` it is three unclaimed beds. Those were
+                // indistinguishable before, and telling them apart is the whole
+                // reason the defect went unnoticed for a run.
+                ["beds_total"] = bedCount,
+                ["beds_owned"] = ownedBeds,
                 ["at"] = at.IsValid ? Positions.Out(at) : null,
             };
+            // Presence is the signal (Dev.NoteFog's rule): a `false` here would
+            // read exactly like a key that was never published.
+            if (ownersThrew)
+                d["owners_error"] = "the bed-owner rollup threw and was caught; "
+                    + "`owners_total` is a FLOOR, not a census. See the journal warning.";
             AddStat(d, "impressiveness", room, RoomStatDefOf.Impressiveness);
             AddStat(d, "beauty", room, RoomStatDefOf.Beauty);
             AddStat(d, "cleanliness", room, RoomStatDefOf.Cleanliness);
