@@ -222,3 +222,92 @@ Together with `bb931b9` (no save verb) and `5cb1f9f` (dialog wedge) that is
 **four separate ways a multi-day run stops for a reason that has nothing to do
 with the colony** — worth triaging as one theme: what a long run needs that a
 one-day acceptance never exercises.
+
+---
+
+# The fall — two colonists dead, and the mistake that started it
+
+Recorded because Evan asked to *"see the eventual fall from your records."* Ticks
+1,937,000 → 2,043,293, run days 32–34.
+
+## The chain
+
+| tick | event |
+|---|---|
+| 1,937,000 | `letter ThreatBig` — **"Raid: Buoink"**. The raid the whole run had been waiting for finally came, on day 32, and it arrived **while the driver was running unattended and I was not reading letters** |
+| 1,939,194 | Lacey downed |
+| 1,940,184 | Jimmy downed |
+| 1,942,678 | **Jimmy kidnapped by Buoink** — carried off the map with the bolt-action rifle |
+| 1,951,000 | `letter NeutralEvent` — **"Blind healer"**. A creepjoiner asking to join. **My driver dismissed it.** |
+| 2,011,000 | `letter ThreatBig` — **"Sean hostile."** The refused creepjoiner turned on the colony, inside the walls |
+| 2,024,847 | Lacey downed by Sean, then Wouter |
+| 2,028,803 | **Wouter dies** |
+| 2,043,293 | **Serenity dies** |
+
+## The mistake
+
+**I sent Lacey into that fight at 56% health.** I had read the Blindhealer's def —
+55–80 years old, no eyes, a *poor*-quality steel knife — and concluded she would
+win. What I ignored is that her 56% was raid damage: she was already carrying
+Cut 8.12, Cut 8.01, Crack 7.3 and four more. I `attack`ed with a Melee-2 pawn
+against a fresh enemy and she was down in 980 ticks.
+
+From there it was deterministic. Lacey was the second doctor. Wouter, the first,
+went to fight bare-handed because his hostility response is `Flee` and fleeing
+put him in reach. With both doctors down:
+
+- **`work-cover` gave the exact verdict**: `still_under`, gate **`no-candidate`** —
+  *"no colonist on this map is capable of Doctor, available (spawned, not downed)
+  … This is a fact about the roster, not a refused write."*
+- **This is the one place the contract's sanctioned `dev:set-skill` exception
+  unlocks** (`still_under`), **and it would not have helped.** The blocker was a
+  disabled work type and two downed pawns, not a skill level. I did not use it.
+- **Self-tend does not save an unconscious pawn.** I enabled it on both; Wouter's
+  bleed went 4.77 → 4.67 over 5,000 ticks and he died. `WorkGiver_Tend` needs a
+  tender who is not downed, and that includes tending yourself.
+- **Marco was awake, at 100% health, in a bed, with Doctor enabled — and could not
+  tend**, because `available` means *not downed* and Abasia keeps him downed
+  permanently.
+- **A forced order does not bypass an age-disabled work type.** `extinguish` on
+  the six-year-old came back `firefighter-disabled: incapable of firefighting`,
+  and the same for Doctor. 46 fires burned unopposed.
+
+Serenity died trying to reach a rifle 20 cells away that I sent her for. That
+call was mine too: she was at 37% and being hunted, and arming her was the only
+line where anything survived. It did not.
+
+## What saved the colony
+
+**Trev** — 46, Shooting 11, Melee 12, Cooking 10, Plants 10 — wandered in at tick
+~2,038,000, mobile and capable. Doctor 0 → 1 was accepted, meaning he was capable
+all along, and he was tending Lacey within 2,500 ticks. Sean left or died; the
+fires burned out under fog at −2 °C.
+
+Three alive: Lacey (36%, tended), Marco (bedridden), Trev (84%, rifle,
+`attack-then-seek`).
+
+## Damage
+
+Room 52 dropped from **`Laboratory` to `Room`** — the research bench burned. The
+freezer never enclosed. Barracks, Workshop, Kitchen, RecRoom and the power room
+all survived, `proper:true`, `open_roof_cells:0`. `MicroelectronicsBasics` sits
+at 84% with the bench rebuild queued.
+
+## The three findings this cost
+
+1. **`aa4391b` is understated.** I filed it as "a floor met only by outranked
+   pawns reads ok". The stronger case is here: `work_coverage` reports on
+   *availability*, and every collapse mode of a small colony — outranked, downed,
+   age-disabled, permanently immobile — presents as a healthy roster right up to
+   the moment nobody can act. `Alert_NeedDoctor` fired only once both were
+   already down, which is `one-doctor-is-zero-doctors` exactly.
+2. **The decision-letter defect killed people.** Dismissing "Blind healer" is
+   what put a hostile inside the walls 60,000 ticks later. That is the fourth
+   instance, after the trader, two expired quests, and Serenity's own joiner
+   letter. The lesson now keys on `interactions`' `options` array rather than on
+   the letter's subject.
+3. **The raid arrived unwatched.** `advance` halts on `threat` and my driver
+   stops the batch on a `ThreatBig` letter — but the raid landed in a window
+   where I had killed and restarted the driver, and nothing carried the
+   obligation across the gap. An unattended run needs the halt to survive a
+   driver restart, which no artifact currently guarantees.

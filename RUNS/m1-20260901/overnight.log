@@ -53,3 +53,72 @@ daily ledger day 31: barracks-heat=ok freezer-below-zero=n/a armed-roster=ok pro
 daily ledger day 33: barracks-heat=ok freezer-below-zero=n/a armed-roster=action production-still-runs=ok apparel-margin=action
   chop designated: 47
   mine designated: 0
+[23:14:47] advance reason=letter ticks=6747 halted={"def":"ThreatBig","label":"Raid: Buoink","text":"A group of pigskins from (*Faction=Faction_6)Buoink(/Faction) have arrived nearby.\n\nThey are attacking immediately.","target":"Thing_Human89329","faction":"Buoink","kind":"letter","armed_by":"until","tick":1937000,"detail":"Raid: Buoink (ThreatBig) arrived at tick 1937000 — the letter this advance was waiting for."}
+[23:14:50] letters: Raid: Buoink[ThreatBig]
+[23:14:51] !! THREAT: Raid: Buoink at tick 1937019
+[23:14:51] SAVED threat-t1937019-RaidBuoink.rws (nearest autosave; no save verb exists)
+{"name":"Lacey","seek":true}
+{"name":"Wouter","seek":false}
+{"name":"Jimmy","seek":true}
+{"name":"Serenity","seek":false}
+{"name":"Marco","seek":false}
+[23:15:07] advance reason=alert ticks=1877 halted={"id":"Alert_ColonistNeedsTend","label":"Medical treatment needed","priority":"High","kind":"alert","armed_by":"default","tick":1938896,"detail":"Medical treatment needed (Alert_ColonistNeedsTend, priority High) went ON at tick 1938896 — a standing condition the colony did not have a moment ago, so the advance stopped rather than running on. If this one should stop waking the run, `alert-mute {ids:[\"Alert_ColonistNeedsTend\"], reason:\"<why>\"}` records that decision and `digest.alerts.muted` keeps it visible; `advance {through_news:\"<why>\"}` rides past every wake for ONE call."}
+[23:15:55] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:16:01] advance reason=casualty ticks=298 halted={"kind":"casualty","event":"downed","pawn":"Lacey","faction":"Southeastern Tedalor","player_faction":true,"tick":1939194,"pawn_id":310,"pawn_kind":"colonist","damage":"Cut","detail":"Lacey (Southeastern Tedalor) went DOWN at tick 1939194 — the advance stopped here rather than running on. `triage` has the bleed clock, the rescuers and the exact `rescue` call; `advance {through_casualties:\"<why>\"}` rides past it deliberately."}
+[23:16:01] !! CASUALTY - triaging
+{"name":"Lacey","verdict":"in-time","margin":19433,"act":{"pawn":323,"target":310}}
+{"name":"Marco","verdict":"no-rescuer","margin":null,"act":null}
+{"ok":true,"job":"rescuing Lacey."}
+[23:16:10] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:16:23] advance reason=alert ticks=668 halted={"id":"Alert_ColonistNeedsTend","label":"Medical treatment needed","priority":"High","kind":"alert","armed_by":"default","tick":1939862,"detail":"Medical treatment needed (Alert_ColonistNeedsTend, priority High) went ON at tick 1939862 — a standing condition the colony did not have a moment ago, so the advance stopped rather than running on. If this one should stop waking the run, `alert-mute {ids:[\"Alert_ColonistNeedsTend\"], reason:\"<why>\"}` records that decision and `digest.alerts.muted` keeps it visible; `advance {through_news:\"<why>\"}` rides past every wake for ONE call."}
+[23:16:29] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:16:36] advance reason=casualty ticks=322 halted={"kind":"casualty","event":"downed","pawn":"Jimmy","faction":"Southeastern Tedalor","player_faction":true,"tick":1940184,"pawn_id":323,"pawn_kind":"colonist","damage":"Cut","detail":"Jimmy (Southeastern Tedalor) went DOWN at tick 1940184 — the advance stopped here rather than running on. `triage` has the bleed clock, the rescuers and the exact `rescue` call; `advance {through_casualties:\"<why>\"}` rides past it deliberately."}
+[23:16:36] !! CASUALTY - triaging
+{"name":"Lacey","verdict":"in-time","margin":17838,"act":{"pawn":313,"target":310}}
+{"name":"Jimmy","verdict":"in-time","margin":26509,"act":{"pawn":313,"target":323}}
+{"name":"Marco","verdict":"no-rescuer","margin":null,"act":null}
+{"ok":true,"job":"rescuing Lacey."}
+[23:16:46] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:17:02] advance reason=letter ticks=1838 halted={"def":"PositiveEvent","label":"Ambrosia sprout","text":"A grove of the mysterious ambrosia bush has sprouted nearby! If you wait for the plants to grow, you'll be able to harvest the delicious, pleasurable, and slightly addictive fruit.","target":"Thing_Plant_Ambrosia89430","kind":"letter","armed_by":"until","tick":1942000,"detail":"Ambrosia sprout (PositiveEvent) arrived at tick 1942000 — the letter this advance was waiting for."}
+[23:17:05] letters: Ambrosia sprout[PositiveEvent]
+[23:17:09] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:17:11] advance reason=letter ticks=657 halted={"def":"NegativeEvent","label":"(*Name)Jimmy(/Name) kidnapped","text":"(*Name)Jimmy(/Name) has been kidnapped by (*Faction=Faction_6)Buoink(/Faction)!\n\nHowever, he is not lost forever. An opportunity to rescue him may present itself in the coming days or years.","kind":"letter","armed_by":"until","tick":1942678,"detail":"(*Name)Jimmy(/Name) kidnapped (NegativeEvent) arrived at tick 1942678 — the letter this advance was waiting for."}
+[23:17:14] letters: (*Name)Jimmy(/Name) kidnapped[NegativeEvent]
+[23:17:18] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:17:20] advance reason=alert ticks=443 halted={"id":"Alert_ColonistNeedsTend","label":"Medical treatment needed","priority":"High","kind":"alert","armed_by":"default","tick":1943122,"detail":"Medical treatment needed (Alert_ColonistNeedsTend, priority High) went ON at tick 1943122 — a standing condition the colony did not have a moment ago, so the advance stopped rather than running on. If this one should stop waking the run, `alert-mute {ids:[\"Alert_ColonistNeedsTend\"], reason:\"<why>\"}` records that decision and `digest.alerts.muted` keeps it visible; `advance {through_news:\"<why>\"}` rides past every wake for ONE call."}
+[23:17:26] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:17:36] advance reason=letter ticks=7890 halted={"def":"NeutralEvent","label":"Blind healer","text":"A blind healer is approaching the colony.\n\nHe wants to talk. You can send a colonist to hear what he has to say.","target":"Thing_CreepJoiner89608","kind":"letter","armed_by":"until","tick":1951000,"detail":"Blind healer (NeutralEvent) arrived at tick 1951000 — the letter this advance was waiting for."}
+[23:17:40] letters: Blind healer[NeutralEvent]
+[23:17:43] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:17:49] advance reason=alert ticks=3375 halted={"id":"Alert_MinorBreakRisk","label":"Minor break risk","priority":"High","kind":"alert","armed_by":"default","tick":1954387,"detail":"Minor break risk (Alert_MinorBreakRisk, priority High) went ON at tick 1954387 — a standing condition the colony did not have a moment ago, so the advance stopped rather than running on. If this one should stop waking the run, `alert-mute {ids:[\"Alert_MinorBreakRisk\"], reason:\"<why>\"}` records that decision and `digest.alerts.muted` keeps it visible; `advance {through_news:\"<why>\"}` rides past every wake for ONE call."}
+[23:17:55] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:18:08] advance reason=alert ticks=10088 halted={"id":"Alert_MinorBreakRisk","label":"Minor break risk x2","priority":"High","kind":"alert","armed_by":"default","tick":1964475,"detail":"Minor break risk x2 (Alert_MinorBreakRisk, priority High) went ON at tick 1964475 — a standing condition the colony did not have a moment ago, so the advance stopped rather than running on. If this one should stop waking the run, `alert-mute {ids:[\"Alert_MinorBreakRisk\"], reason:\"<why>\"}` records that decision and `digest.alerts.muted` keeps it visible; `advance {through_news:\"<why>\"}` rides past every wake for ONE call."}
+[23:18:14] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:18:18] advance reason=casualty ticks=1608 halted={"kind":"casualty","event":"downed","pawn":"Jimmy","faction":"Southeastern Tedalor","player_faction":true,"tick":1966071,"pawn_id":323,"pawn_kind":"colonist","detail":"Jimmy (Southeastern Tedalor) went DOWN at tick 1966071 — the advance stopped here rather than running on. `triage` has the bleed clock, the rescuers and the exact `rescue` call; `advance {through_casualties:\"<why>\"}` rides past it deliberately."}
+[23:18:18] !! CASUALTY - triaging
+{"name":"Marco","verdict":"no-rescuer","margin":null,"act":null}
+[23:18:26] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:18:46] advance reason=alert ticks=15795 halted={"id":"Alert_CreepJoinerTimeout","label":"Visitor ignored","priority":"High","kind":"alert","armed_by":"default","tick":1981878,"detail":"Visitor ignored (Alert_CreepJoinerTimeout, priority High) went ON at tick 1981878 — a standing condition the colony did not have a moment ago, so the advance stopped rather than running on. If this one should stop waking the run, `alert-mute {ids:[\"Alert_CreepJoinerTimeout\"], reason:\"<why>\"}` records that decision and `digest.alerts.muted` keeps it visible; `advance {through_news:\"<why>\"}` rides past every wake for ONE call."}
+{"day":34,"t":1981878,"season":"Fall","food_days":11.5,"rot":13,"wood":642,"steel":51,"power":1000,"mood":[47,29,35,49],"posture_ok":false,"wc_ok":true,"threats":0,"alerts":["Alert_NeedWarmClothes","Alert_QuestExpiresSoon","Alert_MinorBreakRisk","Alert_CreepJoinerTimeout","Alert_RolesEmpty","Alert_TatteredApparel"]}
+[23:18:48] SAVED day-34.rws (nearest autosave; no save verb exists)
+daily ledger day 34: barracks-heat=ok freezer-below-zero=action armed-roster=action production-still-runs=ok apparel-margin=n/a
+  chop designated: 25
+  mine designated: 0
+[23:19:06] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:19:41] advance reason=letter ticks=29136 halted={"def":"ThreatBig","label":"(*Name)Sean(/Name) hostile","text":"Upon being rejected, (*Name)Sean(/Name) flew into a murderous rage and began to attack!","target":"Thing_CreepJoiner89608","kind":"letter","armed_by":"until","tick":2011000,"detail":"(*Name)Sean(/Name) hostile (ThreatBig) arrived at tick 2011000 — the letter this advance was waiting for."}
+[23:19:44] letters: (*Name)Sean(/Name) hostile[ThreatBig]
+[23:19:45] !! THREAT: (*Name)Sean(/Name) hostile at tick 2011014
+[23:19:45] SAVED threat-t2011014-NameSeanNamehostile.rws (nearest autosave; no save verb exists)
+{"name":"Lacey","seek":false}
+{"name":"Wouter","seek":false}
+{"name":"Serenity","seek":false}
+{"name":"Marco","seek":false}
+[23:55:17] letters: Blindfolder role deactivated[NeutralEvent] | Interment of Perception opportunity for Wouter[NeutralEvent] | Death: Wouter[Death] | Man in black[PositiveEvent] | Death: Serenity[Death]
+[23:55:25] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:55:43] advance reason=letter ticks=2707 halted={"def":"NewQuest","label":"Quest available: Carpenter's Nomads","text":"A new quest is available.\n\nThe quest is called 'Carpenter's Nomads'.\n\nIf you don't accept the quest within 6 days, it will expire.","kind":"letter","armed_by":"until","tick":2046000,"detail":"Quest available: Carpenter's Nomads (NewQuest) arrived at tick 2046000 — the letter this advance was waiting for."}
+[23:55:46] letters: Quest available: Carpenter's Nomads[NewQuest]
+[23:55:50] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:55:53] advance reason=alert ticks=1254 halted={"id":"Alert_MinorBreakRisk","label":"Minor break risk","priority":"High","kind":"alert","armed_by":"default","tick":2047254,"detail":"Minor break risk (Alert_MinorBreakRisk, priority High) went ON at tick 2047254 — a standing condition the colony did not have a moment ago, so the advance stopped rather than running on. If this one should stop waking the run, `alert-mute {ids:[\"Alert_MinorBreakRisk\"], reason:\"<why>\"}` records that decision and `digest.alerts.muted` keeps it visible; `advance {through_news:\"<why>\"}` rides past every wake for ONE call."}
+[23:56:00] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
+[23:56:03] advance reason=alert ticks=809 halted={"id":"Alert_LifeThreateningHediff","label":"Medical emergency","priority":"Critical","kind":"alert","armed_by":"default","tick":2048063,"detail":"Medical emergency (Alert_LifeThreateningHediff, priority Critical) went ON at tick 2048063 — a standing condition the colony did not have a moment ago, so the advance stopped rather than running on. If this one should stop waking the run, `alert-mute {ids:[\"Alert_LifeThreateningHediff\"], reason:\"<why>\"}` records that decision and `digest.alerts.muted` keeps it visible; `advance {through_news:\"<why>\"}` rides past every wake for ONE call."}
+[23:56:09] BUILD HiTechResearchBench queued at 117,128 (100 steel + 10 components)
