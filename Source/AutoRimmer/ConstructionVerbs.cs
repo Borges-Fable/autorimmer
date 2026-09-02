@@ -83,11 +83,33 @@ namespace AutoRimmer
         private const int DigestScanCap = 60;
 
         // States, as tokens. The precedence between them is a RESOLUTION and is
-        // stated in DESIGN: blocked > in-progress > awaiting-materials > ready.
+        // stated in DESIGN:
+        //     blocked > in-progress > no-builder > awaiting-materials > ready.
         public const string StateAwaitingMaterials = "awaiting-materials";
         public const string StateReady = "ready";
         public const string StateInProgress = "in-progress";
         public const string StateBlocked = "blocked";
+        // THE FOURTH TRIAGE BRANCH (git-bug e08c3e5). Nobody on the roster
+        // clears the def's `constructionSkillPrerequisite` /
+        // `artisticSkillPrerequisite`, so no colonist can take the job at all —
+        // and until this token existed that fact wore two different wrong
+        // costumes. See ConstructionSkill.cs's header for both: a blueprint no
+        // hauler reached read `awaiting-materials` (the run's Heater, short of
+        // one component with thirty on the map), and one a HAULING-workType
+        // deliverer did reach reads `ready`. The README's triage table sends an
+        // agent to unforbid materials in the first case and to fix work
+        // priorities in the second. Neither will ever finish the building.
+        //
+        // WHY IT SITS WHERE IT DOES. Below `blocked` because
+        // `GenConstruct.CanConstruct` tests `FirstBlockingThing` BEFORE the
+        // skill clause — the game's own order, and a cell with a rock in it is
+        // the nearer fact. Below `in-progress` because a pawn with a job on the
+        // thing is something actually happening and saying otherwise would be a
+        // lie about the present tick; the skill block is still published on the
+        // row, so it is never hidden. Above `awaiting-materials` and `ready`
+        // because it is the binding constraint: hauling more steel and raising
+        // a work priority both change nothing.
+        public const string StateNoBuilder = "no-builder";
         // The two TERMINAL tokens, borrowed from `Placements` rather than
         // redeclared, so a layout rollup speaks one vocabulary and not two
         // (git-bug 36999fd). A live element is one of the four above; a
@@ -189,10 +211,12 @@ namespace AutoRimmer
 
                 var progress = Layouts.Progress(record);
                 var index = WorkerIndex(map);
+                var roster = ConstructionSkill.Read(map);
                 var layoutRows = new List<object>();
                 var layoutByState = new Dictionary<string, int>();
                 var layoutMissing = new Dictionary<ThingDef, int>();
                 int lBlueprints = 0, lFrames = 0, lScanned = 0, lScanMore = 0, lOffMap = 0;
+                int lGated = 0;
                 float lWorkLeft = 0f;
 
                 for (int i = 0; i < record.PlacementIds.Count; i++)
@@ -256,11 +280,12 @@ namespace AutoRimmer
                     }
                     lScanned++;
 
-                    var item = Item(map, live, index);
+                    var item = Item(map, live, index, roster);
                     // The finer live state REPLACES `blueprint`/`frame`: those
                     // two say what the thing is, and the caller asked how it is
                     // going. `kind` keeps the thing.
                     row["state"] = item["state"];
+                    row["why"] = item["why"];
                     row["kind"] = item["kind"];
                     // NOT `thing_id`, which `Answer` already owns and which
                     // means the thing that RESULTED. This is the blueprint or
@@ -273,6 +298,7 @@ namespace AutoRimmer
                     row["blocking_is_pawn"] = item["blocking_is_pawn"];
                     if (item.ContainsKey("blocking_haulable"))
                         row["blocking_haulable"] = item["blocking_haulable"];
+                    if (item.ContainsKey("skill")) { row["skill"] = item["skill"]; lGated++; }
                     row["worker"] = item["worker"];
                     row["work_total"] = item["work_total"];
                     if (item.ContainsKey("work_done"))
@@ -317,6 +343,7 @@ namespace AutoRimmer
                 layoutData["missing"] = MissingRows(map, layoutMissing);
                 if (layoutMissing.Count > 0)
                     layoutData["materials_basis"] = Materials.Basis(Materials.Builders(map));
+                if (lGated > 0) layoutData["skill_basis"] = ConstructionSkill.Basis(roster);
                 layoutData["items"] = layoutRows;
                 layoutData["listed"] = layoutRows.Count;
                 layoutData["cap"] = cap;
@@ -356,7 +383,7 @@ namespace AutoRimmer
                         var workers = WorkerIndex(map);
                         return new Dictionary<string, object>
                         {
-                            ["item"] = Item(map, t, workers),
+                            ["item"] = Item(map, t, workers, ConstructionSkill.Read(map)),
                         };
                     }
                 throw new VerbArgsException(
@@ -393,6 +420,12 @@ namespace AutoRimmer
             rect = rect.ClipInsideMap(map);
 
             var workerIndex = WorkerIndex(map);
+            // ONE roster snapshot for the whole envelope, never one per row:
+            // `MapPawns.FreeColonists` clears and rebuilds a cached list on
+            // every access (PawnSafe class E), which is the same argument
+            // `MaterialBill` makes for `Materials.Builders`.
+            var rectRoster = ConstructionSkill.Read(map);
+            int gated = 0;
             var rows = new List<object>();
             var byState = new Dictionary<string, int>();
             var missingTotal = new Dictionary<ThingDef, int>();
@@ -404,7 +437,8 @@ namespace AutoRimmer
                 if (!rect.Contains(t.Position)) { outside++; continue; }
                 if (scanned >= scanCap) { scanMore++; continue; }
                 scanned++;
-                var item = Item(map, t, workerIndex);
+                var item = Item(map, t, workerIndex, rectRoster);
+                if (item.ContainsKey("skill")) gated++;
                 if (t is Frame) frames++; else blueprints++;
                 string state = item["state"] as string ?? StateReady;
                 Bump(byState, state);
@@ -449,6 +483,10 @@ namespace AutoRimmer
             // way `cancel-layout` publishes its `gate`/`gate_detail` pair.
             if (missingTotal.Count > 0)
                 data["materials_basis"] = Materials.Basis(Materials.Builders(map));
+            // Same rule as `materials_basis`: the provenance appears once, and
+            // only when something in this envelope actually carried a
+            // prerequisite worth citing a gate for.
+            if (gated > 0) data["skill_basis"] = ConstructionSkill.Basis(rectRoster);
             return data;
         }
 
@@ -462,9 +500,16 @@ namespace AutoRimmer
         internal static Dictionary<string, object> Section(Map map)
         {
             int blueprints = 0, frames = 0, awaiting = 0, blocked = 0, inProgress = 0, ready = 0;
+            int noBuilder = 0, skillBlocked = 0;
             int scanned = 0, more = 0;
             float workLeft = 0f;
             var workerIndex = WorkerIndex(map);
+            // One snapshot, one `FreeColonists` copy, two `SkillRecord.Level`
+            // reads per colonist — then an int compare per element, and not even
+            // that for a def with no prerequisite. See ConstructionSkill.cs's
+            // cost note: this is what makes the fourth branch affordable on a
+            // section documented as called constantly.
+            var roster = ConstructionSkill.Read(map);
             foreach (var t in Constructibles(map))
             {
                 if (scanned >= DigestScanCap) { more++; continue; }
@@ -474,11 +519,14 @@ namespace AutoRimmer
                 MaterialRows(map, t, out int missingKinds, out _);
                 var worker = Worker(workerIndex, t);
                 var blocker = Blocking(t, worker);
-                string state = State(blocker, worker, missingKinds);
+                var skill = ConstructionSkill.OfThing(t, roster);
+                if (skill.Blocked) skillBlocked++;
+                string state = State(blocker, worker, missingKinds, skill.Blocked);
                 switch (state)
                 {
                     case StateBlocked: blocked++; break;
                     case StateInProgress: inProgress++; break;
+                    case StateNoBuilder: noBuilder++; break;
                     case StateAwaitingMaterials: awaiting++; break;
                     default: ready++; break;
                 }
@@ -492,6 +540,17 @@ namespace AutoRimmer
                 ["ready"] = ready,
                 ["in_progress"] = inProgress,
                 ["blocked"] = blocked,
+                // THE FOURTH BRANCH, always published beside the other three so
+                // the five state counts still sum to blueprints+frames. A zero
+                // here is a measurement, not an absence.
+                ["no_builder"] = noBuilder,
+                // …and the same fact WITHOUT the state precedence, because a
+                // heater a hauler is stocking right now is honestly
+                // `in_progress` while still being unfinishable. `skill_blocked`
+                // never flickers; `no_builder` does. `skill_blocked >
+                // no_builder` means something is being worked that can never
+                // complete.
+                ["skill_blocked"] = skillBlocked,
                 ["work_left"] = Math.Round(workLeft, 1),
             };
             // Presence is the signal, the same rule Dev.NoteFog follows: the cap
@@ -540,11 +599,33 @@ namespace AutoRimmer
         // would be the worst kind of instrument.
         internal static Dictionary<int, Pawn> WorkerIndexFor(Map map) => WorkerIndex(map);
 
-        internal static string LiveStateOf(Map map, Thing t, Dictionary<int, Pawn> index)
+        internal static string LiveStateOf(Map map, Thing t, Dictionary<int, Pawn> index,
+            ConstructionSkill.Roster roster) => Probe(map, t, index, roster, out _, out _);
+
+        // THE ONE STATE COMPUTATION. `construction`, `digest`,
+        // `advance {until:{layout}}`'s outstanding rows and `ConstructionWatch`
+        // all come through here, so the four surfaces cannot disagree about the
+        // same blueprint. Returns the state token and hands back the `why`
+        // sentence and the skill verdict the caller may want to publish.
+        //
+        // COST, and it is the reason this is the shape it is: one cost list
+        // (cached by `CostListCalculator`), one `GenConstruct.FirstBlockingThing`
+        // over the footprint's thing lists, one dictionary lookup for the
+        // worker, and — only when the def actually carries a prerequisite — at
+        // most one int compare per colonist. No `GetStatValueAbstract`: the
+        // state does not depend on `WorkToBuild`, which is what lets the stall
+        // watch sample from inside the tick loop at all.
+        internal static string Probe(Map map, Thing t, Dictionary<int, Pawn> index,
+            ConstructionSkill.Roster roster, out string why,
+            out ConstructionSkill.Verdict skill)
         {
-            MaterialRows(map, t, out int missingKinds, out _);
+            MaterialRows(map, t, out int missingKinds, out var missing);
             var worker = Worker(index, t);
-            return State(Blocking(t, worker), worker, missingKinds);
+            var blocker = Blocking(t, worker);
+            skill = ConstructionSkill.OfThing(t, roster);
+            string state = State(blocker, worker, missingKinds, skill.Blocked);
+            why = Why(state, missing, blocker, skill);
+            return state;
         }
 
         private static void Bump(Dictionary<string, int> counts, string key)
@@ -632,17 +713,18 @@ namespace AutoRimmer
         {
             var list = map.thingGrid.ThingsListAtFast(p.Pos);
             var workers = WorkerIndex(map);
+            var roster = ConstructionSkill.Read(map);
             for (int i = 0; i < list.Count; i++)
             {
                 var t = list[i];
                 if (t?.def == null || t.def.entityDefToBuild != p.Def) continue;
-                if (t is Blueprint || t is Frame) return Item(map, t, workers);
+                if (t is Blueprint || t is Frame) return Item(map, t, workers, roster);
             }
             return null;
         }
 
         private static Dictionary<string, object> Item(Map map, Thing t,
-            Dictionary<int, Pawn> workerIndex)
+            Dictionary<int, Pawn> workerIndex, ConstructionSkill.Roster roster)
         {
             var frame = t as Frame;
             var built = t.def.entityDefToBuild;
@@ -651,6 +733,8 @@ namespace AutoRimmer
             var blocker = Blocking(t, worker);
             var mats = MaterialRows(map, t, out int missingKinds, out List<object> missing);
             var placement = Placements.For(t);
+            var skill = ConstructionSkill.OfThing(t, roster);
+            string state = State(blocker, worker, missingKinds, skill.Blocked);
 
             var d = new Dictionary<string, object>
             {
@@ -666,7 +750,10 @@ namespace AutoRimmer
                 // the player drew, or one from a save, has no id and says so by
                 // absence rather than by a fabricated one.
                 ["placement_id"] = placement?.Id,
-                ["state"] = State(blocker, worker, missingKinds),
+                ["state"] = state,
+                // The one sentence a triage needs, from the same inputs the
+                // token came from. See `Why`.
+                ["why"] = Why(state, missing, blocker, skill),
                 ["materials"] = mats,
                 ["missing"] = missing,
                 ["blocking"] = blocker == null ? null : Blockers.Describe(blocker),
@@ -693,6 +780,16 @@ namespace AutoRimmer
                 d["blocking_haulable"] = haulable == null ? null : Blockers.Describe(haulable);
             }
 
+            // THE SKILL CEILING (git-bug e08c3e5), published only when the def
+            // carries a prerequisite at all — presence is the signal, the same
+            // rule `short_by` and `cap_note` follow, and a
+            // `construction_required: 0` block on every wall would be noise
+            // charged to a capped surface. Published for EVERY state, not only
+            // `no-builder`: a heater a hauler is currently stocking is honestly
+            // `in-progress`, and the fact that nobody can ever finish it must
+            // not disappear while that is true.
+            if (skill.Gated) d["skill"] = skill.Out();
+
             // WORK FIELDS ARE ABSENT ON A BLUEPRINT, not zero. A blueprint has no
             // `workDone` at all, and publishing 0 would make "nobody has started"
             // read exactly like "started and got nowhere" (git-bug d7c8088).
@@ -713,14 +810,70 @@ namespace AutoRimmer
             return d;
         }
 
-        // blocked > in-progress > awaiting-materials > ready. See DESIGN for why
-        // this order and not the issue's listing order.
-        private static string State(Thing blocker, Pawn worker, int missingKinds)
+        // blocked > in-progress > no-builder > awaiting-materials > ready. See
+        // DESIGN for why this order and not the issue's listing order, and
+        // `StateNoBuilder`'s own comment for why the fourth branch sits where it
+        // does. ONE precedence rule, called from everywhere, so `construction`,
+        // `digest`, `advance {until:{layout}}`'s timeout report and the stall
+        // watch can never disagree about the same blueprint.
+        private static string State(Thing blocker, Pawn worker, int missingKinds,
+            bool skillBlocked)
         {
             if (blocker != null && !(blocker is Pawn)) return StateBlocked;
             if (worker != null) return StateInProgress;
+            if (skillBlocked) return StateNoBuilder;
             if (missingKinds > 0) return StateAwaitingMaterials;
             return StateReady;
+        }
+
+        // WHY THIS ELEMENT IS NOT MOVING, in one sentence, from the same inputs
+        // the state token came from. ONE vocabulary, deliberately: git-bug
+        // e08c3e5 adds the skill branch and git-bug f9dadc7 adds the time
+        // dimension to the SAME triage, and two workers left to themselves
+        // would have invented two answers to "why is there no worker". The
+        // digest's `stalled[]` rows, `construction`'s items and `advance`'s
+        // `unresolved_items` all carry `state` plus this string and nothing
+        // else is needed to act.
+        internal static string Why(string state, List<object> missing, Thing blocker,
+            ConstructionSkill.Verdict skill)
+        {
+            switch (state)
+            {
+                case StateBlocked:
+                    return blocker == null
+                        ? "something is standing in the way"
+                        : "blocked by " + BlockerWord(blocker);
+                case StateInProgress:
+                    return "a colonist has a job on it right now";
+                case StateNoBuilder:
+                    return skill == null ? "nobody can build this" : skill.Hint();
+                case StateAwaitingMaterials:
+                    return "short of " + MissingWords(missing)
+                        + " — nothing has been delivered to it";
+                case StateReady:
+                    return "materials are present and no colonist has a job on it: a work "
+                        + "priority, a reachability or a reservation problem, not a shortage";
+                default:
+                    return null;
+            }
+        }
+
+        private static string BlockerWord(Thing t)
+        {
+            try { return t.def?.label ?? t.def?.defName ?? "something"; }
+            catch { return "something"; }
+        }
+
+        private static string MissingWords(List<object> missing)
+        {
+            if (missing == null || missing.Count == 0) return "a material";
+            var parts = new List<string>();
+            for (int i = 0; i < missing.Count && parts.Count < 4; i++)
+                if (missing[i] is Dictionary<string, object> md)
+                    parts.Add((md["def"] as string ?? "?") + " x" + (md["count"] is int c ? c : 0));
+            if (parts.Count == 0) return "a material";
+            return string.Join(", ", parts.ToArray())
+                + (missing.Count > parts.Count ? " (+" + (missing.Count - parts.Count) + " more)" : "");
         }
 
         // Per-material `{def, needed, present, enroute}` plus the `missing` list.

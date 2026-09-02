@@ -3463,3 +3463,90 @@ queue by default (an agent flailing mid-experiment must not page triage).
 
   Recorded because the wrong version was filed on an issue and would have sent
   the next reader hunting for a stable handle that already exists.
+- 2026-09-02 (git-bug e08c3e5) — **THE SKILL CEILING IS A FOURTH TRIAGE
+  BRANCH, not a variant of the first, and the state token is `no-builder`.**
+  `construction`'s precedence becomes **blocked > in-progress > no-builder >
+  awaiting-materials > ready**, and every consumer (`ConstructionVerbs.Item`,
+  `digest.construction`, `advance {until:{layout}}`'s `unresolved_items`,
+  `ConstructionWatch`) reaches it through the one `State(...)` call, as before.
+
+  **Where it sits, and why, is the game's own order.**
+  `RimWorld/GenConstruct.cs CanConstruct` tests `FirstBlockingThing` first and
+  the `checkSkills` clause several clauses later, so `blocked` stays above it.
+  It sits below `in-progress` because a pawn with a job on the thing is a true
+  statement about this tick — but the `skill` block is published on the row in
+  every state, so the fact never disappears while that is true, and
+  `digest.construction.skill_blocked` counts the verdict independently of the
+  state precedence for exactly that reason.
+
+  **The prerequisite is read off `t.def`, the BLUEPRINT's def, not the built
+  def.** `CanConstruct` reads `t.def.constructionSkillPrerequisite`;
+  `RimWorld/ThingDefGenerator_Buildings.cs` copies the field onto the generated
+  blueprint def `if (!isInstallBlueprint)` and unconditionally onto the frame
+  def. So a `Blueprint_Install` genuinely has NO skill gate, and reading the
+  built def would have invented one for every reinstall. A preflight (`build`,
+  `place-layout`) has no thing yet and asks the `BuildableDef`, which is what
+  `Designator_Build` reads.
+
+  **BOTH prerequisites must be met by the SAME colonist**, so two maxima do not
+  decide it — `Designator_Build.DrawPlaceMouseAttachments` loops
+  `FreeColonists` testing both levels on one pawn before drawing
+  `NoColonistWithAllSkillsForConstructing`. The implementation loops the roster
+  and short-circuits on a def with no prerequisite at all, which is every
+  buildable in the M1 corpus but `Heater` (5), `Cooler` (5) and
+  `WoodFiredGenerator` (4).
+
+  **THE ISSUE'S STATED MECHANISM IS INCOMPLETE, and the correction changes the
+  design.** e08c3e5 says "no pawn can take the job, so
+  `WorkGiver_ConstructDeliverResources` never hauls the component". That is true
+  of the CONSTRUCTION-workType giver (`ConstructDeliverResourcesToBlueprints`,
+  whose `JobOnThing` passes `def.workType` into the overload that sets
+  `checkSkills: workType == WorkTypeDefOf.Construction`). But
+  `Core/Defs/WorkGiverDefs/WorkGivers.xml` declares the SAME class a second time
+  as `DeliverResourcesToBlueprints` with `<workType>Hauling</workType>`, where
+  `checkSkills` is FALSE — and
+  `WorkGiver_ConstructDeliverResources.IsNewValidNearbyNeeder` passes
+  `checkSkills: false` too. So a hauler can stock a skill-gated blueprint,
+  leaving a Frame that `ConstructFinishFrames` will never finish. **The gate
+  therefore wears TWO wrong costumes**, `awaiting-materials` and `ready`, and
+  the README's triage table sent an agent down a different wrong branch for
+  each. That is the whole argument for `no-builder` outranking both.
+
+  **NEITHER `build` NOR `place-layout` REFUSES on a skill shortfall.** The issue
+  argues "the material shortfall precedent argues for refusing without
+  `--partial`"; read `LayoutVerbs.PlaceLayout` and the precedent says the
+  opposite. `failed` — the only quantity the place/refuse invariant keys on —
+  counts parse errors, `SiteGate` verdicts and self-overlaps; `MaterialBill`
+  runs after it and only fills `data`. Run m1-20260901's barracks was priced,
+  found 6 steel short, corrected and placed; a shortfall has never refused
+  anything. A skill ceiling is even less permanent than a shortage — it is
+  cleared by a colonist levelling up, which happens by building the other 32
+  elements — so refusing would break "place the room, build what you can" for a
+  condition that resolves itself. `place-layout` publishes `skill_shortfall[]`
+  (always present, shaped like `shortfall[]`, so `[]` means checked-and-clean)
+  and `build` publishes `skill` when the def is gated.
+
+  **Mechs are NOT considered**, said in `skill_basis.not_asked` rather than
+  silently: `CanConstruct`'s `p.IsColonyMech` branch reads
+  `RaceProps.mechFixedSkillLevel` and
+  `Designator_Build.AnyMechWithSkillsRequired` asks
+  `MechanitorUtility.AnyPlayerMechCanDoWork`, while `MapPawns.FreeColonists` is
+  Humanlike-only. A mech colony's real ceiling can be HIGHER than reported.
+  Neither are WORK SETTINGS: a colonist with the skill and Construction switched
+  off is the README's existing work-priority branch and must not be dressed up
+  as a skill ceiling.
+
+  **Verified against the run's artifacts, and the artifacts say MORE than the
+  issue.** `RUNS/m1-20260901/journal/20260902T002505.ndjson` seq 42 places
+  `ly-1`'s 33 elements at tick 1023 with `pl-23` = `Heater` at `[111,137]`; 32
+  completed by tick 12687 and `pl-23` completed at **tick 60755, worker Lacey**
+  — after `summary.md`'s recorded human intervention raising Lacey's
+  Construction 4 -> 8. `Buildings_Temperature.xml` has
+  `Heater.constructionSkillPrerequisite 5` and a cost list of `Steel 50 +
+  ComponentIndustrial 1`, matching `missing` exactly; `Cooler` is 5 as well. The
+  colony's scenario grants exactly 30 `ComponentIndustrial`, and no save carries
+  a `<forbidden>` element on any component stack. The quoted `construction`
+  envelope itself is NOT in the artifacts (no save exists inside the Heater's
+  window), so the literal "30 unforbidden reachable" figure is corroborated
+  rather than read back — but completion-by-Lacey-after-the-raise is stronger
+  evidence than the envelope would have been.

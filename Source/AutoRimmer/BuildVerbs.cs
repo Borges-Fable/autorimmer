@@ -158,6 +158,21 @@ namespace AutoRimmer
             data["rot_source"] = a.Has("rot") ? "arg" : "def.defaultPlacingRot";
             data["interaction_cells"] = OutCells(SiteVerbs.InteractionCells(def, pos, rot, map));
 
+            // CAN ANYBODY ACTUALLY BUILD IT (git-bug e08c3e5). Decidable at
+            // preflight from two ints on the def and the roster's two skill
+            // levels — no simulation, no pathfinding, no tick — which is the
+            // same standard this verb already holds itself to for the cell and
+            // for materials. Published only when the def carries a prerequisite
+            // (presence is the signal), and it does NOT refuse: see
+            // LayoutVerbs.PlaceLayout's `skill_shortfall` for the argument.
+            var skillRoster = ConstructionSkill.Read(map);
+            var skill = ConstructionSkill.Of(def, skillRoster);
+            if (skill.Gated)
+            {
+                data["skill"] = skill.Out();
+                data["skill_basis"] = ConstructionSkill.Basis(skillRoster);
+            }
+
             if (!verdict.Ok || dryRun)
             {
                 data["placed"] = false;

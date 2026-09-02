@@ -299,9 +299,31 @@ as parsed, `every_frames`, `evaluations`, `eval_ms_avg`, `eval_ms_per_frame`,
 and — for `layout` — `built`/`cancelled`/`unresolved`/`done` plus, when it did
 NOT finish, `unresolved_items` with each outstanding element's state. That last
 one is why a layout that can never finish is worth more than a fixed-tick
-advance: `awaiting-materials` on all of them is an unreachable-material colony,
-`blocked` is something in the way, `ready` with nobody working is a
-work-priority problem.
+advance.
+
+**The triage, in one vocabulary.** Every unresolved element — in
+`unresolved_items` and in `construction`'s `items[]` — carries a `state` and a
+one-sentence `why`. Branch on the state:
+
+| `state` | what it means | the lever |
+|---|---|---|
+| `awaiting-materials` | nothing has been delivered to it | `things {def, detail:true}` for `forbidden`, then `unforbid` / allowed area / mine. **`missing` is what the element lacks, not what the map lacks** — check `available` before you go mining. |
+| `blocked` | something is standing in the way (`why` names it) | `designate` it away. A Pawn standing on it is `blocking_is_pawn` and is NOT this branch. |
+| `no-builder` | **nobody on the roster clears the def's skill prerequisite** | raise the ceiling or drop the element. Hauling and unforbidding change nothing. The row's `skill` block carries `construction_required`, `best_construction`, who `clears` it, and a `hint`. |
+| `ready` | stocked, and no colonist has a job on it | work priorities, reachability, or a reservation. |
+| `in-progress` | somebody has a job on it right now | nothing. Note a `skill` block with `blocked:true` here means a HAULER is stocking something no builder can finish. |
+
+`no-builder` is the branch that did not exist until git-bug e08c3e5, and its
+absence cost run m1-20260901 a heater: `Heater.constructionSkillPrerequisite` is
+5, the roster's best Construction was 4, and the element reported
+`awaiting-materials, missing 1 ComponentIndustrial` with thirty unforbidden
+components on the map. Following the table as it then stood, the next move
+looked like "unforbid more components" or "check Hauling priorities" — both
+already fine, neither able to finish the heater. It built only when a human
+raised a colonist's Construction. The gate is
+`RimWorld/GenConstruct.cs CanConstruct`'s `checkSkills` branch, and it fires for
+the DELIVERY work giver as well as the finishing one, which is why the ceiling
+can wear either the first costume or the fourth.
 
 ```
 rwa advance --until.layout ly-1 --timeout_ticks 60000 --json \

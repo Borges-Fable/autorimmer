@@ -154,6 +154,40 @@ to execute.
   meal in fifty regardless of the cook.
 - retire-when: benches are placed from `templates/`, which guarantee the room.
 
+### somebody-can-actually-build-it
+- when: act: after any `place-layout` or `build` (dry-run or not)
+- read: the result's own **`skill_shortfall`** (`place-layout`) or **`skill`**
+  (`build`). `skill_shortfall` is ALWAYS present on a `place-layout` result —
+  an empty list is "checked, nobody is gated". `skill` appears on a `build`
+  result only when the def carries a prerequisite at all.
+- flag: `skill_shortfall` non-empty, or `skill.blocked: true`.
+- act: read the row's **`hint`**, which names the number and the person
+  (`"nobody has Construction 5; the best is Lacey at 4"`). The levers, in
+  order: raise the ceiling — put the highest-Construction colonist on
+  Construction priority 1 so they level on the elements they CAN build —
+  or drop the gated element from the layout and re-place it later, or
+  recruit. **`unforbid` and hauling priorities are not levers here**, and the
+  triage table's first and third branches will send you to both if you skip
+  this read.
+- why: run m1-20260901 placed a 33-element barracks; 32 built on day 1 and the
+  33rd, a `Heater`, sat for the rest of the day reporting
+  `awaiting-materials, missing 1 ComponentIndustrial` with thirty unforbidden
+  components on the map. `Heater.constructionSkillPrerequisite` is 5 and the
+  roster's best Construction was 4 (`RimWorld/GenConstruct.cs CanConstruct`,
+  the `checkSkills` branch — and the skill clause fires for the DELIVERY work
+  giver too, which is why it presented as a material shortfall). It built at
+  tick 60755, by Lacey, only after a human raised her Construction 4 → 8. The
+  same field is 5 on `Cooler`, which is the entire freezer plan: a silent
+  ceiling there surfaces as rotted food on day 20 with no other symptom.
+  git-bug e08c3e5.
+- also: neither verb REFUSES on a skill shortfall, deliberately — a
+  prerequisite is cleared by a colonist levelling up, so refusing would break
+  "place the room, build what you can". The report is the whole mechanism;
+  read it.
+- retire-when: never. It is two ints on a def and a read of the roster; there
+  is no alert for it and the game only draws it in red on a designator tooltip
+  no agent sees.
+
 ### home-area-after-build
 - when: act: after `place-layout` (3.3, `1adc737` — the verb does not exist
   yet; today this fires after dev-spawn staging and any hand-built batch)

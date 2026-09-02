@@ -774,6 +774,7 @@ namespace AutoRimmer
             Map map = null;
             try { map = Find.CurrentMap; } catch { }
             var index = map == null ? null : ConstructionVerbs.WorkerIndexFor(map);
+            var roster = map == null ? null : ConstructionSkill.Read(map);
             for (int i = 0; i < p.LivePlacements.Count && rows.Count < OutstandingCap; i++)
             {
                 var pl = p.LivePlacements[i];
@@ -791,7 +792,17 @@ namespace AutoRimmer
                 // `Frame.WorkToBuild` is a GetStatValueAbstract and the cost
                 // belongs to the report, not to the cadence.
                 if (live != null && index != null && Placements.MapOf(pl) == map)
-                    row["state"] = ConstructionVerbs.LiveStateOf(map, live, index);
+                {
+                    row["state"] = ConstructionVerbs.Probe(map, live, index, roster,
+                        out string why, out var skill);
+                    // ONE VOCABULARY (git-bug e08c3e5 + f9dadc7). The timeout
+                    // report, `construction`'s items and the digest's stalled
+                    // roll-up all carry `state` + `why`, and the skill block
+                    // where the def is gated, so an agent triaging a layout that
+                    // never finished never has to learn a second set of words.
+                    row["why"] = why;
+                    if (skill != null && skill.Gated) row["skill"] = skill.Out();
+                }
                 rows.Add(row);
             }
             return rows;

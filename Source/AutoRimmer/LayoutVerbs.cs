@@ -325,6 +325,27 @@ namespace AutoRimmer
                 out var materialsBasis);
             data["materials_basis"] = materialsBasis;
             data["shortfall"] = shortfall;
+
+            // THE SKILL BILL (git-bug e08c3e5 items 1 and 2), shaped like
+            // `shortfall` and ALWAYS PRESENT — an empty list is "checked and
+            // clean", which is a different claim from a missing key and is the
+            // only shape an acceptance suite can assert against.
+            //
+            // IT DOES NOT REFUSE, and that is a resolution rather than an
+            // omission. The issue argues "the material shortfall precedent
+            // argues for refusing without --partial"; the precedent says the
+            // opposite when you read this method. `failed` — the only thing the
+            // place/refuse invariant below keys on — counts parse errors,
+            // SiteGate verdicts and self-overlaps. `MaterialBill` runs AFTER it
+            // and only fills `data`, so a layout short of 6 steel is placed and
+            // reported, exactly as run m1-20260901's barracks was. A skill
+            // ceiling is the SAME kind of fact and is even less permanent than a
+            // shortage: `constructionSkillPrerequisite` is cleared by a colonist
+            // levelling up, which happens by building the other 32 elements. A
+            // refusal here would break "place the room, build what you can" for
+            // a condition that resolves itself. So: place, and say so loudly.
+            data["skill_shortfall"] = SkillBill(map, ordered, out var skillRoster);
+            data["skill_basis"] = ConstructionSkill.Basis(skillRoster);
             if (unpriced > 0) data["materials_unpriced"] = unpriced;
             data["stuff_defaulted"] = CountDefaulted(ordered);
 
@@ -1372,6 +1393,36 @@ namespace AutoRimmer
                 if (short_ != null) shortfall.Add(short_);
             }
             return bill;
+        }
+
+        // Per DEF and not per element, because "nobody can build a Heater" is
+        // one fact however many heaters the layout contains — the same rollup
+        // shape `MaterialBill` uses for steel. `elements` says how many of the
+        // layout it costs.
+        private static List<object> SkillBill(Map map, List<Element> ordered,
+            out ConstructionSkill.Roster roster)
+        {
+            roster = ConstructionSkill.Read(map);
+            var rows = new List<object>();
+            var seen = new Dictionary<string, Dictionary<string, object>>(StringComparer.Ordinal);
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                var e = ordered[i];
+                if (e?.Def == null) continue;
+                var v = ConstructionSkill.Of(e.Def, roster);
+                if (!v.Blocked) continue;
+                if (seen.TryGetValue(e.Def.defName, out var have))
+                {
+                    have["elements"] = (have["elements"] is int n ? n : 0) + 1;
+                    continue;
+                }
+                var row = v.Out();
+                row["def"] = e.Def.defName;
+                row["elements"] = 1;
+                seen[e.Def.defName] = row;
+                rows.Add(row);
+            }
+            return rows;
         }
 
         private static Dictionary<string, object> PlacedRow(Element e, Placement p)
