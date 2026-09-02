@@ -74,6 +74,14 @@ namespace AutoRimmer
             // the rest of the run.
             try { ColonySampler.Tick(); }
             catch { }
+            // git-bug d9d6c12. Same argument as the sampler's, one cadence
+            // faster: `Bill.nextTickToSearchForIngredients` is rearmed every
+            // 500-600 ticks while a bill keeps failing its ingredient search,
+            // so a per-FRAME observer would count wall-clock while the agent
+            // sat thinking and a 2,500-tick one would miss whole streaks.
+            // Returns on its first line 249 ticks out of every 250.
+            try { BillWatch.Tick(); }
+            catch { }
             try { JournalVerbs.TickErrorFixture(); }
             catch { }
             try { JournalVerbs.TickCasualtyFixture(); }
@@ -106,6 +114,9 @@ namespace AutoRimmer
         {
             int answered = Runtime.ResetForGameBoundary(Runtime.BoundaryDetail);
             AlertScanner.Reset();
+            // A failed-search count carried across a reload would be
+            // attributed to bills that no longer exist (git-bug d9d6c12).
+            BillWatch.Reset();
             // Fixtures armed against the colony that just went away.
             JournalVerbs.MainMenuAtTick = -1;
             JournalVerbs.ErrorAtTick = -1;
