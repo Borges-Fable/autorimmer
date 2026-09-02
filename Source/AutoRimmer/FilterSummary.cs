@@ -125,7 +125,50 @@ namespace AutoRimmer
                     d["quality_range"] = new List<object> { q.min.ToString(), q.max.ToString() };
             }
             catch { }
+
+            // ---------------- THE SPECIAL FILTERS (git-bug eef837a) ---------
+            // ALWAYS PRESENT, both lists, even when empty. A def-level summary
+            // cannot express `AllowRotten`, and that omission is what killed
+            // run m1-20260901: `ButcherCorpseFlesh.fixedIngredientFilter`
+            // carries `specialFiltersToDisallow: [AllowRotten]`, so every
+            // corpse past 2.5 days is rejected by
+            // `Verse/ThingFilter.cs Allows(Thing)`'s LAST clause while its def
+            // sits in `allowed_defs` the whole time. The filter read healthy
+            // and matched nothing.
+            //
+            // THE UNIVERSE'S LIST IS THE LOAD-BEARING ONE. `RimWorld/Bill.cs
+            // IsFixedOrAllowedIngredient` consults `recipe.fixedIngredientFilter`
+            // BEFORE the bill's own, so a special filter disallowed THERE
+            // cannot be turned back on with `bill-set` at any price — which is
+            // exactly the question the run could not answer.
+            //
+            // Read through the PUBLIC `Allows(SpecialThingFilterDef)`
+            // (`!disallowedSpecialFilters.Contains(sf)`) over the ~15 defs in
+            // the database, never the private list and never
+            // DisplayRootCategory.
+            d["special_disallowed"] = SpecialDisallowed(filter);
+            d["universe_special_disallowed"] = universe == null
+                ? new List<object>() : SpecialDisallowed(universe);
             return d;
+        }
+
+        public static List<object> SpecialDisallowed(ThingFilter filter)
+        {
+            var list = new List<object>();
+            if (filter == null) return list;
+            try
+            {
+                var all = DefDatabase<SpecialThingFilterDef>.AllDefsListForReading;
+                for (int i = 0; i < all.Count; i++)
+                {
+                    var sf = all[i];
+                    if (sf == null || filter.Allows(sf)) continue;
+                    list.Add(sf.defName);
+                }
+            }
+            catch { }
+            list.Sort((a, b) => string.CompareOrdinal((string)a, (string)b));
+            return list;
         }
 
         // The fallback denominator: every ThingDef, by category. Built ONCE —
