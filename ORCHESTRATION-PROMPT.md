@@ -132,6 +132,13 @@ CRLF on Windows (`WriteLine` uses `Environment.NewLine`), which matters for
 >   with rationale on the issue (`git-bug bug comment new <ID> -F body.md`;
 >   use `-F`, not `-m`, which mangles apostrophes). If a resolution would
 >   change ANOTHER spec's contract, stop and report BLOCKED with the question.
+> - **`git-bug bug new -t "..." -F body.md` SILENTLY DISCARDS THE TITLE** and
+>   promotes the body's first line to it — with or without `--non-interactive`.
+>   File, then set the title in a second step:
+>   `git-bug bug title edit <id> --non-interactive -t "..."`. Verify it took.
+>   This produced the duplicate `53846a8`, whose title is a paragraph of body
+>   text and which sat open beside `e08c3e5` — the same finding, twice, one of
+>   them unlabelled. Two workers on one fix is the failure it invites.
 > - Branch `spec/<num>-<slug>` — make the branch BEFORE the first commit, not
 >   a pointer afterwards. Functionality-grouped commits; `dotnet build -c
 >   Release`; never a DLL in the same commit as source.
