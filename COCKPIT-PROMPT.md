@@ -158,31 +158,38 @@ Two suggestions from the audit, take or leave:
 
 ---
 
-## Decide, don't ask
+## Nothing here is waiting on an answer
 
-**There is nothing in this brief for Dorian to answer.** That is deliberate, and it is
-this project's standing rule — `CLAUDE.md`: *"Ambiguity is RESOLVED, not queued"*, written
-after he said there should be nothing on the muster waiting for him. You resolve it by
-investigating against the game's decompiled source and the audit, and then you record what
-you decided and why.
+**This brief has no unresolved questions in it.** You can start immediately. The design
+questions it poses are the job, not gaps someone forgot to close.
 
-That covers every design question this brief poses and every one you find on your own.
-Pushed or fetched, picture or text, one agent or several, exactly where the line falls
-between mechanical and judgment — all yours.
+**Ask Dorian whatever you like** — he is happy to be asked and he is watching. Two things
+only:
 
-**A sketch that hands him a menu is worth less than a sketch that picks one and is wrong.**
-He can argue with a decision. He cannot build on a list of options.
+- **Don't stall on it.** Decide provisionally, mark the assumption where he will see it,
+  and keep working. If he answers and you were wrong, change it.
+- **Don't hand him a menu instead of a design.** A sketch that picks one option and is
+  wrong is worth more than one that lists three and picks none — he can argue with a
+  decision and he cannot build on a list. This is the standing rule here (`CLAUDE.md`:
+  *"Ambiguity is RESOLVED, not queued"*), and it exists because he said there should be
+  nothing on the muster waiting for him.
 
-Two things that are not the same as asking, and that you should do:
+Where you made a call that could reasonably have gone the other way, spend a line saying
+so and a line saying why. Three or four of those across the whole sketch, not thirty.
+Where the evidence genuinely does not exist, write UNKNOWN — that is a finding, not a hole
+in your work.
 
-- Where you made a call that could reasonably have gone the other way, spend one line
-  saying so and one saying why you went that way. Three or four of those across the whole
-  sketch, not thirty.
-- Where the evidence genuinely does not exist, write UNKNOWN. That is a finding, not a
-  gap in your work.
+---
 
-If something truly blocks you, decide it anyway, mark the assumption where he will see it,
-and keep going.
+## Practicalities
+
+- **Work on the branch `audit/openrun-20260902`**, where the audit lives. Branch off it if
+  you prefer.
+- **Write the sketch to `RUNS/openrun-20260902/audit/COCKPIT.md`** — beside the evidence it
+  comes from. If it needs images, put them next to it.
+- **`seekandkill` is a separate repo** at `/home/dorian/projects/rimworld/seekandkill`,
+  with its own `git-bug` store. 8 of the 84 open issues are there.
+- **Commit your work.** The sketch and the issue pass are separate commits.
 
 ---
 
