@@ -58,8 +58,9 @@ Whatever the cockpit does with information the agent did not ask for, it has to 
 for that result.
 
 **The picture channel was never built.** The PNG render (`f7b6207`) is an open spec. The
-run directory holds seven pictures for 176 in-game days, the last of them from day 9,
-against 584 buildings placed. What the agent had instead was an ASCII map that draws
+run directory holds seven pictures for 176 in-game days against 584 buildings placed, and
+every one of them was taken in the first six hours. Nothing in the last nineteen — which
+is the military build-out, every mechanoid raid, and the wipe. What the agent had instead was an ASCII map that draws
 gravel, sand and rock as the same character, and a grid dump that prints upside down
 (`8847053`). When it did look, it looked at a rectangle it chose after deciding where to
 build — which is how it sealed its own workshop door and put seven blueprints inside a
