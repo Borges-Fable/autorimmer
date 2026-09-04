@@ -155,7 +155,8 @@ the third row, so a chore is never invisible.
 
 **Decisions owed.** Each one a sentence a person could answer, with the acts that
 would answer it written out and ready to send. This is the shape `triage` already has,
-which the run's own ledger called the best thing on the surface. A raid, a refugee, an
+which the issue filed in the middle of this run (`7f0e245`) called the best thing on
+the verb surface. A raid, a refugee, an
 old alert, a build blocked on a resource the map does not have, a chore that could not
 finish because a policy was never set. Each carries a deadline when the game has one.
 
