@@ -158,6 +158,34 @@ Two suggestions from the audit, take or leave:
 
 ---
 
+## Decide, don't ask
+
+**There is nothing in this brief for Dorian to answer.** That is deliberate, and it is
+this project's standing rule — `CLAUDE.md`: *"Ambiguity is RESOLVED, not queued"*, written
+after he said there should be nothing on the muster waiting for him. You resolve it by
+investigating against the game's decompiled source and the audit, and then you record what
+you decided and why.
+
+That covers every design question this brief poses and every one you find on your own.
+Pushed or fetched, picture or text, one agent or several, exactly where the line falls
+between mechanical and judgment — all yours.
+
+**A sketch that hands him a menu is worth less than a sketch that picks one and is wrong.**
+He can argue with a decision. He cannot build on a list of options.
+
+Two things that are not the same as asking, and that you should do:
+
+- Where you made a call that could reasonably have gone the other way, spend one line
+  saying so and one saying why you went that way. Three or four of those across the whole
+  sketch, not thirty.
+- Where the evidence genuinely does not exist, write UNKNOWN. That is a finding, not a
+  gap in your work.
+
+If something truly blocks you, decide it anyway, mark the assumption where he will see it,
+and keep going.
+
+---
+
 ## Rules
 
 - **Change no code and launch nothing.** Read the game's decompiled source freely
