@@ -1,7 +1,9 @@
 # openrun-20260902 — audit
 
 An audit input for the session that will rewrite the filed issues into plans. It is
-evidence, not a plan. It files nothing, edits nothing, and closes nothing.
+evidence, not a plan. The audit itself filed nothing, edited nothing, and closed
+nothing; the cockpit pass that followed it (`COCKPIT.md`, `ISSUES-DISPOSITION.md`)
+did, and says exactly what.
 
 ## Read in this order
 
@@ -12,6 +14,8 @@ evidence, not a plan. It files nothing, edits nothing, and closes nothing.
 | `tables.md` | The Step-1 arithmetic — op census, failure taxonomy, time budget, the journals | 613 lines |
 | `findings.md` | All 360 Pass-A findings, slice-ordered, undeduplicated | 360 |
 | `spine.ndjson` | The merged timeline: 6,674 transcript steps + 7,039 journal rows, UTC-ordered | 13,713 rows |
+| **`COCKPIT.md`** | **What the agent should be looking at while it plays — the design built from this audit (2026-09-03).** Read after `themes.md`. | one design |
+| `ISSUES-DISPOSITION.md` | Every open issue on 2026-09-03 accounted for against that design: closed into a root, merged, rewritten, noted, or untouched | 84 ids |
 
 ---
 

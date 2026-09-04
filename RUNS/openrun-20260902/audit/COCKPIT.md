@@ -409,25 +409,28 @@ Two earlier rulings are changed by this, and the change is deliberate:
 
 ## What to build first
 
-Three roots, in this order. Each is a spec issue; the ids are in
+Three roots, in this order. Each is a spec issue in `git-bug`, filed 2026-09-03 under
+the round's root `b4adee2`; the pass over every open issue against them is
 `ISSUES-DISPOSITION.md` beside this file.
 
-1. **The screen.** `advance` replies with it. Since-you-last-looked with game, human
+1. **The screen** (`975973e`, with its journal half `827c1bf`, which goes first
+   because the screen depends on it). `advance` replies with it. Since-you-last-looked with game, human
    and mod rows; the destroy hook; guns, power and goals gauges; the answer gate. This
    is first because the other two report into it, and because on its own it closes
    the four largest findings of the audit: destruction with no event, the unread
    field, the defeated read gate, and the invisible human.
-2. **The map.** A picture every turn, mod-chosen, with turret range and coverage,
+2. **The map** (`ee4b4f8`). A picture every turn, mod-chosen, with turret range and coverage,
    wind-turbine clearance, power nets, and what is gone; a fixed alphabet that tells
    gravel from sand; the ghost in every placement dry run; `inspect`. Second because
    the two things Dorian named that no issue holds both live here, and because every
    spatial mistake this run made was made without a picture.
-3. **The chores.** After a fight, butcher, roof, the research queue, a joiner, a doctor
+3. **The chores** (`ffef0d7`). After a fight, butcher, roof, the research queue, a joiner, a doctor
    gone, tend until stable. Third because each is small once there is a screen to
    report into, and because together they remove most of the contract.
 
-Two things land now regardless of the order above, because they are built and cost
-nothing: `e440676` (error classes, on a branch, never benched) and seekandkill
+The honesty rules (`27bf321`) and the client work (`70ee75e`) are filed beside these
+and are taken as their items come up. Two things land now regardless of the order
+above, because they are built and cost nothing: `e440676` (error classes, on a branch, never benched) and seekandkill
 `a6b1aa0` (a null guard at a named line, which took autonomous combat out of the
 run's final battle).
 
