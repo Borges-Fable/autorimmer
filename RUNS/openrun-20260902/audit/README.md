@@ -16,6 +16,7 @@ did, and says exactly what.
 | `spine.ndjson` | The merged timeline: 6,674 transcript steps + 7,039 journal rows, UTC-ordered | 13,713 rows |
 | **`COCKPIT.md`** | **What the agent should be looking at while it plays — the design built from this audit (2026-09-03).** Read after `themes.md`. | one design |
 | `ISSUES-DISPOSITION.md` | Every open issue on 2026-09-03 accounted for against that design: closed into a root, merged, rewritten, noted, or untouched | 84 ids |
+| **`COCKPIT-WALKTHROUGH.md`** | **Where the element-by-element review of `COCKPIT.md` stopped: elements 1-2 decided with amendments, element 3 asked and unanswered, 4-9 not reached.** The sketch has not been rewritten yet. | 3 of 9 |
 
 ---
 
