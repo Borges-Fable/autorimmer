@@ -11,6 +11,7 @@ stopped being a checklist line by becoming geometry.
 | `bedroom` | 5×7 | none (3.3's own rehearsal size) | enclosure, auto-roof, ownership-or-Barracks |
 | `freezer-kitchen` | 11×6 | AirConditioning (+Electricity for the conduit spine) | cold that is checked, clean that is measured, haul paths short, 400 W that has to come from somewhere |
 | `power-room` | 7×7 | Electricity (+Batteries, +Firefoam) | the popper, the one deliberate conduit, hidden conduit for the rest, banks sized to their own explosion |
+| `workshop` | 9×7 | none (Wall and Door carry no `researchPrerequisites`) | benches go indoors, the door south like `bedroom`'s so two do not open into each other, one torch lamp and not in the lane, a roof reported rather than sent |
 
 ## Format: annotated IR, in two halves
 
