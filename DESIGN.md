@@ -4880,3 +4880,128 @@ queue by default (an agent flailing mid-experiment must not page triage).
   here, because "the six contract goals graded on every screen" is the spec's
   own words and cutting a panel is not a worker's call. The measurement is
   reproducible: `accept/975973e-screen.md` §J.
+
+- 2026-09-09 — **A soft-dependency order verb calls the mod's OWN CONFIRM PATH,
+  not the primitive underneath it — and the primitive being public is not an
+  invitation.** Nepo (`Dorian.Nepo`) is Dorian's scenario mod: a comms console,
+  a rich father off-map, a catalog of everything with a market value, delivered
+  by drop pod. Its catalog is a WINDOW, and the agent plays through verbs, so
+  `nepo-catalog` / `nepo-order` / `nepo-inbound` are that window's semantic
+  equivalent. `Source/AutoRimmer/NepoBridge.cs` and `NepoVerbs.cs`; no project
+  reference, no assembly reference, `FswaBridge.cs`'s four rules throughout.
+
+  **THE PRIMITIVE THAT LOOKS LIKE THE API AND IS NOT.**
+  `Nepo/NepoGameComponent.ScheduleShipment(int, List<ItemOrderEntry>,
+  List<MechOrderEntry>, List<SlaveOrderEntry>, List<AnimalOrderEntry>)` is
+  public, four overloads deep, and named exactly like the thing you want. Its
+  body is one line — `pending.Add(new PendingShipment(TicksGame + delayTicks,
+  …))`. It performs **no** affordability check, **no** debit (it never calls
+  `Spend`), no comms check, no `CatalogBuilder.IsOrderable` check, no
+  `allowSlavePurchases` check, no `WorldPawns` registration for a bought slave,
+  and no multiplayer sync. **An order placed through it is free.** A verb built
+  on it could not answer "what did it cost" or "what is the balance now" — the
+  two things the issue asks it to report — because neither number would have
+  moved. The window does not call it directly either:
+  `Window_DadCatalog.DoPlaceOrder` calls `NepoSync.PlaceOrder(negotiator,
+  NepoSync.EncodeOrder(…))`, and `PlaceOrder` is what re-checks `DadAvailable`,
+  re-checks `CanAfford`, memoises the material preference, parks a bought slave
+  in `WorldPawns` with `PassToWorld(…, KeepForever)`, calls `Spend`, and only
+  then calls `ScheduleShipment`. It is also one of the eight methods
+  `Nepo/MpBridge` registers with `MP.RegisterSyncMethod`; `ScheduleShipment`
+  and `Spend` are not registered, so calling either directly desyncs. **So the
+  write path is `EncodeOrder` + `PlaceOrder`, and `ScheduleShipment` is
+  deliberately not even BOUND** — binding a method we have decided not to call
+  is one more thing to drift. Generalises: when a soft dependency exposes both
+  a primitive and the path its own UI takes, take the UI's path; the primitive
+  is public because the UI's path needed it, not because it is the contract.
+
+  **THE PAYLOAD STAYS NEPO'S.** `EncodeOrder` flattens an order to a
+  `;`/`|`/`:`-delimited string that `NepoSync.TryDecodeOrder` parses back, and
+  writing that string ourselves would have saved constructing three of Nepo's
+  types by reflection. It is not done, for one reason: a payload with the wrong
+  section count is dropped by `TryDecodeOrder` with a `Log.Error`, and a RED
+  ERROR raised by agent-supplied arguments breaches the standing zero-red-errors
+  invariant. Letting the other mod encode its own format makes that unreachable.
+
+  **THE GATE IS THE OTHER MOD'S WIDGET, AND IT HAS TWO HALVES.** Confirming an
+  order in Nepo's window checks exactly one thing —
+  `Window_DadCatalog.DrawFooter`'s `canOrder = comp != null && cartCount > 0 &&
+  comp.CanAfford(cartTotal)` — because the window is already open and
+  `forcePause`. The console gate is a gate on OPENING:
+  `Patch_CommsConsole_GetCommTargets.Postfix` adds Dad only when
+  `DadAvailable`; vanilla's `Building_CommsConsole.CanUseCommsNow` (which folds
+  solar flare AND power into one property) plus the reach clause must hold; and
+  `DadCommTarget.CanRead` is `CapableOf(PawnCapacityDefOf.Sight)`. `nepo-order`
+  does both acts in one call, so it reproduces both halves. **The Sight/Talking
+  inversion is the part worth recording**: `CommsVerbs.ConsoleFailure`
+  reproduces vanilla's `GetFailureReason` faithfully, Talking clause and all,
+  and reusing it here would have been wrong — Nepo's
+  `Patch_CommsConsole_GetFloatMenuOptions.ShouldOfferDadDespiteMuteness` exists
+  for no purpose other than handing a MUTE colonist the Dad option vanilla would
+  deny, because the catalog is read rather than heard. Refusing a mute colonist
+  would have fabricated a restriction the player does not have, which `261f2e9`
+  names as the same class of error as bypassing a gate, facing the other way. So
+  `nepo-order` has its own `NepoConsoleFailure`: vanilla's clauses MINUS
+  Talking, PLUS Sight.
+
+  **A THIRD GATE THAT IS NOT A WIDGET AT ALL AND IS THE EASIEST TO MISS.**
+  `NepoGameComponent.GameComponentTick` opens `if (!IsNepoGame) return;`, and
+  the delivery sweep is inside it. A shipment scheduled in a colony not started
+  from the Nepo scenario sits in `pending` forever. The verb refuses that colony
+  by name rather than taking payment for a pod that will not come.
+
+  **`requireCommsForRestock` DOES NOT GATE A MANUAL ORDER**, despite the name.
+  Its only two call sites are `NepoGameComponent.RunRestockSweep` and
+  `.RunSurgeryOrderSweep`, where it decides whether an AUTOMATED reorder is
+  queued as a `PendingDispatch` for a colonist to call in or charged on the
+  spot. `nepo-order` does not enforce it; all three verbs REPORT it, with the
+  sentence saying what it actually gates. Recorded because reading the name and
+  enforcing it would have refused orders the player can place.
+
+  **MODE IS REPORTED, NEVER ASSUMED, AND NEVER WRITTEN.** Dorian sets
+  `unlimitedMoney` and `instantDelivery` himself so a bench run cannot die of
+  starvation; both change what the agent should plan around, so every reply
+  carries a `mode` block read fresh from `NepoGameComponent.Active.Config`.
+  Nothing here writes a Nepo setting — the only sanctioned writer is the synced
+  `NepoSync.SetConfig`, which carries cache invalidations this repo has no
+  business reproducing. Under `unlimitedMoney` the balance does not move at all
+  and the spend accumulates into `spentWhileUnlimited`, so the order's
+  `charged` is read from a DIFFERENT member in the two modes and is never
+  inferred from the price we computed.
+
+  **THE READ-BACK IS LOAD-BEARING, and this is FswaBridge's rule 3 with more
+  mouths.** `PlaceOrder` is `void` and returns silently on FOUR conditions (null
+  component, `!DadAvailable`, empty payload, `!CanAfford`), and `TryDecodeOrder`
+  silently DROPS any manifest line whose def no longer resolves. So the verb
+  snapshots `Budget`, `SpentWhileUnlimited` and the identity of every shipment
+  in `pending`, calls, re-reads, and reports the difference: no new shipment is
+  `order-did-not-take` with a diagnosis, and a `charged` that disagrees with the
+  computed cost ships a `cost_mismatch` naming both causes. `PendingShipment`
+  carries no cost field, so `nepo-inbound`'s `value_now` is explicitly labelled
+  a re-price at today's catalog price and not what was paid.
+
+  **WHAT IS NOT BOUND, AND WHY THAT IS THE POINT.** `NepoGameComponent
+  .SlaveRoster` GENERATES a roster of pawns when its backing field is null — a
+  write-on-read of exactly the class `PawnSafe` refuses. The bridge binds
+  `SlaveRosterNoGenerate` and never binds `SlaveRoster` at all, so an observer
+  cannot reach it by accident. The three `CatalogBuilder` list builders DO
+  memoise on first call, and that is allowed: the memo is not scribed state and
+  Nepo invalidates it itself (`InvalidateCache` from `FinalizeInit` and from
+  `NepoSync.SetConfig`), which is the `Def.LabelCap` case rather than the
+  write-on-read one.
+
+  **TWO DELIBERATE DEPARTURES, both narrow.** (1) The two READ verbs adopt
+  `RefuseStray`, which `c519477` scopes to verbs that mutate. A dropped `filter`
+  on a four-figure catalog does not return less, it returns the WRONG twenty —
+  the first twenty of everything, which reads exactly like a match — and that is
+  the widening the rule exists to stop; nothing is written, so the refusal costs
+  a dictionary walk. (2) The stray-key rule is applied ONE LEVEL IN, to the keys
+  of each `items`/`mechs`/`animals` entry, because `{def:"Steel", qty:20}`
+  silently becoming a count of one is the same defect wearing a smaller hat. A
+  missing `count` is likewise refused and never defaulted to 1: a dropped count
+  on a bulk food order starves the colony it was meant to feed.
+
+  **WHAT IS NOT DISCHARGED.** None of this has been in front of a game — a
+  worker may not launch one. `accept/nepo-order.md` carries the bench checks as
+  a numbered command list, including the absent-mod phase, and stays open until
+  the orchestrator has run it.
