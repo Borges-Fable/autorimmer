@@ -256,12 +256,25 @@ its own ruling).
 
 ## What is waiting for Dorian, and nothing here was applied
 
-- **The map panel drops turret range rings from the ASCII crop** and makes the
-  PNG Dorian's rather than the agent's, reversing the mock. Both argued from the
-  run, both with a named measurement that would overturn them. `ROUNDS-2-map.md`
-  is the full specification.
-- **Delete the `research queue` chore and disable `RandomResearch` on the
-  bench** — or keep it, if random research is the point. Untouched.
+**All three of the design calls below were RULED on 2026-09-09 by a focused Fable
+round and are now in `COCKPIT.md`. They are recorded here as decided, not open.**
+
+- **RULED — no turret range rings in the ASCII crop; the gauge prints SIGHT.**
+  `Building_TurretGun.DrawExtraSelectionOverlays` draws range with no line-of-sight
+  term, and on this map the seven discs cover essentially the whole courtyard — so
+  the ring would have read green over the exact cells the lancer used for ~200,000
+  unopposed ticks while four turrets sat at the south gate unable to see him. The
+  replacement is proved against that lancer screen by screen in the round's report.
+- **RULED — the ASCII crop is the map; the PNG is Dorian's**, and is not named on
+  the agent's screen until `f7b6207`'s fresh-reader acceptance passes. Its only
+  reading so far miscounted six rooms as zero and was quoted onward as an answer.
+  Reversible on a stated condition.
+- **RULED — the research chore is keyed on the agent's QUEUE, not on the picker.**
+  `RandomResearch` fills only an empty slot and respects a set project, so the two
+  compose rather than fight: keep the queue full and the picker never gets a turn.
+  The chore is correct with the mod on, off or absent and never checks for it. This
+  supersedes "delete the chore and disable the mod" — **neither**. Whether random
+  research is wanted is still Dorian's, and nothing on the bench was touched.
 - **Rename `butcher` to `corpse care`** and move it to the cause layer.
 - **Rewrite the mod half of `65e7cf9`** to the clock-span rule, and move B and C
   to `70ee75e` as client bugs.

@@ -59,7 +59,7 @@ ANDBOURNE · Spring 5, 5503 · 14h · tick 10,349,000 · paused · saved: raid-5
 STOPPED   letter — Raid: Nyararm Mechhive. 2 scythers, 1 lancer, drop pods at (125,175),
           80 cells north of the walls. You last looked 7,700 ticks ago.
 
-MAP       home area + 8, 60x50 cells, north up · picture: frames/10349000.png (map changed: yes)
+MAP       home area +8 · 60x50 of 71x62 · north up · changed since you last looked: walls +3, gone 1
           ┌ x74 ─────────────────────────────────────────────────── x132 ┐
           │  ...  ##########+##########  ...                             │ z120
           │  ...  #  .  .  T .  .  .  #  ...                             │
@@ -68,11 +68,11 @@ MAP       home area + 8, 60x50 cells, north up · picture: frames/10349000.png (
           │  ...  #  W::::  ~~~~~  .  #      fixed alphabet]             │
           │  ...  ##########+##########  ...                             │ z70
           └────────────────────────────────────────────────────────────┘
-          # wall  + door  T turret  · its range  W wind turbine  : its clearance  ~ conduit
+          # wall  + door  Y turret  W wind turbine  : blocked clearance  / gap  X gone since you last looked
           @ colonist  h hostile  ! gone since you last looked  , soil  . gravel  _ sand  ^ rock  % ore
    GONE   autocannon at (98,114) — destroyed by a manhunter vulture 376,000 ticks ago. Not rebuilt.
    NEW    3 hostiles at (125,175).
-   OPEN   north wall x97–99 (the planned gate).
+   OPEN   north x97–99 (the planned gate) — 2 guns bear, was 3 · south door (87,74) — 5 guns bear
 
 COLONISTS 7 · armed 5 · downed 1 · inside the walls 1, outside 6 · posture: unbound, seek off
    Gauss   LMG            marine   hp 100  mood 61   (140,80)  hauling     66 cells out
@@ -84,7 +84,8 @@ COLONISTS 7 · armed 5 · downed 1 · inside the walls 1, outside 6 · posture: 
    Dilly   —              —        hp  40  mood 20   (116,78)  in bed, cannot walk, room at −4.6 °C
 
 GUNS      mini-turrets 6 at (93,108) (103,108) (85,79) (88,79) (84,75) (86,75) · autocannon 1 at (85,75), was 2
-          north gate covered by 2 guns, south gate by 5 · cells inside the walls covered by any gun: 0 of ~1,900
+          cells inside the walls IN SIGHT of any gun: 0 of ~1,900 · a hostile inside the walls prints its own
+          row: in range of N, in sight of M
 POWER     +184 W · batteries 3 at 51 % in room 73 — no door, nobody can reach them · nets 2: net B (two
           wind turbines) has no consumer
 FOOD      48 days map-wide (411 survival meals, human-sent) · in stockpiles 0.4 days · rotting: nothing
@@ -190,7 +191,7 @@ starts with.
 | arrives unasked, every turn | fetched by id, when a decision needs it |
 |---|---|
 | the stop line | `journal {since_seq}` for the raw rows |
-| the map: home area, the stop's place, what is gone | `map-dump` / `render` of any other rectangle |
+| the map: the home-area crop, the stop's place, what is gone, what is open | `map-dump {rect, planes}` for any rectangle or overlay plane; `render {rect}` for a picture of it, written to `frames/<tick>-<rect>.png` and journaled as a step |
 | colonists: the bar | `pawn {id, sections}` for one pawn's detail |
 | gauges: guns, power, food, temperature, stock, goals, lights | `things {def}`, `room {id}`, `zones` — each saying in its first line how many of the total it shows |
 | since you last looked: game, human, mod | `inspect {id}`: what the player's bottom pane says about one thing, its buttons, and what the game would draw for it |
@@ -219,7 +220,7 @@ section; this table is the list, not the specs.
 | after a fight | standing hostiles reach 0, counting only hostiles that can currently fight — a dormant cluster is hostile by faction with no dormancy short-circuit, and would have held this trigger shut for the entire final quarter: all 37 digests from tick 8,793,512 to the wipe read `hostiles: 5` | rescue downed colonists, nearest capable pawn first; tend each until stable; finish off or capture downed enemies; unforbid what the fight dropped; undraft everyone | finish off, on only while there is no prison (`cc8988c`) |
 | butcher | a fresh corpse of a colony kill or hunt, and a butcher spot or table | make sure one butcher bill exists and can run; if there is no spot, a decision owed with the rot deadline | which animals; default all but pets |
 | care of stored items | any stored item whose deterioration reasons include being unroofed (`Thing.GetInspectStringLowPriority`, `SteadyEnvironmentEffects.FinalDeteriorationRate`) | designate a roof over those cells, as a player would with the roof area tool — but see below: this treats the symptom | on by default |
-| research queue | a project finishes and the game auto-picks | put the next project from the agent's queue back; if the queue is empty, a decision owed | the queue is the agent's |
+| research queue | the current project is not the head of the agent's queue AND the queue is not empty — checked in a `ResearchManager.FinishProject` postfix marked `[HarmonyBefore("Dorian.RandomResearch")]`, and again at every screen build | set the head of the queue as current; a project a human set from the research tab BECOMES the head and is never overwritten. When the queue is empty the chore does nothing, and the bench decides what happens: with `RandomResearch` on it fills the slot by its own contract and the screen reports the pick as a `game` row; with it off the slot stays empty, `Alert_NeedResearchProject` turns on, and the alert halt makes it a decision owed. **The design never checks whether the mod is present.** | the queue is the agent's; a head blocked by `prerequisites` expands them in dependency order, any other `blocked_by` skips it with a light |
 | a joiner | a pawn joins | essentials to priority 1 (firefighting, patient, basic work, doctor if capable); nothing at 0 unless incapable; the colony's food and outfit policy; the colony's posture | the essentials list |
 | a doctor gone | the only doctor is downed or dead | promote the next best medic (`40ed42f`, already specified) | — |
 | tend until stable | a colonist needs tending and NO `TendPatient` job is already running on them — the gate matters: repeating without it is F-S03-17, twelve `prioritize` calls each restarting the tend and resetting its progress while Aaron bled to 1.0 | rescue to a bed first (`WorkGiver_Tend.GoodLayingStatusForTend` requires `InBed()` for humanlikes), then `prioritize` the nearest capable pawn onto `DoctorTendToHumanlikes`. NOT the `tend` verb, which is drafted-only and inventory-only, so a forced tend is bare-handed. NOT `DoctorTendEmergency` either: its class `WorkGiver_TendOtherUrgent` refuses unless `TicksUntilDeathDueToBloodLoss < 45000`, so it cannot tend an infection — which is what killed Ellis, with 18 medicine in stock | wake a sleeper for a non-urgent tend; default on. Medicine is the patient's own `med_care` lever, not this chore's |
@@ -254,11 +255,11 @@ threshold. A *decision* is framed on the screen and waits for the agent.
 |---|---|---|
 | Vultures destroyed two turrets and an autocannon; no event said so | the loss is a fact | stop; map GONE; guns gauge shows "was 2" until rebuilt or written off |
 | The agent re-counted mini-turrets and never autocannons | counting is mechanical | guns gauge, by kind, every position listed |
-| Every turret pointed at a gate; the lancer walked in | coverage is computable; the layout is judgement | guns gauge: cells inside the walls covered by any gun; the fix is the agent's |
+| Every turret pointed at a gate; the lancer walked in | SIGHT is computable; the layout is judgement | guns gauge: every opening with the guns that bear on it, every hostile inside the walls with the guns that SEE it, and the interior sight count; a turret dry run replies with its sight cells; the fix is the agent's |
 | Whether to rebuild the autocannon with steel at 0 | judgement | decision owed: north gate uncovered, autocannon needs steel, map has none |
 | Meat, medicine, cloth rotted in storage all run | chore | roof |
 | Corpses rotted unbutchered | chore | butcher |
-| The research auto-picker stole hours 16 times | chore | research queue |
+| The research auto-picker stole hours 16 times | the picker is Dorian's own `RandomResearch`, filling an EMPTY slot by its own contract; the empty slot is the chore | research queue: the head goes back before the picker runs; an empty queue is a `game` row with the mod on, a decision owed with it off |
 | Doctor coverage read green with one doctor, who then went down; three deaths | an instrument bug, then a chore | `aa4391b`; a doctor gone |
 | The only doctor was asleep; tending had to be forced four times | chore | tend until stable |
 | `posture` with no pawn filter unbound all seven | a verb whose default mutates broadly | the unscoped form is refused; `pawns` is required |
@@ -435,7 +436,9 @@ stay in the client; facts and hands stay in the mod.
 
 **In `rwa`.**
 - Prints the screen in the shape above; writes `frames/<tick>.json` and renders
-  `frames/<tick>.png` after every `advance`. The render already exists (`rwa render`,
+  `frames/<tick>.png` after every `advance`. The render writes a transcript
+  step of its own, so the first run can count opens and echoes from the transcript
+  rather than from the harness. The render already exists (`rwa render`,
   spec `f7b6207`); what was never built is calling it without being asked.
 - Names the transcript run in every envelope and warns when `RWA_RUN` falls back;
   waits behind an in-flight advance instead of losing the call; recovers a result
@@ -544,14 +547,39 @@ What the rounds raised and this sketch has NOT resolved:
 - **Three chores carry an undeclared policy in an empty knob column**: which doctor
   count, which medicine and whether to wake a sleeper, and what to do when the head of
   the research queue cannot start.
-- **The auto-picker `research queue` exists to revert is not vanilla** and is in none
-  of the 76 decompiled mods. Its origin is unidentified; if a mod setting turns it off,
-  that chore may not be needed at all.
-
+- **RULED 2026-09-09: the auto-picker is `Dorian.RandomResearch`** — his own mod, in
+  the bench, `enabled` defaulting true, and by its own contract it fills only an EMPTY
+  slot and respects any project already set. So the chore and the mod do not fight:
+  the chore is keyed on the agent's queue rather than on the picker, which makes it
+  correct with the mod on, off, or absent, and it never checks for the mod. Whether
+  random research is wanted in the next run is Dorian's, and the design does not touch
+  his settings. This supersedes the earlier note that the chore should be deleted and
+  the mod disabled: neither.
 ---
 
 ## Calls that could have gone the other way
 
+- **No turret range rings in the ASCII crop, and the gauge prints SIGHT rather than
+  range.** The mock drew the rings. `Building_TurretGun.DrawExtraSelectionOverlays`
+  draws `EffectiveRange` with no line-of-sight term at all, and on this map the seven
+  discs cover essentially the whole courtyard — so a crop with rings would have read
+  GREEN over the exact cells the lancer used for roughly 200,000 unopposed ticks while
+  four surviving turrets sat at the south gate with no sight of him. That is T7: an
+  instrument that measures the adjacent thing. Rings stay in the PNG and the
+  `coverage` plane; the screen prints sight as counts — per opening, per hostile
+  inside the walls, and for the interior — and a turret dry run replies with its sight
+  cells, which is the one moment a ring is useful and where the game itself puts it
+  (`PlaceWorker_ShowTurretRadius.AllowsPlacing`).
+- **The ASCII crop is the map; the PNG is Dorian's.** The alternative was "ASCII
+  inline, PNG one Read away" — which was this run's actual condition, and it produced
+  ninety text reads against ten pictures, none after 12:50 on the second day, through
+  five mech raids and the wipe. The PNG is rendered after every advance for the viewer
+  and the audit but is **not named on the agent's screen until `f7b6207`'s
+  fresh-reader acceptance passes**: its only reading so far miscounted six rooms as
+  zero and was quoted onward as an answer, and an instrument that failed its one test
+  is not offered to an agent that reads green as served. Both of the run's picture
+  catches (F-S01-24, F-S02-4) reproduce on the crop plus the map-wide stock gauge.
+  Reversed if the ASCII fails the same fresh-reader test the PNG passes.
 - **The screen is the reply to `advance`, not a separate `look` after it.** A
   required fetch decays (T11) and the read gate was defeated four ways (T4). The cost
   is two to four kilobytes per advance; the run's agent called `digest` 424 times
