@@ -103,7 +103,7 @@ SINCE YOU LAST LOOKED (7,700 ticks)
 DECISIONS OWED — the clock will not run until each is answered, or deferred with a reason
    d-311  RAID     fight from the walls, or shelter?
             act: posture {pawns:"all", area:"lockdown", seek:false, hostility:"attack"}
-            act: seek-at-will {pawns:"all"}      (broken until seekandkill a6b1aa0 is fixed)
+            act: seek-at-will {pawns:"all"}      (a6b1aa0 fixed 2026-09-08; bench outstanding)
    d-309  REFUGEE  Raccoon, crash-landed, injured, at the map edge. Take in?   deadline ~2 days
             act: quest-accept {quest:"…"}   act: quest-decline {quest:"…", reason:"…"}
    d-301  ALERT    NeedDoctor has been live 13 days with no verdict. Fix, or mute with a reason?
@@ -113,52 +113,28 @@ DECISIONS OWED — the clock will not run until each is answered, or deferred wi
 Six panels. Read top to bottom, the way a player's eye goes: why we stopped, the map,
 the people, the numbers, what happened, what is asked of me.
 
-**The stop line.** Why the clock stopped, and how long since the agent last looked.
-This is the line the audit shows the agent actually read this run: it acted on
-`halted_on` every time it carried a casualty. Everything else on the screen sits
-under the line the agent came for.
+One line each, deliberately. What every panel is FOR is settled; what goes IN it is
+not, and this sketch does not pretend otherwise. Each panel is owed its own session
+with the run's evidence for that panel in front of it, and the mock above is the
+shape rather than the specification.
 
-**The map.** A picture of the home area, chosen by the mod, not the agent. The agent
-this run looked at rectangles it chose after deciding where to build, which is how it
-sealed its own workshop door. Now the rectangle is the game's own home area plus a
-margin, and on a stop with a place attached (a raid, a casualty, a destroyed
-building) a second crop around that place. The ASCII crop is always there; the PNG is
-one `Read` away and the screen says whether the map changed since last time, so the
-agent knows when the picture is worth opening. The alphabet is fixed and tells gravel
-from sand from rock, because this run wrote off 131 farmable gravel cells as sand.
-Turret range and wind-turbine clearance are drawn, because they are what the game
-draws when a player selects those things. Anything that was there last time and is
-gone now is marked, and named below the crop, with what destroyed it and when.
+- **The stop line** — why the clock stopped, and how long since the agent last
+  looked. It leads because it is the one line the audit shows the agent actually
+  read: it acted on `halted_on` every time it carried a casualty.
+- **The map** — where things are, cropped by the mod rather than by the agent, with
+  anything gone since last time marked on it.
+- **Colonists** — who is where, in what state, and how far outside the walls.
+- **Gauges** — the numbers that are always there, each from a full count.
+- **Since you last looked** — what happened while time ran, in three rows: game,
+  human, mod.
+- **Decisions owed** — each a sentence a person could answer, with the acts that
+  would answer it ready to send.
 
-**Colonists.** The colonist bar: weapon, armour, health, mood, where they are, what they
-are doing, and how far outside the walls they stand. This run's colony was scattered
-40 to 70 cells out when the fatal raid landed, after a `posture` call with no pawn
-filter unbound all seven. That fact was never on any screen.
-
-**Gauges.** The numbers that are always there. Guns are counted by kind with every
-position listed, never one coordinate for six things, and the gauge says what each
-gate is covered by and how much of the inside is covered by anything at all. Power
-says which nets have no generator or no consumer and which batteries nobody can walk
-to. Food says map-wide and in-stockpile as two numbers, because the difference was
-misread four times this run. The six goals of the run contract are graded on every
-screen: the day-170 discovery of four steam geysers is a day-1 line here. Lights are
-the game's alert readout, with an age on each, and any alert older than a day with no
-verdict is a decision owed.
-
-**Since you last looked.** What happened while time ran, in three rows: the game,
-a human, the mod. This is the journal already kept, read by the mod instead of by the
-agent, capped by importance, with the raw rows one `journal` call away. A death, a
-downing, a destroyed building, an arrival, a letter are always shown. Dorian's
-interventions appear in the human row the turn after they happen, so the agent knows
-food arrived by hand and a dead colonist is alive again. What the mod did by itself is
-the third row, so a chore is never invisible.
-
-**Decisions owed.** Each one a sentence a person could answer, with the acts that
-would answer it written out and ready to send. This is the shape `triage` already has,
-which the issue filed in the middle of this run (`7f0e245`) called the best thing on
-the verb surface. A raid, a refugee, an
-old alert, a build blocked on a resource the map does not have, a chore that could not
-finish because a policy was never set. Each carries a deadline when the game has one.
+**Decisions arrive in groups, not as a pile.** When several are owed, the screen
+serves one kind at a time — the raid decisions, then the next group — and the mod
+orders the groups by urgency. The agent answers a group; the next screen brings the
+next one. It never has to sort the pile itself, and time does not move until the last
+group is answered.
 
 ---
 
@@ -188,6 +164,20 @@ Not added, on purpose:
   this run and nine days of stops would have been unplayable for both of them. This is
   a call that could go the other way; see the list at the end.
 - **A chore that ran.** The mod's own work is reported, not announced.
+
+**The agent may stop any of these from pausing its game, and keeps the list.** Some
+reasons do not need to stop the clock at all, and others are situational on the state
+of the game, so the set above is a default rather than a fixed law. This extends a
+mechanism the mod already ships rather than inventing one: `AlertMuteVerbs.cs` holds
+`AlertMuteComponent`, with `Muted(string id)` and an off-thread mirror of muted ids;
+stop reasons want the same shape, keyed by reason rather than by alert.
+
+Two things that owes, neither settled here. A mute list is the failure this design
+exists to prevent wearing a different hat — theme T11 measured what happens to
+anything the agent must remember to revisit, and it goes to zero — so **what is
+currently muted belongs on the screen**, the way `LIGHTS` above already prints "4
+alerts live, 2 muted". And the sketch owes a rule for whether a mute expires, holds
+until lifted, or is conditional on the state that justified it.
 
 The morning checklist of the play loop becomes the morning screen: the one-day
 timeout already means every day starts with a stop, and the screen is what a day
@@ -228,12 +218,26 @@ section; this table is the list, not the specs.
 |---|---|---|---|
 | after a fight | standing hostiles reach 0 | rescue downed colonists, nearest capable pawn first; tend each until stable; finish off or capture downed enemies; unforbid what the fight dropped; undraft everyone | finish off, on only while there is no prison (`cc8988c`) |
 | butcher | a fresh corpse of a colony kill or hunt, and a butcher spot or table | make sure one butcher bill exists and can run; if there is no spot, a decision owed with the rot deadline | which animals; default all but pets |
-| roof | any stored item whose deterioration reasons include being unroofed (`Thing.GetInspectStringLowPriority`, `SteadyEnvironmentEffects.FinalDeteriorationRate`) | designate a roof over those cells, as a player would with the roof area tool | on by default |
+| care of stored items | any stored item whose deterioration reasons include being unroofed (`Thing.GetInspectStringLowPriority`, `SteadyEnvironmentEffects.FinalDeteriorationRate`) | designate a roof over those cells, as a player would with the roof area tool — but see below: this treats the symptom | on by default |
 | research queue | a project finishes and the game auto-picks | put the next project from the agent's queue back; if the queue is empty, a decision owed | the queue is the agent's |
 | a joiner | a pawn joins | essentials to priority 1 (firefighting, patient, basic work, doctor if capable); nothing at 0 unless incapable; the colony's food and outfit policy; the colony's posture | the essentials list |
 | a doctor gone | the only doctor is downed or dead | promote the next best medic (`40ed42f`, already specified) | — |
 | tend until stable | a colonist needs tending and no doctor job starts within a short window | force the nearest capable pawn, awake or not, and repeat until tending is no longer needed | — |
-| save | every stop | `auto-<why>-<date>`; the agent's own `save` stays | how many to keep |
+
+**Saving is not a chore. It is automatic.** It has no trigger to judge and no
+procedure to get wrong, so it does not belong in the same table as rescuing the
+downed. Every stop writes `auto-<why>-<date>`, the agent's own `save` verb stays, and
+the only knob is how many to keep — none of which needs a row here.
+
+**And `roof` as written treats a symptom.** It waits for an item to start
+deteriorating and then roofs the cells under it, which leaves the real question
+unasked: why was a storage slot unroofed in the first place? It belongs inside a
+wider care-of-items concern rather than triggering on a deterioration reason.
+
+**This section and the next are owed a round of their own** — one that checks the
+list for logical consistency and tests whether the four categories are sound, rather
+than re-deciding the behaviours. `roof` and `save` are the two rows that found the
+seam; they are unlikely to be the only ones.
 
 What is not a chore, and why, is the next section.
 
@@ -351,7 +355,13 @@ stay in the client; facts and hands stay in the mod.
 
 **In the mod.**
 - The screen builder: a `look` verb that returns the screen, and `advance` returning
-  the same thing. The digest's sections are its gauges; the new panels are the diff
+  the same thing. **`look` is for a human at the console and for a client recovering
+  a lost reply; it is deliberately not part of the agent's loop.** The agent gets the
+  screen because it advanced, never because it remembered to ask — a surface it must
+  choose to consult is the thing this design exists to avoid.
+- The grouping of decisions owed, and the mute list for stop reasons, belong to the
+  screen builder too: the mod orders the groups by urgency and holds the mutes, so
+  neither is a ledger the agent has to maintain. The digest's sections are its gauges; the new panels are the diff
   against the last screen this client received, the three-row "since you last
   looked", and decisions owed. The last-screen mark lives in memory and is cleared at
   a game boundary like the sampler ring; the first screen after a load says "no
@@ -425,15 +435,41 @@ the round's root `b4adee2`; the pass over every open issue against them is
    gravel from sand; the ghost in every placement dry run; `inspect`. Second because
    the two things Dorian named that no issue holds both live here, and because every
    spatial mistake this run made was made without a picture.
-3. **The chores** (`ffef0d7`). After a fight, butcher, roof, the research queue, a joiner, a doctor
-   gone, tend until stable. Third because each is small once there is a screen to
-   report into, and because together they remove most of the contract.
+3. **The chores** (`ffef0d7`). After a fight, butcher, care of stored items, the
+   research queue, a joiner, a doctor gone, tend until stable. Third because each is
+   small once there is a screen to report into, and because together they remove most
+   of the contract. The round this sketch asks for above lands **before** this root is
+   built, not after: it is cheap to re-cut a category on paper and expensive to
+   re-cut it in seven spec issues.
 
 The honesty rules (`27bf321`) and the client work (`70ee75e`) are filed beside these
 and are taken as their items come up. Two things land now regardless of the order
-above, because they are built and cost nothing: `e440676` (error classes, on a branch, never benched) and seekandkill
-`a6b1aa0` (a null guard at a named line, which took autonomous combat out of the
-run's final battle).
+above, because they are built and cost nothing: `e440676` (error classes, on a branch,
+never benched) and seekandkill `a6b1aa0`, the null guard that took autonomous combat
+out of the run's final battle. **`a6b1aa0`'s code landed on 2026-09-08** (`99fa02a`,
+rebuilt at `b5ce506`): the guard, plus the dispatch-side prune its acceptance also
+asked for. Its 60,000-tick bench is outstanding and the issue stays open until it
+runs. `e440676` is unchanged and still owes its bench in full.
+
+---
+
+## What the walkthrough left open
+
+This sketch was read element by element on 2026-09-03/04 and finished on 2026-09-08.
+Six of the nine elements were kept as written; the amendments are folded in above and
+the pass itself, with what each answer was, is in `COCKPIT-WALKTHROUGH.md` beside
+this file. Three things it deliberately did not settle:
+
+- **The chore list and the four-way line are owed a round.** Not to re-decide the
+  behaviours, but to check the list for logical consistency and test whether chore,
+  gauge, stop and decision are the right four categories. `roof` and `save` are the
+  two rows that found the seam. It runs before the chores root is built.
+- **The honesty section is owed an independent read.** It is the only part of this
+  design making falsifiable claims rather than taste calls: six statements checkable
+  against the audit's own evidence, two of which are already admitted UNKNOWN below.
+  An agent that has read the audit and not this sketch can test the other four.
+- **Every panel is owed its own session.** The screen section states what each panel
+  is for and stops there, on purpose. The mock is the shape, not the specification.
 
 ---
 

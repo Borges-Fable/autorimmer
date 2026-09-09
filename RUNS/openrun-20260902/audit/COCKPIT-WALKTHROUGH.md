@@ -166,40 +166,73 @@ whether the lower panels get read when the stop line was all the agent wanted,
 and whether a pushed picture gets opened. An independent reader can test the
 other four the same way rather than agreeing with them.
 
-## Open — the question on the table
+### Element 8 of 9 — where it lives — **KEEP, with one clarification** (delegated)
 
-Element 8 of 9 is next; nothing is currently awaiting an answer.
+Dorian delegated 8 and 9: "seems like you can make a reasonable decision, then we can
+see how gameplay works again."
 
-## Not yet reached — elements 4 to 9
+The split rule holds and matches the system that exists: image-shaped work and
+printing in the `rwa` client, facts and hands in the mod, overlays as data rather
+than as pictures, the contract shedding rules 2/4/5/6/10/11 to the mod and keeping
+8 and 9 as judgement. The two deliberately-changed rulings (`722c951` on attaching
+the journal delta, `7382bdd` on refusing a stray key where the default mutates) are
+both argued from this run's own evidence, and the second generalises off five newly
+found verbs rather than off taste. Dorian's viewer and the agent's screen being the
+same file on disk is the quiet best property in the section.
 
-The numbered elements track `COCKPIT.md`'s own section order; elements 1, 2 and 3
-matched §"The design in one paragraph", §"The screen" and §"When the clock stops"
-exactly, and the remaining six sections before the trailing material are:
+**The clarification, and it is why this is not an unamended keep.** The section lists
+a `look` verb beside `advance`, which reads as a contradiction of element 1 — the
+element whose entire argument is that a surface the agent must choose to consult
+decays to nothing. It is not a contradiction, but only if the sketch says so: `look`
+is for a human at the console and for a client recovering a lost reply, and it is
+**not part of the agent's loop**. The agent gets the screen because it advanced,
+never because it remembered to ask. Left unstated, the next reader builds a fetch
+model back in through the side door.
 
-| # | section |
-|---|---|
-| 4 | What arrives, and what has to be fetched |
-| 5 | Chores: what the mod does by itself |
-| 6 | The line: chore, gauge, stop, or decision |
-| 7 | How it stays honest when the agent stops paying attention |
-| 8 | Where it lives |
-| 9 | What to build first |
+Also folded in here: the grouping from element 1 and the mute list from element 3 are
+the screen builder's work, in the mod. The mod orders the groups and holds the mutes,
+so neither becomes a ledger the agent maintains.
 
-**That mapping is inferred from the section order, not stated in the transcript** —
-the sketch's three trailing sections (§"Calls that could have gone the other way",
-§"What is UNKNOWN", and Appendices A and B) are read as not part of the nine.
+### Element 9 of 9 — what to build first — **KEEP the order** (delegated)
 
-## What the rewrite owes when the pass finishes
+The screen (`975973e`, its journal half `827c1bf` first), then the map (`ee4b4f8`),
+then the chores (`ffef0d7`). The order is argued from dependency rather than
+preference: the other two report into the screen, the screen alone closes the four
+largest findings of the audit, and every spatial mistake this run made was made
+without a picture.
 
-1. The group-serving rule, into §The screen (panel 6) and §When the clock stops —
-   including "time does not move until the last group is answered."
-2. Every panel cut to one line of purpose, the detail struck, and the sketch saying
-   in its own voice that each panel is owed its own session.
-3. The agent-held mute list for stop reasons, its shape against the existing
-   `AlertMuteComponent`, its visibility on the screen, and whether a mute expires.
-4. The chore list re-examined in its own Fable round with element 6: `roof`
-   folded into a wider care-of-items concern, `save` moved out of the chore
-   category to plain automatic behaviour, and the categories themselves tested.
-5. An independent agent read of element 7's six honesty claims, which are
-   falsifiable against the audit rather than matters of taste.
-6. Whatever elements 8 to 9 change.
+Two updates rather than changes:
+
+- **`a6b1aa0` is no longer pending.** Its code landed 2026-09-08 — seekandkill
+  `99fa02a`, rebuilt `b5ce506` — carrying both the null guard and the dispatch-side
+  prune its acceptance asked for. The issue stays open on its 60,000-tick bench.
+  `e440676` is untouched and still owes its bench in full.
+- **The chores root is now gated on element 5's round.** That round lands before the
+  root is built, not after: re-cutting a category on paper is cheap and re-cutting it
+  across seven spec issues is not.
+
+## The pass is complete, and the rewrite is applied
+
+All nine elements answered. `COCKPIT.md` was rewritten on 2026-09-08 to carry every
+amendment:
+
+1. The six panels are cut to one line of purpose each, the detail struck, and the
+   sketch now says in its own voice that each panel is owed its own session and that
+   the mock is the shape rather than the specification. (Element 2)
+2. Decisions are served in groups, one kind at a time, mod-ordered by urgency, with
+   time not moving until the last group is answered. (Element 1)
+3. The agent may stop any reason from pausing its game and keeps the list, shaped on
+   the `AlertMuteComponent` the mod already ships — with what is muted required on
+   the screen, and the expiry rule named as still owed. (Element 3)
+4. `save` is out of the chore table as plain automatic behaviour; `roof` is reframed
+   as care of stored items with its symptom-treating flagged; and the section states
+   that it and the four-way line are owed a round before the chores root is built.
+   (Elements 5 and 6)
+5. `look` is marked as not part of the agent's loop, and the grouping and mute list
+   are placed in the mod. (Element 8)
+6. `a6b1aa0`'s fix is recorded where the sketch had it as pending, including in the
+   mock screen's raid decision. (Element 9)
+
+A new section, `What the walkthrough left open`, records the three things this pass
+deliberately did not settle: the categories round, the independent read of the
+honesty section, and the per-panel sessions.
