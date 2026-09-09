@@ -350,6 +350,17 @@ than inside one: 399,383 while an advance was in flight and reads bounced off it
 separate. **Every trip-wire the protocol has — `unread-journal`, `bleedout-deadline`,
 `until.letter` — is attached to `advance`. None of it governed that 18.3%.** (F-XC-4)
 
+> **RECOUNTED 2026-09-09: the figure is 15.3%, not 18.3%.** F-XC-4 summed
+> consecutive `state.tick` deltas; an interval union of every returned advance
+> (`[tick − ticks_elapsed, tick]`, 659 results) puts 8,956,219 ticks INSIDE a
+> returned advance and 1,613,739 outside. 368,518 ticks were double-counted —
+> backgrounded advances that did return their results, observed mid-flight by
+> foreground reads. The sentence in bold survives the recount: nothing governed
+> the time that was genuinely outside. What also came out of it: 659 of 659
+> returned advances ended paused, so the mod never left the clock running, and
+> 89.6% of the outside time was Dorian playing deliberately. This is an update to
+> a dated record, not a revision of it. See `ROUNDS-2.md`.
+
 **A caveat that matters.** The single largest jump — 554,085 ticks over 21.8 minutes —
 was **Dorian playing by hand**, not the agent idling (T14, F-XC-4b). The second, 116,559
 ticks, is also inside a human-driven stretch. Do not cost this theme as though the agent

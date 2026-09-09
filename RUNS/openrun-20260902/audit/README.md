@@ -18,6 +18,8 @@ did, and says exactly what.
 | `ISSUES-DISPOSITION.md` | Every open issue on 2026-09-03 accounted for against that design: closed into a root, merged, rewritten, noted, or untouched | 84 ids |
 | **`COCKPIT-WALKTHROUGH.md`** | **Where the element-by-element review of `COCKPIT.md` stopped: elements 1-2 decided with amendments, element 3 asked and unanswered, 4-9 not reached.** The sketch has not been rewritten yet. | 3 of 9 |
 | **`ROUNDS.md`** | **The two review rounds the walkthrough asked for, 2026-09-08.** The blind read of the honesty claims contradicts claim 1 on a re-measured number, and finds a seventh defence; the categories round finds the four are a pipeline, not a partition. | 2 rounds |
+| **`ROUNDS-2.md`** | **The second night, 2026-09-09: three Fable rounds and two Opus implementations.** Recounts the audit's own 18.3% as 15.3%, finds 659/659 advances ended paused, resolves the chores' four loose ends, and lands two p1 fixes on main. | 5 rounds |
+| `ROUNDS-2-map.md` | The map panel specification — the first of the six per-panel sessions element 2 called for, and build root `ee4b4f8`. | 1 panel |
 
 ---
 

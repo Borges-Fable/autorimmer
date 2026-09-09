@@ -222,7 +222,7 @@ section; this table is the list, not the specs.
 | research queue | a project finishes and the game auto-picks | put the next project from the agent's queue back; if the queue is empty, a decision owed | the queue is the agent's |
 | a joiner | a pawn joins | essentials to priority 1 (firefighting, patient, basic work, doctor if capable); nothing at 0 unless incapable; the colony's food and outfit policy; the colony's posture | the essentials list |
 | a doctor gone | the only doctor is downed or dead | promote the next best medic (`40ed42f`, already specified) | — |
-| tend until stable | a colonist needs tending and no doctor job starts within a short window | `prioritize` the nearest capable pawn onto `DoctorTendEmergency`, which fetches medicine, and repeat until tending is no longer needed. NOT the `tend` verb: it is drafted-only and inventory-only, so a forced tend is bare-handed — Ellis died of infection with 18 medicine in stock | which medicine, and whether to wake a sleeper |
+| tend until stable | a colonist needs tending and NO `TendPatient` job is already running on them — the gate matters: repeating without it is F-S03-17, twelve `prioritize` calls each restarting the tend and resetting its progress while Aaron bled to 1.0 | rescue to a bed first (`WorkGiver_Tend.GoodLayingStatusForTend` requires `InBed()` for humanlikes), then `prioritize` the nearest capable pawn onto `DoctorTendToHumanlikes`. NOT the `tend` verb, which is drafted-only and inventory-only, so a forced tend is bare-handed. NOT `DoctorTendEmergency` either: its class `WorkGiver_TendOtherUrgent` refuses unless `TicksUntilDeathDueToBloodLoss < 45000`, so it cannot tend an infection — which is what killed Ellis, with 18 medicine in stock | wake a sleeper for a non-urgent tend; default on. Medicine is the patient's own `med_care` lever, not this chore's |
 
 **Saving is not a chore. It is automatic.** It has no trigger to judge and no
 procedure to get wrong, so it does not belong in the same table as rescuing the
@@ -461,8 +461,8 @@ Two earlier rulings are changed by this, and the change is deliberate:
 - The 2026-09-01 ruling on `7382bdd` reports an unknown argument rather than refusing
   it, except on three fixture verbs whose default mutates. This run found five more
   verbs whose default mutates when a key is dropped: `posture` (no pawns means all),
-  `alert-mute` (no op means mute), `carry` (no destination means a default one),
-  `trade-start` (no trader means a default one), and `build` (`dry-run` dropped
+  `alert-mute` (no op means mute), `carry` (no destination ARGUMENT exists at all; the `RestUtility.FindBedFor` default belongs to rescue/capture/arrest through the shared `TakeToBed`, per F-S05-24),
+  `trade-start` (**not** the trader — `TraderArg` has always refused a missing one; the key that defaults is `negotiator`, the highest-Social free colonist), and `build` (`dry-run` dropped
   means a real blueprint). The rule generalises: a stray key is refused on any verb
   that mutates differently when that key is missing. Hyphenated keys are read as
   underscored at the poller, since no verb reads a hyphenated key.
@@ -517,8 +517,10 @@ Two of the three things it left open have since been done, and their results are
   four settings of one attribute — a gauge is a level, a light is the threshold on it,
   and chore, decision and stop differ only in who responds. The compound rows are that
   pipeline read in order. It also found four things fitting none of the four: the verb
-  reply or refusal, the record, un-framed judgement, and the 18.3% of this run's ticks
-  that moved outside any advance and so produce no screen at all. Its sharpest catch is
+  reply or refusal, the record, un-framed judgement, and the 15.3% of this run's ticks
+  that moved outside any advance and so produce no screen at all (the audit's
+  18.3% double-counted 368,518 ticks that were inside advances which did return;
+  `ROUNDS-2.md` has the interval-union recount). Its sharpest catch is
   fixed above: `after a fight` triggered on hostiles reaching zero and would have been
   inert across the entire quarter that killed the colony.
 - **The honesty read: RUN, blind.** It contradicted this design's keystone on a number

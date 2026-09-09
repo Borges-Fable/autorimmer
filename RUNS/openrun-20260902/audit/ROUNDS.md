@@ -61,9 +61,11 @@ next command, pushing it changes nothing.
 
 **On 2.** "A screen that arrives as the reply cannot be discharged by discarding it"
 is false: stdout is discardable and was discarded 185 times; 26 steps were orphaned
-with no reply received at all, 7 of them advances moving 106,874 ticks. And 18.3% of
-the run's ticks (32.3 in-game days) moved outside any returned advance, so a gate on
-`advance` governs none of it. Worse for the design: reasoned, journaled deferral
+with no reply received at all, 7 of them advances moving 106,874 ticks. And 15.3% of
+the run's ticks moved outside any returned advance, so a gate on `advance` governs
+none of it. (This file first said 18.3%, quoting the audit; the interval-union
+recount in `ROUNDS-2.md` corrected it, and found that 659 of 659 returned advances
+ended paused — the mod never left the clock running.) Worse for the design: reasoned, journaled deferral
 ALREADY EXISTS — `alert-mute` requires a non-empty reason and journals it — and two
 of the run's ten mutes give as their reason that the alert was holding the clock
 ("cutting 45,000-tick advances down to 4,600"). It was the release valve, not a brake.
@@ -138,7 +140,9 @@ being smuggled in; it is the shared component the other three are built from.
 header does not name: the verb reply or refusal (7 rows plus rules 1 and 11 land in
 the honesty rules `27bf321`); the record (the human and mod rows are an event log that
 neither stops nor levels); un-framed judgement (rules 8 and 9 — decisions the mod never
-frames); and **time that moves outside any advance** (18.3% of this run), which
+frames); and **time that moves outside any advance** (15.3% of this run — the 18.3%
+this file first carried was the audit's delta-sum, corrected by interval union
+in `ROUNDS-2.md`), which
 produces no screen at all and which the table does not model.
 
 ### The defect that matters most
