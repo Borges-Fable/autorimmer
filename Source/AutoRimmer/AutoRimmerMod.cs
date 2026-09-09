@@ -17,6 +17,13 @@ namespace AutoRimmer
                 Journal.Init(Poller.Root);
                 ColonySampler.InitLog(Poller.Root);
                 TimeDriver.HookJournal();
+                // spec 975973e. The screen's "since you last looked" panel is
+                // fed by a live tap on the journal, because there is no in-mod
+                // API that hands back rows by seq range and the only full-row
+                // reader does file I/O off the main thread. Beside
+                // HookJournal, and for the same reason: both are taps that
+                // must be attached before the first row is written.
+                ScreenLog.Hook();
                 Log.Message("[AutoRimmer] ready — " + VerbRegistry.Count + " verbs; root=" + Poller.Root);
             }
             catch (Exception e)

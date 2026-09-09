@@ -69,6 +69,25 @@ namespace AutoRimmer
             // FirstTick was measured on a clock a load can move BACKWARD, and
             // the refusal it counts was about a colony that is gone.
             RefusalStreak.Clear();
+            // ================================================ spec 975973e ==
+            // The screen's three pieces of session memory, here for the same
+            // reason as the five above: state indexed by a game that no longer
+            // exists. All three are lock-guarded or two plain field writes and
+            // touch no Verse, so both detectors may clear them — which matters,
+            // because a colony that goes away under the poller's heartbeat
+            // edge never reaches the GameComponent's virtuals at all.
+            //
+            //  * a loss level is a "was N" measured against a colony's own
+            //    building count, and it would otherwise be carried onto the
+            //    next colony's guns gauge;
+            //  * the row window holds journal seqs and ticks, and a load can
+            //    move TicksGame BACKWARD (ColonySampler.Clear's argument);
+            //  * the save mark is "THIS colony was saved as X at tick N", and
+            //    the file surviving the boundary does not make the sentence
+            //    true of the next game.
+            LossLevels.Clear();
+            ScreenLog.Clear();
+            JournalHooks.ClearSaveMark();
             if (TimeDriver.Abandon(Err.NoActiveGame, detail)) answered++;
             while (Pending.TryDequeue(out var cmd))
             {

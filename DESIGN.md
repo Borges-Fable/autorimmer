@@ -4728,3 +4728,155 @@ queue by default (an agent flailing mid-experiment must not page triage).
   (`DrainCommands` answers every main-thread verb except `pause` with `busy`
   while an advance is in flight, so a `dev:destroy` sent during an advance is
   refused rather than executed).
+
+- 2026-09-09 — **THE SCREEN, FIRST HALF: `look` returns it, `advance` carries
+  it, and nothing about the control flow changed.** Spec `975973e` was split in
+  two because it was too large for one pass; this entry is the object and its
+  six panels. The answer gate, `defer` and `write-off` are the SECOND half and
+  are absent here by instruction: `advance` refuses for exactly the reasons it
+  refused before, and `722c951`'s unread-journal gate is untouched. The
+  decisions panel renders and does not gate, and says so on every screen
+  (`decisions.gate`).
+
+  **NESTED UNDER `data.screen`, NOT FLATTENED OVER THE ADVANCE RESULT.** The
+  spec's own sentence is "there is nothing sitting beside the thing the agent
+  asked for", which argues for the screen BEING the advance's data block. It is
+  not, and the reason is the split rather than a disagreement: `advance`'s ~40
+  fields are what `rwa`, `cockpit/`, `rwtest` and fifteen acceptance suites
+  read, a rename is a control-flow-adjacent change this half is forbidden, and
+  the honesty mechanism that actually makes not-reading FAIL is item 1 of
+  COCKPIT §How it stays honest — the citation join on decision ids — which is
+  the second half's. The second half may flatten it if the bench says the
+  nesting costs a read. `look` returns the screen as its whole data block, so
+  the two verbs return the same object either way.
+
+  **A `look` DELIVERS A SCREEN AND THEREFORE MOVES THE MARK.** `65e7cf9` defines
+  the mark as "the last thing you actually saw" — the later of the last result
+  the mod handed back and the highest seq a `journal` call has served. A `look`
+  hands back those rows and those clock spans, so leaving the mark alone would
+  republish them on the next advance and make "since you last looked" mean
+  "since you last advanced", which is the conflation `65e7cf9` exists to remove,
+  in the other direction. It cannot create a read obligation: `722c951`'s gate
+  keys on `lastAdvanceEndSeq` against `Journal.ReadWatermark` and nothing on
+  this path touches either — the same argument `ClockSample`'s seed branch
+  already makes for writing `lastScreenSeq` freely.
+  `TimeDriver.DeliverScreenForLook` runs AFTER the screen is built, so a screen
+  that throws consumes nothing.
+
+  **"NO EARLIER SCREEN" IS ITS OWN FLAG, because `lastScreenSeq` cannot answer
+  it.** `ClockSample` SEEDS that field on the first frame of a game (its header
+  explains why seeding at arm time was wrong), so a non-zero mark does not mean
+  a screen ever went out. `everDeliveredScreen` is the fact, cleared in
+  `Abandon` beside `lastScreenSeq`, and it is set at the BOTTOM of `BuildData`
+  rather than in `Teardown` — `Teardown` runs first, so setting it there would
+  mean the first screen after a load never said the one sentence the spec asks
+  for by name.
+
+  **"SINCE YOU LAST LOOKED" NEEDED A NEW TAP, `Journal.OnRow`.** There is no
+  in-mod API that hands back journal ROWS by seq range: the in-memory ring is
+  `(seq, type)` and nothing else (it exists for `digest.changed`'s counts), and
+  the only full-row reader is `JournalVerbs.Read`, which re-parses the ndjson
+  and is `MainThread = false` because it does file I/O. A screen is built on the
+  main thread inside `advance`'s teardown. `OnRow` is a SECOND event rather than
+  a wider `OnEvent` because `OnEvent`'s signature is what TimeDriver's two halt
+  matchers are bound to, and it CARRIES `by` and `cmd` rather than letting the
+  handler read `Provenance.Current` for itself — that would be right today for
+  exactly the reason that is easy to stop being true, and the panel and the file
+  must never disagree about who did something.
+
+  **AN ARRIVAL HAS NO EVENT TYPE AND THIS SPEC DID NOT INVENT ONE.** The spec's
+  always-keep set is "a death, a downing, a destroyed building, an arrival and a
+  letter". Grepping every `Journal.Emit` call site gives seventeen types and
+  none is `arrival`: a joiner, a wanderer, a refugee and a drop-pod survivor all
+  reach the journal as a `letter`, which IS in the always-keep set. So the
+  arrival is kept, through the row the game actually writes rather than through
+  a hook this half is not scoped to add. Stated, because "arrivals are always
+  kept" and "letters are always kept" are the same sentence only for as long as
+  arrivals arrive by letter. `red_error` and `mental_break` ride with the set.
+  `agent` rows are COUNTED (`since.agent_rows`) and not listed — the agent has
+  been handed each of those results already — because "nothing happened" and
+  "twelve things you did happened" must not read alike.
+
+  **LOSSES ARE LEVELS, AND `was` IS `count + lost` — NOT A REMEMBERED EARLIER
+  COUNT.** `LossLevels` is written on the destroy edge by
+  `JournalHooks.EmitDestroyed` and never on a read, applies the same
+  `DestroyMode` deny list the halt does (so the colony deconstructing its own
+  wall parks no "was N" forever), and is cleared at a game boundary with the
+  sampler ring. **Rebuild-detection was considered and REFUSED**: "a thing of
+  this def appeared, so the loss must be repaired" is a guess — a different
+  turret, in a different place, built for a different reason — and a guess that
+  ERASES a loss is the one direction this design refuses to guess in. So after a
+  rebuild `count` rises while `lost` holds and the gauge reads `2 … was 3`; the
+  field docs say `count + lost` in those words. `write-off {id, reason}` is the
+  second half and `LossLevels.Release` is the seam it will call. Deriving the
+  level from the journal instead was rejected on the ring: 4096 entries, and a
+  loss falling off the end is "quietly stopping to be shown" wearing a hat.
+
+  **`c41bdcc`'s THREE OPEN QUESTIONS, RESOLVED AGAINST THE SOURCE.** (1) What is
+  a weapon: `ThingRequestGroup.Weapon` IS `def.IsWeapon` —
+  `Verse/ThingListGroupHelper`, `case ThingRequestGroup.Weapon: return
+  def.IsWeapon` — so the group and the predicate are one set, not three, and
+  `equipmentType == Primary` is the other question (what a pawn may hold),
+  answered by walking equipment. (2) Is a club a weapon: yes, and every figure
+  is SPLIT `ranged`/`melee` on `def.IsRangedWeapon` (`IsMeleeWeapon` is
+  `IsWeapon && !IsRangedWeapon`), so "6 of 6 armed" on six clubs is prevented by
+  the split rather than by a quality threshold — and no `GetStatValueAbstract`
+  is read, which keeps it affordable on session 19's axis. (3) Forbidden and
+  unreachable spares: `forbidden` is published, no reachability term is applied,
+  and the count draws no conclusion — `54b0c9a`'s lesson is that a count with a
+  missing term must not manufacture a verdict. The two populations are DISJOINT
+  by construction: equipped weapons are not spawned, so `ThingsInGroup(Weapon)`
+  cannot contain one.
+
+  **TWO GOALS GRADE `ok: null`, WHICH IS UNKNOWN AND NEVER FALSE.** G3's armour
+  clause, because `47547ca` is open and apparel rows carry no armor rating — the
+  gauge publishes unworn apparel BY DEF so a reader sees "flak vest 2" and
+  judges, and does not invent a threshold on `ArmorRating_Sharp`. G4 entirely,
+  because `f1a1700` comment #2 established there is no durable baseline across a
+  load (`Room.ID` is remade by `RegionAndRoomUpdater` on load and `nextRoomID`
+  is not scribed) and this project does not buy one with scribed state
+  (`d16a463`). The LEVEL is published; a room that changes ROLE is UNKNOWN to
+  this screen, as `f1a1700`'s closing comment asks.
+
+  **THE ALERT AGE IS KEYED ON THE ID, NOT THE `Alert` INSTANCE** (`91bc250`).
+  The scanner's existing dictionary is keyed on the instance and is right for
+  its job — it must never re-read a dead alert — and wrong for this one: the
+  readout throws instances away, so a return would present as a first
+  appearance, which is exactly the fact `91bc250` asks to see. `LiveCount` and
+  not a bool, because `FixtureInject` can put two instances of one id in the
+  readout at once. In-session only, cleared at a game boundary, and `age_ticks:
+  null` means "we never saw it start" rather than age 0. The basis sentence is
+  ONE key on the section, not one per row — twelve copies of it was 3KB.
+
+  **DECISIONS ARE SERVED ONE KIND AT A TIME AND THEIR IDS ARE DERIVED.**
+  `d-<kind>-<handle>` off the game's own handle (the letter's `ID`, the quest's
+  `id`, the alert's class name, the window's type), because the second half's
+  mechanism is "the verb that answers a decision must cite an id that appears
+  only on that screen" and that needs the id to name the DECISION rather than
+  the printing of it; a counter would renumber the same decision next turn. Five
+  kinds are detected — a force-pausing dialog (`9227839`), a letter with a
+  choice, a quest in `NotYetAccepted` (the G6 offer), an unmuted alert live past
+  60,000 ticks, and a build the map cannot make (`no_builder`/`skill_blocked`,
+  NOT `awaiting_materials`, which a hauler will fix). "A chore that needs a
+  policy it does not have" is not detectable because the chore set is not built,
+  and the panel says so rather than being silently short. A muted alert is never
+  a decision: `alert-mute` is a recorded, reasoned act and IS the verdict.
+
+  **MEASURED, AND IT IS AT THE TOP OF THE BUDGET.** The assembled screen on run
+  `openrun-20260902`'s own colony at the raid that ended it (7 colonists, 7
+  turrets with 1 lost, 4 live alerts, 3 unreachable batteries, 2 decisions
+  served of 4 owed, 31 rows since the last screen) is **13,925 bytes**, ~3,500
+  to 4,600 tokens — inside "two to four thousand a turn" only at the top, and
+  3.5x COCKPIT's "two to four kilobytes" estimate. With every cap saturated it
+  is **25,409 bytes**, ~6,400 to 8,500 tokens, which is over. The first assembly
+  was 17,054 bytes with 6,538 of them FIXED PROSE; the disclaimers the digest
+  carries earn their place on a verb a caller asked for and do not earn a
+  kilobyte a turn, so the screen's copies are one line each, the caps were cut
+  against the measurement (decisions 8→5 owed and 6→4 acts, guns 12→10 defs and
+  24→20 positions, list rows 10→8), and the per-goal provenance collapsed to one
+  `goals.set`. **If a panel has to go it should be `goals`**: 1,757 bytes that
+  change on the scale of in-game days rather than turns, and the only block on
+  the screen that is a contract rather than an observation. That is not done
+  here, because "the six contract goals graded on every screen" is the spec's
+  own words and cutting a panel is not a worker's call. The measurement is
+  reproducible: `accept/975973e-screen.md` §J.

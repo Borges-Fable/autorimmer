@@ -294,6 +294,56 @@ namespace AutoRimmer
             return d;
         }
 
+        // ==================================================== spec 975973e ==
+        // THE BUTTONS ON ONE LETTER, for the screen's decisions panel — the
+        // index `letter-choose {letter, option}` takes, and the words on the
+        // button, and nothing else.
+        //
+        // HERE AND NOT IN THE SCREEN, because the reflection that reads
+        // `DiaOption.text` (`protected string`, no public accessor) is bound
+        // once in this file and must stay bound in one place. The screen needs
+        // labels, not the ten-field `OptionLine`, and enumerating `Choices`
+        // twice per screen for the sake of a private method is not a reason to
+        // duplicate the field ref.
+        //
+        // The enumeration itself is arbitrary code on a modded letter — see
+        // this file's header — so it degrades to `error` and an empty list,
+        // never to a throw out of the screen. A disabled option is EXCLUDED:
+        // the widget gate refuses it (`DiaOption.OptOnGUI` draws the button
+        // `active && !disabled`), so offering it as a ready-to-send act would
+        // be offering a refusal.
+        internal static List<KeyValuePair<int, string>> ChoiceLabels(ChoiceLetter cl, int cap,
+                                                                     out int disabled, out string error)
+        {
+            EnsureRefs();
+            var outp = new List<KeyValuePair<int, string>>();
+            disabled = 0;
+            error = null;
+            if (cl == null) return outp;
+            try
+            {
+                int i = 0;
+                foreach (var opt in cl.Choices)
+                {
+                    if (opt == null) { i++; continue; }
+                    if (opt.disabled) { disabled++; i++; continue; }
+                    if (outp.Count < cap)
+                    {
+                        string label = null;
+                        try { label = optionTextRef != null ? optionTextRef(opt) : null; }
+                        catch { }
+                        outp.Add(new KeyValuePair<int, string>(i, Journal.Truncate(label, LabelClip)));
+                    }
+                    i++;
+                }
+            }
+            catch (Exception e)
+            {
+                error = e.GetType().Name + ": " + Journal.Truncate(e.Message, 120);
+            }
+            return outp;
+        }
+
         private static Dictionary<string, object> OptionLine(DiaOption opt, int index)
         {
             string label = null;

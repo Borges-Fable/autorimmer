@@ -421,6 +421,26 @@ namespace AutoRimmer
         private static int lookOutsideCount;
         private static readonly List<object> lookOutside = new List<object>(ClockSpanCap);
 
+        // ==================================================== spec 975973e ==
+        // HAS THIS GAME EVER BEEN HANDED A SCREEN. Not derivable from
+        // `lastScreenSeq`: `ClockSample` SEEDS that on the first frame of a
+        // game (see its header — seeding it at arm time was wrong for a
+        // session that opened with somebody playing by hand), so a non-zero
+        // mark does not mean a screen went out. The screen panel needs the
+        // difference, because the spec's own words for the first screen after
+        // a load are "no earlier screen".
+        //
+        // Cleared in `Abandon` beside `lastScreenSeq`, on the same argument:
+        // it is a fact about a colony that no longer exists.
+        private static bool everDeliveredScreen;
+
+        internal static bool EverDeliveredScreen => everDeliveredScreen;
+
+        // The seq floor the NEXT screen will publish. Public so `look` can
+        // take it BEFORE it builds — the same order `Teardown` uses, and for
+        // the same reason: the floor predates anything the delivery emits.
+        internal static long ScreenSeqFloor() => LookMark();
+
         // ---- vanilla's speed ladder ---------------------------------------
         //
         // Read off `TickManager.TickRateMultiplier` (decompiled): Normal 1,
@@ -1799,6 +1819,12 @@ namespace AutoRimmer
             // sets `clockLastTick = int.MinValue` — so the next `ClockSample`
             // takes its seed branch and re-seeds this from `Journal.CurrentSeq`.
             lastScreenSeq = 0;
+            // spec 975973e, and it is a SEPARATE fact from the line above,
+            // which is why it needs its own reset: `lastScreenSeq` is seeded
+            // non-zero on the first frame of the next game whether or not a
+            // screen ever goes out, and "no earlier screen" is the sentence the
+            // first screen after a load owes the reader.
+            everDeliveredScreen = false;
             if (c == null) return false;
             var r = Result.Fail(c.Id, c.Op, code, detail, c.Args);
             r.Data = null;
@@ -2076,6 +2102,65 @@ namespace AutoRimmer
             outsideSpans.Clear();
             outsideTicks = 0;
             outsideCount = 0;
+        }
+
+        // The `since_last_look` block, built from the DELIVERED snapshot. One
+        // builder for two callers — `BuildData` after an advance and
+        // `DeliverScreenForLook` after a `look` — because the two must publish
+        // the same field names with the same meanings or the panel lies
+        // depending on which verb produced it (spec 975973e).
+        //
+        // `inThisAdvance` is 0 for a `look`: a look moves no time, so
+        // `since_last_look.ticks` is exactly what the clock did OUTSIDE any
+        // advance since the last screen.
+        private static Dictionary<string, object> SinceLastLookBlock(int inThisAdvance, long endSeq)
+        {
+            return new Dictionary<string, object>
+            {
+                ["ticks"] = lookOutsideTicks + inThisAdvance,
+                ["in_this_advance"] = inThisAdvance,
+                ["outside"] = new List<object>(lookOutside),
+                ["outside_ticks"] = lookOutsideTicks,
+                ["outside_spans"] = lookOutsideCount,
+                // The range `journal_seq` cannot express: that one starts at
+                // THIS advance's arm point, so every row journaled while a
+                // human was playing fell between the two and was claimed by
+                // nobody. Empty when nothing at all has been journaled since
+                // the last screen, matching `journal_seq`'s own convention.
+                ["journal_seq"] = endSeq > lookSeqFrom
+                    ? new List<object> { (double)(lookSeqFrom + 1), (double)endSeq }
+                    : new List<object>(),
+            };
+        }
+
+        // ==================================================== spec 975973e ==
+        // A `look` DELIVERS A SCREEN, so it moves the same mark an `advance`
+        // does. Main thread, from the `look` verb, AFTER the screen has been
+        // built and can no longer throw — the mirror of `Teardown`'s rule that
+        // the window is consumed only when a data block is actually going out.
+        //
+        // WHY A LOOK MOVES THE MARK AT ALL. `65e7cf9` defines the mark as "the
+        // last thing you actually saw": the later of the last result this mod
+        // handed back and the highest seq a `journal` call has served. A `look`
+        // hands back a screen carrying those rows and those spans, so leaving
+        // the mark alone would republish them on the next advance and make
+        // "since you last looked" mean "since you last advanced" — which is the
+        // exact conflation 65e7cf9 exists to remove, in the other direction.
+        //
+        // IT CANNOT CREATE A READ OBLIGATION. `722c951`'s gate keys on
+        // `lastAdvanceEndSeq` against `Journal.ReadWatermark`, and nothing here
+        // touches either — the same argument `ClockSample`'s seed branch makes
+        // for writing `lastScreenSeq` freely. This half of the spec changes no
+        // control flow.
+        internal static Dictionary<string, object> DeliverScreenForLook()
+        {
+            long look = LookMark();
+            long endedAt = Journal.CurrentSeq;
+            ClockScreenDelivered();
+            lookSeqFrom = look;
+            lastScreenSeq = endedAt;
+            everDeliveredScreen = true;
+            return SinceLastLookBlock(0, endedAt);
         }
 
         // EITHER thread, from `Abandon`. Everything indexed by a game that no
@@ -2432,6 +2517,18 @@ namespace AutoRimmer
                 lookSeqFrom = look;
                 lastScreenSeq = endedAt;
                 ClockScreenDelivered();
+                // spec 975973e. The ROW window is cut at the same moment the
+                // CLOCK window is, because the two are halves of one screen and
+                // a screen whose spans and whose rows were cut at different
+                // seqs would contradict itself. `Deliver` hands the window to
+                // `BuildData`, which runs next.
+                //
+                // `everDeliveredScreen` is NOT set here, deliberately:
+                // `BuildData` runs after this and has to READ the pre-delivery
+                // value, or the first screen after a load never says "no
+                // earlier screen" — the one sentence the spec asks for by name.
+                // It is set at the bottom of `BuildData` instead.
+                ScreenLog.Deliver();
             }
             try
             {
@@ -2494,8 +2591,60 @@ namespace AutoRimmer
             long endSeq = Journal.CurrentSeq;
             int ticks = TicksDone;
             int effTps = NominalTps(activeSpeed);
+
+            // ================================================ spec 975973e ==
+            // THE SCREEN IS THE REPLY. `advance` returns the same object
+            // `look` does, FIRST, because the finding behind the whole design
+            // (themes.md T0) is that the bridge put a truthful `ignored_args`
+            // block into 52 result envelopes and the agent read it zero times,
+            // while it read what it asked for every time. So the screen is not
+            // beside the answer; it is the answer, and `screen.stop` is its
+            // first line.
+            //
+            // NESTED UNDER `screen` AND NOT FLATTENED OVER THIS BLOCK, ruled
+            // and recorded in DESIGN's decisions log: this half of the spec is
+            // required to change no control flow, `advance`'s ~40 existing
+            // fields are what `rwa`, `cockpit/`, `rwtest` and fifteen
+            // acceptance suites read, and a rename is not a thing to do
+            // blind on the same pass that adds six panels. The second half may
+            // flatten it if the bench says the nesting costs a read.
+            //
+            // WRAPPED, because a screen is a lot of new game reads and an
+            // advance owes a result whatever they do. A throw publishes
+            // `screen_error` and the seq range whose rows the row-window ate,
+            // so the caller can still fetch them by hand.
+            object screen;
+            try
+            {
+                screen = Screen.Build(Screen.StopForAdvance(reason, haltEvent, haltSeq),
+                                      ScreenLog.Delivered,
+                                      SinceLastLookBlock(ticks, endSeq));
+            }
+            catch (Exception e)
+            {
+                var w = ScreenLog.Delivered;
+                screen = new Dictionary<string, object>
+                {
+                    ["error"] = e.GetType().Name + ": " + Journal.Truncate(e.Message, 200),
+                    ["detail"] = "the screen could not be built for this advance; every field below "
+                        + "is unaffected. The rows this screen would have carried have already been "
+                        + "consumed from the window — read them with the range in `since_seq`.",
+                    ["since_seq"] = w != null
+                        ? new List<object> { (double)w.FromSeq, (double)w.ToSeq }
+                        : new List<object>(),
+                };
+                Journal.EmitWarning("screen: build threw during advance teardown: " + e);
+            }
+            // AFTER the build, for the reason `Teardown` states where it
+            // pointedly does not do this: the panel reads the pre-delivery
+            // value so the first screen of a game says "no earlier screen".
+            // Set even when the build threw — a screen WAS delivered, and the
+            // rows it would have carried are gone from the window either way.
+            everDeliveredScreen = true;
+
             var data = new Dictionary<string, object>
             {
+                ["screen"] = screen,
                 ["reason"] = reason,
                 ["tick"] = tm.TicksGame,
                 ["ticks_elapsed"] = ticks,
@@ -2587,22 +2736,7 @@ namespace AutoRimmer
                 // caller has already been handed those rows and has NOT been
                 // handed the tick count. Each half answers its own question;
                 // making them share one mark would make one of them lie.
-                ["since_last_look"] = new Dictionary<string, object>
-                {
-                    ["ticks"] = lookOutsideTicks + ticks,
-                    ["in_this_advance"] = ticks,
-                    ["outside"] = new List<object>(lookOutside),
-                    ["outside_ticks"] = lookOutsideTicks,
-                    ["outside_spans"] = lookOutsideCount,
-                    // The range `journal_seq` above cannot express: it starts at
-                    // THIS advance's arm point, so every row journaled while a
-                    // human was playing fell between the two and was claimed by
-                    // nobody. Empty when nothing at all has been journaled since
-                    // the last screen, matching `journal_seq`'s own convention.
-                    ["journal_seq"] = endSeq > lookSeqFrom
-                        ? new List<object> { (double)(lookSeqFrom + 1), (double)endSeq }
-                        : new List<object>(),
-                },
+                ["since_last_look"] = SinceLastLookBlock(ticks, endSeq),
 
                 // 722c951. THIS ECHO IS NOT A READ AND DOES NOT DISCHARGE
                 // ANYTHING — see JournalVerbs.Read's header for why, and the M1

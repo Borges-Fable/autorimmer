@@ -398,6 +398,33 @@ namespace AutoRimmer
             // them; the row is written either way, because "the wall is gone"
             // is a fact whatever put it there.
             Journal.Emit("destroyed", payload, Tick());
+
+            // ================================================ spec 975973e ==
+            // LOSSES ARE LEVELS. The row above is the moment; this is the
+            // level, and it is written HERE — on the destroy edge, on the main
+            // thread, once — and never on a read. `LossLevels.Record` applies
+            // the same DestroyMode deny list the halt does, so the colony
+            // deconstructing its own wall does not park a "was N" on a gauge
+            // forever.
+            //
+            // Corpses are excluded: a corpse is not a thing the colony built
+            // and there is no gauge for it to sit on. The same `kind` test the
+            // halt uses (`TimeDriver.Notice`, `kind != "corpse"`).
+            //
+            // A FRAME LOGS WHAT IT WAS BUILDING, not `Wall_Frame`: the level
+            // belongs on the gauge of the thing that was lost, and half a wall
+            // is a wall the colony does not have.
+            if (kind != "corpse")
+            {
+                try
+                {
+                    LossLevels.Record(
+                        builds != null ? builds.defName : t.def?.defName,
+                        (builds != null ? builds.label : t.def?.label),
+                        kind, t.thingIDNumber, t.Position, Tick(), mode.ToString());
+                }
+                catch { }
+            }
         }
 
         // `Faction.IsPlayer` is `def.isPlayer`, a pure def read, and the same
@@ -471,6 +498,28 @@ namespace AutoRimmer
             }
         }
 
+        // ==================================================== spec 975973e ==
+        // THE STOP LINE'S `saved`. The mock's first line ends "saved:
+        // raid-5503-spring-5", and the reason is the run contract's own
+        // standing rule 12 — "take one at every threat and every day
+        // boundary" — which nothing could check because the save name existed
+        // only inside a journal row nobody re-read.
+        //
+        // Two plain fields written by the postfix that already exists, rather
+        // than a scan of the saves directory from the main thread. Cleared at
+        // a game boundary with everything else indexed by a colony
+        // (`Runtime.ResetForGameBoundary`): the file on disk survives the
+        // boundary but "this colony was saved as X at tick N" does not, and a
+        // tick from a dead game is the trap `ColonySampler.Clear` documents.
+        public static string LastSaveName;
+        public static int LastSaveTick = -1;
+
+        public static void ClearSaveMark()
+        {
+            LastSaveName = null;
+            LastSaveTick = -1;
+        }
+
         [HarmonyPatch(typeof(GameDataSaveLoader), nameof(GameDataSaveLoader.SaveGame), typeof(string))]
         public static class Patch_SaveGame
         {
@@ -478,6 +527,8 @@ namespace AutoRimmer
             {
                 try
                 {
+                    LastSaveName = fileName;
+                    LastSaveTick = Tick();
                     Journal.Emit("session", new Dictionary<string, object>
                     {
                         ["kind"] = "saved",

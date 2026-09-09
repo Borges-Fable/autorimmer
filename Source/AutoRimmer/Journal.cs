@@ -118,6 +118,28 @@ namespace AutoRimmer
         // event is the separation: file volume stays capped, halting does not.
         public static event Action<string, int, long, int> OnRedError;
 
+        // ================================================== spec 975973e ====
+        // THE WHOLE ROW, for the screen's "since you last looked" panel —
+        // (seq, tick, by, cmd, type, payload) — fired on the EMITTING thread
+        // beside `OnEvent`.
+        //
+        // A SECOND EVENT RATHER THAN A WIDER `OnEvent`, because `OnEvent`'s
+        // signature is what TimeDriver's two halt matchers are bound to, and a
+        // screen has no business changing the shape of the halt tap.
+        //
+        // `by` AND `cmd` ARE PASSED, NOT INFERRED. A handler could read
+        // `Provenance.Current` for itself — this fires on the emitting thread,
+        // inside the same scope — and it would be right today for exactly the
+        // reason that is easy to stop being true. The two values below are the
+        // ones the ROW was stamped with, captured inside the lock a few lines
+        // down, so the panel and the file can never disagree about who did
+        // something. That is the whole point of the panel.
+        //
+        // The in-memory ring cannot serve this: it holds `(seq, type)` and
+        // nothing else, by design (see RingSize). Re-reading the ndjson would
+        // put file I/O on the main thread inside `advance`'s teardown.
+        public static event Action<long, int, string, string, string, Dictionary<string, object>> OnRow;
+
         // In-memory (seq, type) ring so what-changed queries (digest, spec 2.1)
         // never read the journal file on the main thread. 4096 events dwarfs
         // any between-glance window; a since older than the ring says so.
@@ -220,6 +242,11 @@ namespace AutoRimmer
             if (writer == null || emitting) return 0;
             int tick = exactTick ?? Runtime.GameState.tick;
             long n;
+            // Hoisted out of the lock body so the `OnRow` tap at the bottom can
+            // carry the values the ROW was stamped with rather than re-deriving
+            // them one statement later (spec 975973e).
+            string by;
+            string byCmd;
             lock (journalLock)
             {
                 emitting = true;
@@ -232,8 +259,8 @@ namespace AutoRimmer
                     // only under `agent`, where there is a command id to
                     // carry. See Provenance.cs for the four values and why
                     // the default is `human`.
-                    string by = Provenance.Current;
-                    string byCmd = Provenance.CommandId;
+                    by = Provenance.Current;
+                    byCmd = Provenance.CommandId;
                     var evt = new Dictionary<string, object>
                     {
                         ["seq"] = n,
@@ -276,6 +303,8 @@ namespace AutoRimmer
                 finally { emitting = false; }
             }
             try { OnEvent?.Invoke(type, payload, tick, n); }
+            catch { }
+            try { OnRow?.Invoke(n, tick, by, byCmd, type, payload); }
             catch { }
             return n;
         }

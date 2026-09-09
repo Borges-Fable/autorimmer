@@ -236,6 +236,15 @@ namespace AutoRimmer
             return false;
         }
 
+        // The colonist section at a caller-chosen cap. `SectionFor` hands the
+        // predicate view the MAXIMUM (200) on purpose — an `all` quantifier
+        // over a truncated list is silently wrong — and the screen wants the
+        // context-sized default instead, so it asks for it by name rather than
+        // going through a switch whose contract is the opposite of what it
+        // needs. spec 975973e.
+        internal static Dictionary<string, object> ColonistsFor(Map map, int cap)
+            => map == null ? null : ColonistSection(map, cap);
+
         internal static Dictionary<string, object> SectionFor(Map map, string name)
         {
             if (map == null) return null;
@@ -337,13 +346,15 @@ namespace AutoRimmer
             var list = new List<object>();
             var droppedByPriority = new Dictionary<string, object>();
             int mutedLive = 0;
+            int nowTick = 0;
+            try { nowTick = Find.TickManager.TicksGame; } catch { }
             for (int i = 0; i < live.Count; i++)
             {
                 bool muted = store != null && store.Has(live[i].Id);
                 if (muted) mutedLive++;
                 if (i < AlertCap)
                 {
-                    list.Add(new Dictionary<string, object>
+                    var row = new Dictionary<string, object>
                     {
                         ["id"] = live[i].Id,
                         ["label"] = live[i].Label,
@@ -353,7 +364,47 @@ namespace AutoRimmer
                         // row: a reader looking at this alert is told, here,
                         // that it has been decided not to wake for it.
                         ["muted"] = muted,
-                    });
+                    };
+                    // ==================== spec 975973e, absorbing 91bc250 ====
+                    // AN AGE ON EVERY ROW, AND A FLAG WHEN IT CAME BACK.
+                    // "NeedDoctor has been live 13 days" was not a fact any
+                    // reader could state: `AlertScanner` noticed the transition
+                    // and kept nothing. It keeps the tick now, keyed on the id
+                    // rather than the Alert instance, because the readout
+                    // throws instances away and a return would otherwise look
+                    // like a first appearance.
+                    //
+                    // 91bc250 item 2, honoured rather than papered over: the
+                    // scan trails the causing tick by design (see this file's
+                    // FIELD DOCS and AlertScanner's header), so the age carries
+                    // the same caveat in `age_basis` instead of implying a
+                    // precision it does not have. Item 3 also holds — age and
+                    // mute are orthogonal, and muting does not touch either
+                    // field.
+                    // The basis sentence is ONE key on the section, not one per
+                    // row: it is the same 300 bytes twelve times over, and this
+                    // block rides on every screen (975973e's turn budget).
+                    if (AlertScanner.AgeOf(live[i].Id, out int firstSeen, out int returns, out int lastOff))
+                    {
+                        row["first_seen_tick"] = firstSeen;
+                        row["age_ticks"] = Math.Max(0, nowTick - firstSeen);
+                        row["age_days"] = Math.Round(Math.Max(0, nowTick - firstSeen) / 60000.0, 2);
+                        row["returned"] = returns > 0;
+                        if (returns > 0)
+                        {
+                            row["returns"] = returns;
+                            row["last_cleared_tick"] = lastOff;
+                        }
+                    }
+                    else
+                    {
+                        // Distinct from age 0: "we never saw it start" and "it
+                        // started this instant" are different states, and the
+                        // whole point of this field is that the difference is
+                        // load-bearing.
+                        row["age_ticks"] = null;
+                    }
+                    list.Add(row);
                     continue;
                 }
                 string key = live[i].Priority.ToString();
@@ -408,6 +459,17 @@ namespace AutoRimmer
             data["muted"] = muteList;
             data["muted_count"] = muteList.Count;
             data["muted_live"] = mutedLive;
+            // spec 975973e / 91bc250 item 2. One sentence for every row's age,
+            // on the section: the scan trails the causing tick BY DESIGN, and
+            // an age field that implied a precision it does not have would be
+            // the same defect this whole surface exists to avoid. `age_ticks:
+            // null` means this session never saw the alert go active — it was
+            // already live when the save loaded, or the scanner's memory was
+            // cleared at a game boundary — which is not the same as age 0.
+            data["age_basis"] = "age runs from the SCAN that noticed the alert, which trails the "
+                + "causing tick. In-session only, cleared at a game boundary: `age_ticks: null` "
+                + "means 'never saw it start', not 'just started'. `returned` = cleared and came "
+                + "back; the age restarts on a return.";
             return data;
         }
 
