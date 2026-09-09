@@ -121,6 +121,36 @@ else
 fi
 
 
+section "2b. the bench-down bar (git-bug bench-down-race)"
+# The unit-level half lives in healthtest.py because it needs to call health()
+# directly — the interesting property is what happens BETWEEN two samples, and
+# the CLI only ever shows you the verdict. It is run from here so the suite is
+# still one command. openrun-20260902 cause C is the reason it exists.
+run 0 "health() retry: vanishing path, stubborn path, and the race itself" -- \
+    python3 "$HERE/healthtest.py"
+has "single samples that read \`down\`"
+has "0 failed"
+
+python3 "$FAKE" status --root "$RWA_ROOT" --state down
+rm -rf "$RWA_ROOT/commands"; mkdir -p "$RWA_ROOT/commands/done"
+printf '{"id":"owed-cmd","op":"ping","args":{}}' > "$RWA_ROOT/commands/owed-cmd.json"
+# A command already in the inbox is the mod's, not ours: it owes exactly one
+# result file for it and Poller.CheckGameBoundary answers even an orphaned one.
+# So it is POLLED, never re-sent and never reported down on the first sample.
+# --owed-secs keeps the test short; the default is Poller.AbandonAfterSeconds.
+run 3 "a command already in the inbox is polled, not declared down" -- \
+    "$RWA" ping --cmd-id owed-cmd --owed-secs 2 --timeout 0 --json --no-transcript
+has "already in the mod's hands"
+has "rwa-game-down"
+has "no owed-cmd.json appeared"
+if [ -f "$RWA_ROOT/commands/owed-cmd.json" ]; then
+    ok "the queued command was left alone, not rewritten"
+else
+    bad "the queued command file disappeared"
+fi
+rm -rf "$RWA_ROOT/commands"
+
+
 section "3. stale-on-restart: an inbox file that predates the session"
 mkdir -p "$RWA_ROOT/commands"
 printf '{"id":"ghost","op":"ping","args":{}}' > "$RWA_ROOT/commands/ghost.json"
@@ -241,8 +271,13 @@ serve --advance-secs 30
 # The command has to still be in flight when the bench dies, or this proves
 # nothing — so it is an advance, killed two seconds in.
 ( sleep 2 ; kill "$SERVER" ) &
+# --owed-secs 2 rather than the default 20: once the heartbeat goes down the
+# client keeps waiting for the result the mod owes it (Poller.AbandonAfterSeconds
+# is the mod's own bar for the same question), and only writes the command off
+# after that. The DEFAULT is what stops a live advance being abandoned mid-flight
+# — openrun-20260902 cause C — so it is not lowered anywhere but here.
 run 3 "the bench dying mid-command is 'game down', not 'timeout'" -- \
-    "$RWA" advance --ticks 999999 --timeout 0 --stale-secs 3 --json
+    "$RWA" advance --ticks 999999 --timeout 0 --stale-secs 3 --owed-secs 2 --json
 has "rwa-game-down"
 has "stale-on-restart at the next launch"
 SERVER=""

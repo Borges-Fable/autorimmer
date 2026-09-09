@@ -489,17 +489,74 @@ namespace AutoRimmer
             AtomicWrite(statusPath, sb.ToString());
         }
 
-        // tmp + rename so readers polling for the file never see a partial write.
+        // tmp + rename so readers polling for the file never see a partial
+        // write — and, since git-bug bench-down-race, never see NO file either.
+        //
+        // The old body was WriteAllText(tmp) / Delete(path) / Move(tmp, path),
+        // which leaves a window on EVERY ~1Hz status write in which status.json
+        // does not exist. `rwa` sampled the path once per poll and read that
+        // window as a dead bench: openrun-20260902 cause C, three advances
+        // declared dead while they were still running (97,505 ticks, 6% of all
+        // time that moved unwitnessed), each followed by a `busy` naming the
+        // same command id. F-S09-2's `quest` is the same race.
+        //
+        // File.Replace is one rename() underneath, so the path holds the old
+        // bytes until the instant it holds the new ones. VERIFIED ON THE GAME'S
+        // OWN RUNTIME rather than assumed — RimWorld 1.6.4871 ships Mono
+        // 6.13.0 (libmonobdwgc-2.0.so) with a CoreFX System.IO stack, and a
+        // probe hosted on that runtime against the game's own mscorlib.dll
+        // reported:
+        //   File.Replace(s,d,b)      PRESENT, and replaces while a reader holds
+        //                            the destination open
+        //   File.Move(s,d,overwrite) ABSENT  (it is .NET Core 3.0+, not net48)
+        //   File.Move(s,d) over an existing file -> IOException
+        //   File.Replace with a MISSING destination -> FileNotFoundException
+        //   a reader spinning beside 500 writes: delete+move missed the path
+        //   1418 times, File.Replace 0 times.
+        //
+        // Hence the shape below. The first write of a session has no
+        // destination, so Move still owns that one case; every later write is a
+        // Replace. The delete+move path survives as a last resort because this
+        // method runs on the poller thread and owes every consumed command
+        // exactly one result file — degrading to the old behaviour is strictly
+        // better than losing the write, and it cannot throw either way.
         private static void AtomicWrite(string path, string content)
         {
+            string tmp = path + ".tmp";
             try
             {
-                string tmp = path + ".tmp";
                 File.WriteAllText(tmp, content, new UTF8Encoding(false));
+            }
+            catch
+            {
+                // Nothing was moved; whatever is at `path` still stands, which
+                // for status.json means a heartbeat that ages rather than one
+                // that vanishes.
+                return;
+            }
+
+            try
+            {
+                if (File.Exists(path)) File.Replace(tmp, path, null);
+                else File.Move(tmp, path);
+                return;
+            }
+            catch { }
+
+            // Only reachable if Replace itself failed (a destination deleted
+            // between the Exists and the Replace, a filesystem that will not
+            // take it). This is the one branch that can still leave the path
+            // missing for an instant, and it is the branch the client's
+            // three-sample rule exists to cover.
+            try
+            {
                 if (File.Exists(path)) File.Delete(path);
                 File.Move(tmp, path);
             }
-            catch { }
+            catch
+            {
+                try { File.Delete(tmp); } catch { }
+            }
         }
     }
 }

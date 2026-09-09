@@ -4352,3 +4352,93 @@ queue by default (an agent flailing mid-experiment must not page triage).
   worker may not launch one. `accept/hostiles-active.md` is the bench half — six
   numbered phases needing a `MechCluster` fixture — and
   `accept/s13-mod-surface.py` checks 0.6f–0.6i are the offline shape half.
+
+- 2026-09-09 (`bench-down-race`) — **`down` is a verdict about a PROCESS, so it
+  is earned over time and never off one file sample; and a command the mod
+  already holds outranks it.** `rwa.health()` now requires at least three
+  consecutive failed samples spanning more than one second (`DOWN_SAMPLES=3`,
+  `DOWN_SPAN_S=1.0`, `DOWN_RETRY_S=0.6`), the first healthy sample wins
+  immediately, and `Poller.AtomicWrite` stops deleting before it moves.
+
+  **THE COST, and it is the openrun-20260902 rounds' cause C.** 97,505 ticks —
+  6% of every tick that moved with nobody watching — went to three advances the
+  client declared dead while they were still running: a 754-advance lost 4,004,
+  an 849-advance 45,013, an 018-advance 48,488. Each came back `rwa-game-down`
+  and **the very next call came back `busy` naming the same command id**, which
+  is the whole proof: the game was alive throughout and the advance was still in
+  flight. F-S09-2's `quest` is the same race, and its error text ("it will be
+  consumed with stale-on-restart at the next launch") described a ghost command
+  that never existed.
+
+  **THE MECHANISM WAS A MOD-SIDE RACE THE CLIENT AMPLIFIED.**
+  `Poller.AtomicWrite` did `File.WriteAllText(tmp)` / `File.Delete(path)` /
+  `File.Move(tmp, path)` roughly once a second, so `status.json` genuinely did
+  not exist for an instant on **every** heartbeat write. `health()` sampled the
+  path once per poll with no retry. The three observed failures read
+  "status.json is missing" twice and "unreadable/not JSON" once — all three the
+  vanish window, none of them a dead bench.
+
+  **`File.Replace` IS AVAILABLE, MEASURED ON THE GAME'S OWN RUNTIME rather than
+  assumed** — the rounds flagged this as the one unverified step that could make
+  the change worse than the bug. RimWorld 1.6.4871 ships Mono **6.13.0**
+  (`RimWorldLinux_Data/MonoBleedingEdge/x86_64/libmonobdwgc-2.0.so`) with a
+  CoreFX `System.IO.FileSystem` stack. A probe assembly built against `net48`
+  and executed on that runtime through a ~40-line `mono_jit_init`/`mono_jit_exec`
+  embedding host, loading the game's own `Managed/mscorlib.dll`, reported:
+  `File.Replace(s,d,b)` **PRESENT** and working, including while a reader holds
+  the destination open; the overwriting `File.Move(s,d,bool)` **ABSENT** (it is
+  .NET Core 3.0+, not net48); two-arg `File.Move` over an existing file throws
+  `IOException`, which is why the delete was there; and `File.Replace` with a
+  **missing** destination throws `FileNotFoundException`, which is why the first
+  write of a session still goes through `Move`. Under a spinning reader, 500
+  delete+move writes were caught with the path missing **1418 times**; 500
+  `File.Replace` writes, **0**. No game was launched to establish any of this.
+
+  **THE MOD SIDE STILL CANNOT THROW.** `AtomicWrite` runs on the poller thread
+  and that path owes every consumed command exactly one result file, so the new
+  body is three guarded stages: write the tmp (on failure, return — the old file
+  stands and ages rather than vanishing), `Replace`-or-`Move`, and only if that
+  fails, the old delete+move as a last resort. The last resort is the one branch
+  that can still leave the path missing, and the client's three-sample rule is
+  what covers it — which is why both halves shipped rather than either alone.
+
+  **WHAT OUTRANKS A `down` VERDICT, on the client.** Two things, both of them
+  "the mod owes us a result and the mod always writes it":
+  - **A command already in the inbox or in `commands/done/` is POLLED**, never
+    re-sent and never reported down. `Poller.ScanInbox` consumes into `done/`
+    *before* the verb runs and `Poller.CheckGameBoundary` answers even an
+    orphaned one, so the file the client wants is coming.
+  - **An advance in flight is read off `status.advance.id` before sending.**
+    `down` and "TimeDriver is running an advance" cannot both be true — the mod
+    publishes `advance.*` into the very file that failed to read — so the client
+    waits for that advance's result file instead of giving up.
+
+  Both waits are bounded by **the mod's own bar**: `OWED_SECS = 20.0` mirrors
+  `Poller.AbandonAfterSeconds`, whose comment already gives the reason —
+  "falsely abandoning a HEALTHY in-flight advance is far worse than answering an
+  orphaned one late." Both ends of the bridge now wait the same 20 seconds
+  before writing a command off. `--owed-secs` exists so the self-test can be
+  short; nothing else lowers it.
+
+  **THE HARNESS CAN SIGTERM THE CLIENT (exit 143 was observed), AND THE ANSWER
+  IS RECONCILIATION, NOT SURVIVAL.** Nothing traps the signal. What changed is
+  that the next run can find what the previous one lost: `send` no longer
+  unlinks `results/<id>.json` for a GENERATED id — that file is the entire
+  reconciliation story after a kill — and takes a fresh id instead. The unlink
+  survives only for an explicit `--cmd-id`, where the caller named the filename
+  and owns what is under it. That makes id uniqueness load-bearing, so `new_id`
+  gained a per-process counter (`op-HHMMSS-PID-N`): second-resolution plus pid
+  collided inside one process, which `replay` does routinely.
+
+  **EVIDENCE.** `rwa/healthtest.py` is the reproducible half and runs from
+  `selftest.sh` §2b: a control showing one sample still condemns a vanished
+  path, a path that vanishes for one sample and returns (`health()` says `ok`,
+  reporting `missed_samples: 1`), a path that stays gone (`down` after 3 samples
+  over 1.2s, with the count in the verdict's own text), and the race itself —
+  a writer doing exactly what the old `AtomicWrite` did while `health()` grades
+  it. On that last one a single sample read `down` on a live bench 2 times in
+  three seconds and `health()` read `down` 0 times; against a `File.Replace`
+  writer, 0 and 0. `selftest.sh`: 263 passed, 0 failed. **None of it has been in
+  front of a game** — the bench half is Dorian's: an advance whose client is
+  SIGTERMed mid-flight must be reconciled by the next `rwa` call rather than
+  reported down, and `status.json` must never be observed missing.

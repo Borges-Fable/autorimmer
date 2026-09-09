@@ -78,6 +78,32 @@ The heartbeat is written by the mod's **poller thread**, not by frames, so a
 stale `status.json` means the process is gone; frame starvation shows up as a
 low `fps` with a fresh timestamp. Paused is normal — the agent owns time.
 
+**`down` is earned, never sampled once.** It is the only verdict that abandons
+work, so it takes at least **3 consecutive failed samples spanning more than a
+second** before `rwa` believes it; the first healthy sample wins immediately, so
+a live bench pays nothing. The old one-sample rule cost 97,505 ticks in
+openrun-20260902: `Poller.AtomicWrite` deleted `status.json` before moving the
+new one over it, so the file really was absent for an instant on every heartbeat
+write, and three advances were declared dead mid-flight — each followed by a
+`busy` naming the same command id. The mod no longer deletes first
+(`File.Replace`), and the client no longer depends on that.
+
+Two things outrank a `down` verdict outright, because in both the mod already
+owes a result file and always writes one:
+
+* **a command already in the inbox or in `commands/done/`** is polled for its
+  result, never re-sent and never reported down;
+* **an advance in flight** — read off `status.advance.id` before sending — is
+  waited out rather than abandoned.
+
+Both waits are bounded by `--owed-secs` (default 20), which is the mod's own
+`Poller.AbandonAfterSeconds`: the point at which the poller thread answers an
+orphaned in-flight command itself. Both ends of the bridge now use the same bar.
+A client killed mid-advance (the harness SIGTERMs it; exit 143 was seen in the
+run) is therefore recovered by RECONCILING on the next call — `rwa` never
+unlinks a result file it did not name with `--cmd-id`, so the answer the mod
+wrote is still there to find.
+
 `rwa status --sample 2` reads the heartbeat twice two seconds apart and reports
 the tick delta, which is FINDINGS §4b's standing advice ("assert liveness, not
 process-up") in one command.
@@ -146,8 +172,8 @@ set is deliberately kept out of the verbs' namespace:
 
 ```
 --root --timeout --cmd-id --run --transcripts --stale-secs --fps-floor
---poll-ms --json --pretty --no-transcript --no-rotate --quiet --version
---help -h
+--owed-secs --poll-ms --json --pretty --no-transcript --no-rotate --quiet
+--version --help -h
 ```
 
 `id` is the only argument name in the whole verb registry that ever collided
@@ -787,8 +813,10 @@ scopes are two questions.
 ## Self-test
 
 ```bash
-./selftest.sh          # ~60s, no game involved
+./selftest.sh          # no game involved; run it from the repo ROOT (§13
+                       # resolves templates/ relative to the working directory)
 KEEP=1 ./selftest.sh   # leave the synthetic root behind to poke at
+python3 healthtest.py  # just the bench-down retry, on its own
 ```
 
 `fakebench.py` emulates `Poller.cs` — the same 500 ms scan, the same 250 ms
@@ -796,6 +824,14 @@ minimum file age, the same consume-before-execute, the same envelope, the same
 id sanitisation — so the client cannot tell it apart, and every failure mode is
 a flag instead of a race: a stale heartbeat, a live heartbeat over a starved
 frame loop, a timeout, a mangled result, each error code in the taxonomy.
+
+§2b is `healthtest.py`, which calls `health()` directly because the property
+that matters happens BETWEEN two samples and the CLI only ever shows the
+verdict: a path that vanishes for one sample and returns (must NOT read `down`),
+a path that stays gone (must read `down`, and must have taken 3 samples over
+>1 s to say so), and the race itself — a writer doing exactly what the old
+`Poller.AtomicWrite` did while `health()` grades it, counting what one sample
+would have concluded against what the retry actually returns.
 
 §13 covers `place-layout`'s IR expansion the same way, and is scoped just as
 narrowly on purpose: `--print-payload` resolves a layout with no bench in the

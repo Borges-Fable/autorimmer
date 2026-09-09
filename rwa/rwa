@@ -91,6 +91,36 @@ DEFAULT_TIMEOUT = 30.0  # seconds; `advance` overrides to unbounded, see cmd_sen
 STALE_SECS = 10.0      # status.json older than this => no heartbeat => down
 FPS_FLOOR = 5.0        # below this the frame loop is starved (FINDINGS 4b)
 
+# --- the bar for calling a bench dead ---------------------------------------
+# `down` is the only verdict that abandons work, so it is the one that has to be
+# EARNED. Poller.AtomicWrite used to File.Delete and then File.Move, so
+# status.json genuinely did not exist for an instant on every ~1Hz write, and a
+# single sample landing in that window read as a dead bench. Measured on the
+# game's own Mono 6.13.0: a reader spinning beside 500 delete+move writes saw
+# the path missing 1418 times; beside 500 File.Replace writes, 0.
+#
+# openrun-20260902 cause C is what that cost: three times the client declared
+# the bench down while its OWN advance was still running (a 754-advance lost
+# 4,004 ticks, an 849-advance 45,013, an 018-advance 48,488 — 97,505 in all,
+# 6% of every tick that moved unwitnessed), and the very next call came back
+# `busy` naming the same command id. F-S09-2's `quest` is the same race.
+#
+# The mod half is fixed too (Poller.AtomicWrite now File.Replaces), but the
+# client must not depend on the bench running a new mod: one miss is expected,
+# and only a RUN of misses spanning more than a heartbeat interval is evidence.
+DOWN_SAMPLES = 3       # consecutive failed samples before `down` is believed
+DOWN_SPAN_S = 1.0      # ...and they must span more than this: >1 heartbeat
+DOWN_RETRY_S = 0.6     # gap between them (3 samples => 1.2s > DOWN_SPAN_S)
+
+# How long a command the mod ALREADY HOLDS may go unanswered while the
+# heartbeat reads down, before the client stops waiting for its result file.
+# Deliberately the mod's own bar: Poller.AbandonAfterSeconds is 20, the point
+# at which the poller thread answers an orphaned in-flight command itself, and
+# its comment gives the reason — "falsely abandoning a HEALTHY in-flight
+# advance is far worse than answering an orphaned one late." Both ends of the
+# bridge now wait the same 20s before writing a command off.
+OWED_SECS = 20.0
+
 # `advance` is the one op with no useful wall-clock default: a 60000-tick
 # advance took 59.9s on the bench and an until-matcher can legitimately run for
 # minutes. It is guarded by the heartbeat instead of by a clock.
@@ -190,7 +220,7 @@ KEY_RE = re.compile(r"^--([A-Za-z_][A-Za-z0-9_.-]*)(?::(str|num|bool|json))?(=(?
 # verb would pick.
 GLOBALS = {
     "--root": 1, "--timeout": 1, "--cmd-id": 1, "--run": 1, "--transcripts": 1,
-    "--stale-secs": 1, "--fps-floor": 1, "--poll-ms": 1,
+    "--stale-secs": 1, "--fps-floor": 1, "--poll-ms": 1, "--owed-secs": 1,
     "--json": 0, "--pretty": 0, "--no-transcript": 0, "--no-rotate": 0, "--quiet": 0,
     "--version": 0, "--help": 0, "-h": 0,
 }
@@ -477,8 +507,15 @@ def parse_ts(text):
         return None
 
 
-def health(root, stale_secs=STALE_SECS, fps_floor=FPS_FLOOR):
-    """Grade the bench. Returns a dict; `state` is one of:
+def health_sample(root, stale_secs=STALE_SECS, fps_floor=FPS_FLOOR):
+    """ONE reading of status.json — the raw grade, with no retry.
+
+    Callers want `health()`, which is this plus the confirmation that keeps a
+    single missed sample from condemning a live bench. This is exported
+    separately so a test can show what one sample says while the retry is
+    saying something else.
+
+    Returns a dict; `state` is one of:
 
       down     — no status.json, or its `ts` is older than stale_secs. The
                  poller thread writes it every second independently of frames,
@@ -533,6 +570,56 @@ def health(root, stale_secs=STALE_SECS, fps_floor=FPS_FLOOR):
         return out
     out.update(state="ok", why=f"gameLoaded, {fps:g} fps, tick {st.get('tick')}")
     return out
+
+
+def advance_id(status):
+    """The command id of the advance the bench is running, or None.
+
+    `TimeDriver` publishes this into status.json for the whole life of an
+    advance, which makes it the client's one off-band way to learn that the mod
+    is mid-command — including a command some EARLIER, now-dead rwa process
+    sent. The harness SIGTERMs this client (exit 143 was seen in the run), and
+    the answer to being killed is to reconcile on the next invocation rather
+    than to try to survive the kill.
+    """
+    adv = (status or {}).get("advance") or {}
+    aid = adv.get("id")
+    return aid if isinstance(aid, str) and aid else None
+
+
+def health(root, stale_secs=STALE_SECS, fps_floor=FPS_FLOOR):
+    """`health_sample`, but a `down` verdict has to be confirmed.
+
+    At least DOWN_SAMPLES consecutive failed samples spanning more than
+    DOWN_SPAN_S seconds, i.e. more than one full heartbeat interval, before the
+    bench is called dead. A single miss is EXPECTED — see the constants — and
+    the first sample that comes back healthy wins immediately, so the retry
+    costs nothing on a live bench and ~1.2s on a genuinely dead one, which is
+    the call that was about to abandon the work anyway.
+
+    A missing protocol root cannot change under us, so it is exempt.
+    """
+    h = health_sample(root, stale_secs, fps_floor)
+    if root is None or h["state"] != "down":
+        return h
+    first = time.time()
+    misses = 1
+    while True:
+        span = time.time() - first
+        if misses >= DOWN_SAMPLES and span > DOWN_SPAN_S:
+            h["samples"] = misses
+            h["span_s"] = round(span, 2)
+            h["why"] += f" ({misses} consecutive samples over {h['span_s']}s)"
+            return h
+        time.sleep(DOWN_RETRY_S)
+        nxt = health_sample(root, stale_secs, fps_floor)
+        misses += 1
+        if nxt["state"] != "down":
+            # The file came back. This is the ordinary case during a write, and
+            # the whole point of the retry: report what the bench actually is.
+            nxt["missed_samples"] = misses - 1
+            return nxt
+        h = nxt
 
 
 def health_advice(h, root):
@@ -931,9 +1018,23 @@ def open_transcript(opts, root, h):
 
 # --- the round trip ----------------------------------------------------------
 
+_ID_SEQ = 0
+
+
 def new_id(op):
+    """op-HHMMSS-PID-N. The counter is load-bearing, not decoration.
+
+    A generated id's result file is never unlinked any more (see `send`), so a
+    generated id that collides with an existing result would make this client
+    read somebody else's answer as its own. Second-resolution plus pid was not
+    enough WITHIN one process: `replay` re-sends a transcript faster than the
+    clock ticks, and two calls to the same op in one second produced one id.
+    """
+    global _ID_SEQ
+    _ID_SEQ += 1
     stamp = time.strftime("%H%M%S")
-    return f"{re.sub(r'[^A-Za-z0-9]', '', op)[:12] or 'op'}-{stamp}-{os.getpid() % 10000:04d}"
+    return (f"{re.sub(r'[^A-Za-z0-9]', '', op)[:12] or 'op'}-{stamp}-"
+            f"{os.getpid() % 10000:04d}-{_ID_SEQ}")
 
 
 def send(root, op, args, opts, h, transcript=None):
@@ -950,20 +1051,6 @@ def send(root, op, args, opts, h, transcript=None):
             f"id {cid!r} has characters outside [A-Za-z0-9_-]; Poller.Sanitize rewrites "
             "those when it names the result file, so the result would land somewhere "
             "this client is not looking"))
-    # Only `down` blocks. A stalled or starved bench still has a live POLLER
-    # THREAD — that thread is what writes status.json, independently of frames —
-    # so it consumes the command and answers promptly: off-thread verbs succeed,
-    # and main-thread verbs get no-active-game out of Poller.ScanInbox rather
-    # than queueing. Refusing to send there would hide the mod's own, better
-    # answer behind a guess of ours.
-    if h["state"] == "down":
-        env = envelope(op, False, code=E_DOWN, cid=cid,
-                       detail=h["why"] + " — command not sent",
-                       extra={"health": h["state"], "advice": health_advice(h, root)})
-        if transcript:
-            transcript.note({"op": op, "id": cid, "ok": False, "error": E_DOWN,
-                             "sent": False, "source": "rwa"})
-        return env
 
     inbox = root / "commands"
     results = root / "results"
@@ -973,16 +1060,91 @@ def send(root, op, args, opts, h, transcript=None):
     except OSError as e:
         return envelope(op, False, code=E_IO, cid=cid, detail=str(e))
 
-    # A leftover result from an earlier command with this id would be read back
-    # instantly as if it were ours. Only reachable via --cmd-id, but silent if it
-    # happens, so it is cleared rather than guarded against.
     dest = results / (cid + ".json")
-    if dest.exists():
-        try:
-            dest.unlink()
-        except OSError as e:
-            return envelope(op, False, code=E_IO, cid=cid,
-                            detail=f"a stale {dest} is in the way and cannot be removed: {e}")
+    queued = inbox / (cid + ".json")
+    consumed = inbox / "done" / (cid + ".json")
+    owed = OWED_SECS if opts.get("--owed-secs") is None else float(opts["--owed-secs"])
+    already_sent = False
+
+    # Only `down` blocks. A stalled or starved bench still has a live POLLER
+    # THREAD — that thread is what writes status.json, independently of frames —
+    # so it consumes the command and answers promptly: off-thread verbs succeed,
+    # and main-thread verbs get no-active-game out of Poller.ScanInbox rather
+    # than queueing. Refusing to send there would hide the mod's own, better
+    # answer behind a guess of ours.
+    #
+    # And two things outrank even `down`, both of them openrun-20260902 cause C.
+    if h["state"] == "down":
+        # (1) THE MOD ALREADY HAS THIS COMMAND. It was consumed into done/
+        #     before the verb ran and it owes exactly one result file for it —
+        #     Poller.CheckGameBoundary answers even an orphaned one. A command
+        #     in the inbox is polled for its result, never re-sent and never
+        #     reported down. (`dest` guard: if a result is already sitting
+        #     there we cannot tell whose it is, so that falls through.)
+        if not dest.exists() and (queued.exists() or consumed.exists()):
+            warn(f"{cid} is already in the mod's hands "
+                 f"({'inbox' if queued.exists() else 'done/'}); polling for its result "
+                 "rather than reporting the bench down")
+            already_sent = True
+        else:
+            # (2) AN ADVANCE IS IN FLIGHT. `down` and "TimeDriver is running an
+            #     advance" cannot both be true: the mod publishes advance.* into
+            #     the very file that failed to read. So wait for that advance's
+            #     result — the mod always writes it and KEEPS results/<id>.json
+            #     — instead of giving up. This is how the client survives being
+            #     SIGTERMed mid-advance: the next run reconciles.
+            aid = advance_id(h.get("status"))
+            if aid is None:
+                env = envelope(op, False, code=E_DOWN, cid=cid,
+                               detail=h["why"] + " — command not sent",
+                               extra={"health": h["state"],
+                                      "advice": health_advice(h, root)})
+                if transcript:
+                    transcript.note({"op": op, "id": cid, "ok": False, "error": E_DOWN,
+                                     "sent": False, "source": "rwa"})
+                return env
+            h, alive, waited = reconcile_advance(root, aid, owed, opts)
+            if not alive:
+                env = envelope(op, False, code=E_DOWN, cid=cid, detail=(
+                    f"{h['why']} — advance {aid} was in flight and neither its result "
+                    f"file nor a heartbeat appeared in {waited:.0f}s (the mod's own "
+                    "Poller.AbandonAfterSeconds bar); command not sent"),
+                    extra={"health": h["state"], "advice": health_advice(h, root),
+                           "advance": aid, "waited_s": round(waited, 1)})
+                if transcript:
+                    transcript.note({"op": op, "id": cid, "ok": False, "error": E_DOWN,
+                                     "sent": False, "advance": aid, "source": "rwa"})
+                return env
+
+    # A leftover result from an earlier command with this id would be read back
+    # instantly as if it were ours.
+    #
+    # It is DELETED only when the caller named the id. `--cmd-id` is a request
+    # for that exact filename and the caller owns what is under it; a GENERATED
+    # id takes a fresh name instead. The client must never unlink a result the
+    # mod wrote, because after the harness SIGTERMs us mid-advance that file is
+    # the entire reconciliation story (openrun-20260902 cause C) — the mod
+    # writes it and keeps it precisely so the next run can find it.
+    if dest.exists() and not already_sent:
+        if opts.get("--cmd-id"):
+            try:
+                dest.unlink()
+            except OSError as e:
+                return envelope(op, False, code=E_IO, cid=cid,
+                                detail=f"a stale {dest} is in the way and cannot be removed: {e}")
+        else:
+            stem = cid[:56]
+            for n in range(2, 100):
+                alt = f"{stem}-r{n}"
+                if not (results / (alt + ".json")).exists():
+                    cid, dest = alt, results / (alt + ".json")
+                    queued = inbox / (cid + ".json")
+                    consumed = inbox / "done" / (cid + ".json")
+                    break
+            else:
+                return envelope(op, False, code=E_IO, cid=cid, detail=(
+                    f"{results} already holds a result for {cid} and 98 alternatives; "
+                    "pass --cmd-id to name one explicitly"))
 
     cmd = {"id": cid, "op": op, "args": args}
     text = json.dumps(cmd, ensure_ascii=False)
@@ -1014,18 +1176,20 @@ def send(root, op, args, opts, h, transcript=None):
     if step_dir:
         transcript.request(step_dir, text)   # before the inbox write, not after
     started = time.time()
-    try:
-        tmp.write_text(text)
-        tmp.replace(inbox / (cid + ".json"))
-    except OSError as e:
-        env = envelope(op, False, code=E_IO, cid=cid, detail=str(e))
-        if step_dir:
-            transcript.record(step_dir, text, None,
-                              {"op": op, "id": cid, "ok": False, "error": E_IO, "source": "rwa"})
-        return env
+    if not already_sent:
+        try:
+            tmp.write_text(text)
+            tmp.replace(queued)
+        except OSError as e:
+            env = envelope(op, False, code=E_IO, cid=cid, detail=str(e))
+            if step_dir:
+                transcript.record(step_dir, text, None,
+                                  {"op": op, "id": cid, "ok": False, "error": E_IO,
+                                   "source": "rwa"})
+            return env
 
     timeout = resolve_timeout(op, opts)
-    env, raw = await_result(root, dest, cid, op, started, timeout, opts, h)
+    env, raw = await_result(root, dest, cid, op, started, timeout, opts, h, owed)
     if step_dir:
         transcript.record(step_dir, text, raw if raw is not None else json.dumps(env, indent=2) + "\n", {
             "op": op, "id": cid, "ok": bool(env.get("ok")),
@@ -1034,6 +1198,32 @@ def send(root, op, args, opts, h, transcript=None):
             "source": "mod" if raw is not None else "rwa",
         })
     return env
+
+
+def reconcile_advance(root, aid, owed, opts):
+    """Wait out an advance the bench was running when `health` read `down`.
+
+    Returns (health, alive, waited). `alive` is true the moment either the
+    advance's result file appears or the heartbeat grades as anything but down
+    — both prove the bench was there all along, which is what the run's three
+    `rwa-game-down`-then-`busy` pairs were telling us. Bounded by the mod's own
+    Poller.AbandonAfterSeconds so a genuinely dead bench still ends the wait.
+    """
+    stale = float(opts.get("--stale-secs") or STALE_SECS)
+    floor = float(opts.get("--fps-floor") or FPS_FLOOR)
+    dest = root / "results" / (aid + ".json")
+    started = time.time()
+    h = None
+    while True:
+        if dest.exists():
+            h = health(root, stale, floor)
+            return h, h["state"] != "down", time.time() - started
+        h = health(root, stale, floor)          # itself 3 samples over >1s
+        if h["state"] != "down":
+            return h, True, time.time() - started
+        if time.time() - started >= owed:
+            return h, False, time.time() - started
+        time.sleep(0.25)
 
 
 def resolve_timeout(op, opts):
@@ -1046,13 +1236,21 @@ def resolve_timeout(op, opts):
     return None if op in UNBOUNDED_OPS else DEFAULT_TIMEOUT
 
 
-def await_result(root, dest, cid, op, started, timeout, opts, h0):
+def await_result(root, dest, cid, op, started, timeout, opts, h0, owed=OWED_SECS):
     """Poll for the result file, watching the heartbeat while we wait.
 
     The wall clock is the weaker guard of the two. A bench that dies mid-command
     never writes anything, so waiting out a 60s advance timeout would report
     "timeout" for what is really "the game is gone"; the heartbeat catches that
     in stale_secs instead, and says so.
+
+    But a down heartbeat STARTS a clock here rather than ending the wait. This
+    command is already in the mod's hands: it was consumed into done/ before
+    the verb ran, the mod owes it exactly one result file, and the poller
+    thread answers it even if the game unloads underneath. Abandoning it on
+    the first down sample is what lost 97,505 ticks in openrun-20260902 —
+    three advances declared dead mid-flight, each followed by a `busy` naming
+    the same command id. `owed` is the mod's own Poller.AbandonAfterSeconds.
     """
     stale = float(opts.get("--stale-secs") or STALE_SECS)
     floor = float(opts.get("--fps-floor") or FPS_FLOOR)
@@ -1060,6 +1258,7 @@ def await_result(root, dest, cid, op, started, timeout, opts, h0):
     show_progress = not want_json(opts) and not opts.get("--quiet") and sys.stderr.isatty()
     last_note = 0.0
     noted = False
+    down_since = None
 
     def done(env, raw):
         # The progress line is written with \r and no newline, so it has to be
@@ -1097,18 +1296,30 @@ def await_result(root, dest, cid, op, started, timeout, opts, h0):
 
         h = health(root, stale, floor)
         if h["state"] == "down":
-            return done(envelope(op, False, code=E_DOWN, cid=cid,
-                                 detail=f"{h['why']} — the command was written to the inbox but "
-                                        "the bench stopped answering; it will be consumed with "
-                                        "stale-on-restart at the next launch",
-                                 extra={"health": h["state"],
-                                        "advice": health_advice(h, root)}), None)
+            if down_since is None:
+                down_since = time.time()
+            down_for = time.time() - down_since
+            if down_for >= owed:
+                return done(envelope(op, False, code=E_DOWN, cid=cid,
+                                     detail=f"{h['why']} — and no {dest.name} appeared in the "
+                                            f"{down_for:.0f}s since. the command was written to "
+                                            "the inbox but the bench stopped answering; it will "
+                                            "be consumed with stale-on-restart at the next "
+                                            "launch",
+                                     extra={"health": h["state"], "down_s": round(down_for, 1),
+                                            "advice": health_advice(h, root)}), None)
+        else:
+            down_since = None
 
         waited = time.time() - started
         if timeout is not None and waited > timeout:
+            live = h["state"] != "down"
             return done(envelope(op, False, code=E_TIMEOUT, cid=cid, detail=(
-                f"no result after {waited:.1f}s (limit {timeout:g}s). the bench is alive "
-                f"(state={h['state']}); raise --timeout, or use --timeout 0 to wait as long "
+                f"no result after {waited:.1f}s (limit {timeout:g}s). "
+                + (f"the bench is alive (state={h['state']}); "
+                   if live else f"the heartbeat is down ({h['why']}) but the mod still owes "
+                                f"{dest.name}; ")
+                + "raise --timeout, or use --timeout 0 to wait as long "
                 "as the heartbeat holds"),
                 extra={"health": h["state"], "waited_s": round(waited, 2)}), None)
 
@@ -1119,6 +1330,11 @@ def await_result(root, dest, cid, op, started, timeout, opts, h0):
                 target = adv.get("target")
                 where = f"{adv.get('ticks_done')}" + (f"/{target}" if target and target > 0 else "")
                 print(f"\r  advance {cid}: {where} ticks, {waited:.0f}s elapsed",
+                      end="", file=sys.stderr, flush=True)
+                noted = True
+            elif h["state"] == "down" and down_since is not None:
+                print(f"\r  {op} {cid}: heartbeat down {time.time() - down_since:.0f}s, "
+                      f"still owed a result ({owed:g}s bar)",
                       end="", file=sys.stderr, flush=True)
                 noted = True
             elif waited > 3:
@@ -2220,8 +2436,14 @@ Global flags:
   --no-rotate           keep the run in exactly ONE directory: at 999 steps
                         the call is refused with rwa-transcript-full instead
                         of continuing in <run>-sNN (also RWA_NO_ROTATE)
-  --stale-secs N        heartbeat age that means "down" (default 10)
+  --stale-secs N        heartbeat age that means "down" (default 10). A down
+                        verdict is confirmed over 3 samples spanning >1s before
+                        it is believed — one miss is a write in progress, not a
+                        dead bench.
   --fps-floor N         fps below which the bench counts as frame-starved (default 5)
+  --owed-secs N         how long to keep waiting for a result the mod already
+                        owes, after the heartbeat goes down (default 20, which
+                        is Poller.AbandonAfterSeconds — the mod's own bar)
   --quiet               suppress pretty output (exit code still speaks)
 
 Exit codes: 0 ok · 1 the mod said ok:false · 2 bad usage (incl. a full run
