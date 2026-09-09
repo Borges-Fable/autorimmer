@@ -5131,3 +5131,118 @@ queue by default (an agent flailing mid-experiment must not page triage).
   worker may not launch one. `accept/ae84a07-abilities.md` carries the bench
   checks as a numbered command list and stays open until the orchestrator has
   run it.
+- 2026-09-09 (`eb35e1a`) — **A STANDING rule is a different act from an order,
+  and the gates it needs are the ones the other mod's WIDGET draws, not the
+  ones its backend keeps.** `nepo-restock` binds Nepo's standing restock rules
+  — no args lists them, `{def}` reads one, `{def, threshold, target}` writes
+  one through `NepoSync.SetRestockRule`. `Source/AutoRimmer/NepoBridge.cs` and
+  `NepoVerbs.cs`; still no project reference and no assembly reference.
+
+  **THE BACKEND ENFORCES TWO CLAMPS AND NOTHING ELSE.**
+  `NepoGameComponent.SetRestock` is `threshold = Max(0, threshold); target =
+  Max(threshold + 1, target);` then update-or-insert. It does not check that
+  the def is orderable, that the `stuff` is legal, or that the colour is one a
+  player could pick. All four gates live in `Window_DadCatalog` — catalog
+  membership (`CatalogBuilder.IsOrderable`, the predicate the panel's rows are
+  built from), the material picker (`CanCustomizeMaterial` + `AllowedStuffs`,
+  and `RestockStuff(e)` hard-nulls a stuff the row cannot offer), the colour
+  palette (`CanCustomizeColor` + `StylingStationColors()`), and
+  `Widgets.TextFieldNumeric(…, 0f, 999999f)` on both numbers — so all four are
+  reproduced and cited. A verb that bound the write and stopped there would
+  have passed a smoke test while handing the agent a rule on a def with no
+  catalog row, in an illegal stuff, that Nepo prices and ships every hour.
+
+  **THE `dad-unavailable` GATE IS DELIBERATELY NOT APPLIED, and that needed a
+  new parameter rather than a copied one.** Every other write in `NepoVerbs.cs`
+  refuses when Dad is not answering. The restock panel has no `DadAvailable`
+  check — what is gated is the SWEEP, `GameComponentTick`'s `now %
+  RestockCheckIntervalTicks == 0 && DadAvailable` — so refusing here would
+  fabricate a restriction the player does not have, which `261f2e9` names as
+  the same class of error as bypassing a gate, facing the other way. `NepoGate`
+  grew `requireDad`, and the rule is stored with `sweep.dad_available` saying
+  in words that nothing will fire until he is back. **The comms-console chain
+  is not reproduced either**, and that one is a closer call — reaching the
+  panel means the catalog window is open, which means a sighted colonist walked
+  to a powered console. It is not reproduced because editing a rule charges
+  nothing and ships nothing, and the act it schedules is re-gated on
+  `DadAvailable` at sweep time and, under `requireCommsForRestock`, on a
+  colonist walking to a console to call it in. The difference is WHEN a rule
+  may be written, not WHAT it can buy. `nepo-order`, which charges and ships,
+  keeps the whole chain.
+
+  **THERE IS NO DELETE, AND ASKING FOR ONE GETS THE REASON.** `SetRestock` has
+  no removal branch — `SetRestock(def, 0, 0, …)` STORES `threshold 0 / target
+  1`. `RemoveRestock` exists, has zero callers in Nepo, has no `NepoSync`
+  wrapper and is not in `MpBridge.RegisterAll`, so calling it would be an
+  unsynced write to scribed state: the `ScheduleShipment` argument again, which
+  is why it is not even BOUND. The window cannot delete a rule either; its
+  toggle only disables. So "remove" is spelled `enabled:false`, and `remove` /
+  `delete` / `clear` / `unset` / `drop` / `cancel` are refused BY NAME off the
+  raw argument dictionary — not through `VerbArgs.Has`, which would mark them
+  read and let a later refactor slip them past `RefuseStray` in silence.
+
+  **AN ABSENT KEY MUST NOT SILENTLY CHANGE WHAT SHIPS.** `SetRestockRule` has
+  no optional parameters, so every write sends all six values. A caller who
+  omits `stuff` on a numbers-only update would therefore null the material the
+  rule was ordering in. So an absent `stuff`/`color` is CARRIED FORWARD from
+  the stored rule (which is what the panel does — its row was seeded from the
+  rule) and a JSON `null` is the way to clear one; `stuff_source` and
+  `color_source` say which happened on every reply. Symmetrically, `enabled`
+  defaults to the rule's current state on an update and to `true` on a create,
+  which is the widget exactly: its number fields re-send `active`, and only its
+  toggle creates. Creating a rule still needs BOTH numbers — the panel stages
+  `stackLimit/2` and `stackLimit` for a def with no rule, but a player reads
+  those before clicking and an agent would not (`c519477`).
+
+  **THE COLOUR HAS NO NAME, SO THE VERB GIVES IT ONE.** `RestockOrder.color` is
+  `UnityEngine.Color?` — not a `ColorDef` — and the palette is a `List<Color>`
+  built from `ColorDef`s by value. An agent cannot type a colour, so `color` is
+  passed as a **ColorDef defName**, resolved, checked against the palette by
+  Unity's approximate `==` (`List<Color>.Contains` would use exact float
+  equality), and reported back as both `color_def` and a hex string. It crosses
+  the wire through `NepoSync.EncodeColor`, public and static, because
+  `DecodeColor` is private and the payload stays Nepo's — the same rule
+  `EncodeOrder` gets.
+
+  **THE READ-BACK IS LOAD-BEARING AND THE "BEFORE" SNAPSHOT IS TOO.**
+  `SetRestockRule` is `void` and returns silently on a null component and a
+  null def, so the verb re-reads `GetRestock` and compares five fields
+  POST-CLAMP. The subtle half: `SetRestock` mutates the EXISTING `RestockOrder`
+  in place, so a "before" row read after the write would be the "after" row
+  wearing a different key. It is snapshotted before the call.
+
+  **THREE FACTS MEASURED RATHER THAN ASSUMED.** (1) `AllRestocks` is
+  `restockOrders.Values` — the live `ValueCollection`, no memo, no rebuild, so
+  it is NOT a write-on-read hazard; its real hazards are enumerate-while-mutate
+  (the bridge snapshots) and handing out live mutable rows (nothing here ever
+  assigns to one, which would bypass the clamp, `SetMaterialPref` and MP sync
+  at once). (2) `SetRestock`'s last line is `SetMaterialPref(def, stuff,
+  color)`, on every call, and it REMOVES the entry for a default-stuff,
+  no-colour choice — but the only reader of `materialPrefs` is
+  `Window_DadCatalog.SeedCustomizationFromPrefs`, where a standing rule already
+  wins, so what a restock write actually changes is a human's next catalog
+  pre-fill. It does NOT change what `nepo-order` delivers: that verb sends an
+  explicit `stuff` and `PlaceOrder` ships the manifest it is handed. The effect
+  is published on every reply anyway. (3) `ColonyAvailableCount` and
+  `RunRestockSweep` both open `Find.AnyPlayerHomeMap`, so "the colony has N" is
+  a statement about ONE map; the reply names it.
+
+  **ONE RED-ERROR VECTOR CLOSED.** `ColonyAvailableCount` reaches
+  `Verse/ListerThings.ThingsOfDef`, which `Log.ErrorOnce`s on `MinifiedThing`
+  — and `nepo-restock {def:"MinifiedThing"}` is one word away from every other
+  read. The count is computed inside the other mod, so this verb cannot route
+  around the call the way `SpatialVerbs.Nearest` and `things` do; it declines
+  to ask, answers `available: null`, and says why. Null is "not asked", never
+  "none".
+
+  **ITS OWN DRIFT TIER**, per `MpBridge.cs`'s own argument that one flag
+  covering two unrelated features is the bug three sibling bridges shipped:
+  `restockDriftWhy` / `RestockAvailable`, covering BOTH halves of the restock
+  surface, so a renamed `AllRestocks` costs `nepo-restock` and not
+  `nepo-catalog`, and a drifted `SetRestockRule` costs neither.
+
+  **WHAT IS NOT DISCHARGED.** No bench, and a worker may not launch one.
+  `accept/eb35e1a-nepo-restock.md` carries the checks as a numbered command
+  list — including the absent-mod phase and the one that costs up to 2,500
+  ticks of `advance`, because the sweep is hourly and a same-call assertion
+  would fail on a correct implementation.

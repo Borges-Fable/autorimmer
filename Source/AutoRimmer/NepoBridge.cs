@@ -93,6 +93,18 @@ namespace AutoRimmer
     // agent-supplied arguments breaches this repo's standing zero-red-errors
     // invariant. Letting Nepo encode its own format makes that unreachable.
     //
+    // ==================== WHY THIS DOES NOT CALL RemoveRestock ==============
+    // `NepoGameComponent.RemoveRestock(ThingDef)` is public, is named exactly
+    // like the way to delete a standing rule, and is the ScheduleShipment trap
+    // wearing a smaller hat: it has ZERO callers in Nepo, it has no `NepoSync`
+    // wrapper, and it is not one of the eight methods `MpBridge.RegisterAll`
+    // registers — so calling it would be an unsynced write to scribed state.
+    // The catalog window cannot delete a rule either: its toggle only DISABLES
+    // one, and `SetRestock` has no removal branch at all (a zeroed rule is
+    // STORED, at `threshold 0 / target 1`, because `target` is floored at
+    // `threshold + 1`). So "remove" is spelled `enabled:false`, and
+    // `RemoveRestock` is deliberately NOT BOUND.
+    //
     // Main thread only, like every other Verse-touching file here. Called from
     // the command drain at a safe point, so the latch needs no lock.
     // ========================================================================
@@ -112,6 +124,7 @@ namespace AutoRimmer
         private const string TSlaveEntry = "Nepo.SlaveOrderEntry";
         private const string TShipment = "Nepo.PendingShipment";
         private const string TDispatch = "Nepo.PendingDispatch";
+        private const string TRestock = "Nepo.RestockOrder";
 
         // ---------------------------------------------------------- the latch
 
@@ -119,6 +132,17 @@ namespace AutoRimmer
         private static string absentWhy;      // not loaded at all — the ordinary case
         private static string readDriftWhy;   // loaded, but the READ surface changed shape
         private static string orderDriftWhy;  // loaded and readable, but the WRITE surface changed
+
+        // A THIRD TIER, AND THE REASON THERE IS ONE. `Nepo/MpBridge.cs`'s own
+        // header argues that one drift flag covering two unrelated features is
+        // the bug three sibling bridges shipped: the restock surface is a
+        // different set of members from the order surface, changed by different
+        // edits, and a drifted `SetRestockRule` must cost `nepo-restock` and
+        // NOTHING ELSE. Both HALVES of the restock surface live in this tier —
+        // its reads (`AllRestocks`, `GetRestock`, `ColonyAvailableCount`) as
+        // well as its write — for the same reason facing the other way: a
+        // renamed `AllRestocks` must not cost `nepo-catalog` its catalog.
+        private static string restockDriftWhy;
 
         /// True when every member the READ verbs need is bound. False with
         /// `Unavailable` naming the reason — absence and drift read differently.
@@ -145,6 +169,18 @@ namespace AutoRimmer
         public static string OrderUnavailable
         {
             get { Resolve(); return Unavailable ?? orderDriftWhy; }
+        }
+
+        /// True when a standing restock rule can be read AND written. Its own
+        /// tier: a drifted restock surface disables `nepo-restock` alone.
+        public static bool RestockAvailable
+        {
+            get { Resolve(); return Available && restockDriftWhy == null; }
+        }
+
+        public static string RestockUnavailable
+        {
+            get { Resolve(); return Unavailable ?? restockDriftWhy; }
         }
 
         /// True only when the mod is absent, as opposed to present-but-drifted.
@@ -202,6 +238,21 @@ namespace AutoRimmer
         // stated is an order the agent cannot plan around.
         private static FieldInfo tDeliveryDelayTicks;
         private static string delayWhyNot;
+
+        // ----------------------------------------------------- restock handles
+        // Read and write together, in the tier described above.
+        private static MethodInfo gAllRestocks, mGetRestock, mColonyAvailableCount;
+        private static MethodInfo mSetRestockRule, mEncodeColor;
+        private static FieldInfo rDef, rThreshold, rTarget, rEnabled, rStuff, rColor;
+        private static Func<ThingDef, bool> canCustomizeColor;
+        private static Func<List<Color>> stylingStationColors;
+
+        // OPTIONAL, and for the same reason `tDeliveryDelayTicks` is: the sweep
+        // cadence is something the verb REPORTS so the caller knows how long to
+        // wait, not something it gates on. Losing it costs the number and says
+        // so — it must not cost the verb.
+        private static FieldInfo tRestockIntervalTicks;
+        private static string sweepWhyNot;
 
         // ------------------------------------------------------------- resolve
 
@@ -413,6 +464,128 @@ namespace AutoRimmer
                         + Journal.Truncate(w.Message, 160);
                     Log.Warning("[AutoRimmer] " + orderDriftWhy);
                     Journal.EmitWarning("[AutoRimmer] " + orderDriftWhy);
+                }
+
+                // ---- THE RESTOCK SURFACE, IN ITS OWN GUARD ------------------
+                // Standing rules: read AND write. Separate from the order half
+                // above so neither can cost the other its verb.
+                try
+                {
+                    var sDrift = new List<string>();
+                    Type restock = AccessTools.TypeByName(TRestock);
+                    Type sync = AccessTools.TypeByName(TSync);
+                    RequireType(restock, TRestock, sDrift);
+                    RequireType(sync, TSync, sDrift);
+                    if (sDrift.Count == 0)
+                    {
+                        // `AllRestocks` is `restockOrders.Values` — the LIVE
+                        // ValueCollection of Nepo's own dictionary, with no memo
+                        // and no rebuild. It is therefore not a write-on-read
+                        // hazard at all; the two hazards it does carry are
+                        // handled at the accessor (a snapshot, so a write during
+                        // a listing cannot throw InvalidOperationException) and
+                        // in the verb (the rows it yields are Nepo's live
+                        // objects and are never assigned to — writing
+                        // `order.threshold` would bypass SetRestock's clamp, its
+                        // SetMaterialPref side effect and multiplayer sync).
+                        gAllRestocks = Getter(comp, "AllRestocks",
+                            typeof(IEnumerable<>).MakeGenericType(restock), false, sDrift);
+                        mGetRestock = Bind(comp, "GetRestock", restock,
+                            new[] { typeof(ThingDef) }, false, sDrift);
+                        // The window's own "you have N" readout. A pure read:
+                        // an indexed `listerThings` lookup plus haul-source and
+                        // carried counts plus the in-flight/dispatch sums.
+                        mColonyAvailableCount = Bind(comp, "ColonyAvailableCount", typeof(int),
+                            new[] { typeof(ThingDef) }, false, sDrift);
+
+                        // THE SYNCED ENTRY POINT, and the only write here.
+                        // `NepoGameComponent.SetRestock` is public and is what
+                        // this ends up calling, but it is not registered with
+                        // `MP.RegisterSyncMethod` — `NepoSync.SetRestockRule`
+                        // is (Nepo/MpBridge.RegisterAll, "restock rule write").
+                        // Note also that SetRestock's last two parameters are
+                        // OPTIONAL: `AccessTools.Method(comp, "SetRestock",
+                        // new[]{ThingDef,int,int,bool})` returns NULL, because
+                        // GetMethod does not match on optionals. Binding the
+                        // four-type array and calling it would have been two
+                        // mistakes at once, and is not done.
+                        mSetRestockRule = Bind(sync, "SetRestockRule", typeof(void),
+                            new[]
+                            {
+                                typeof(ThingDef), typeof(int), typeof(int), typeof(bool),
+                                typeof(ThingDef), typeof(string),
+                            }, true, sDrift);
+                        // The colour crosses the wire as a STRING, because
+                        // `Color?` is not a type Multiplayer serialises. This is
+                        // the header's "the payload stays Nepo's" rule a second
+                        // time: `DecodeColor` is private and its format is
+                        // Nepo's business, so we never hand-format "r,g,b,a".
+                        mEncodeColor = Bind(sync, "EncodeColor", typeof(string),
+                            new[] { typeof(Color?) }, true, sDrift);
+
+                        rDef = PubField(restock, "def", typeof(ThingDef), sDrift);
+                        rThreshold = PubField(restock, "threshold", typeof(int), sDrift);
+                        rTarget = PubField(restock, "target", typeof(int), sDrift);
+                        rEnabled = PubField(restock, "enabled", typeof(bool), sDrift);
+                        rStuff = PubField(restock, "stuff", typeof(ThingDef), sDrift);
+                        // `UnityEngine.Color?`, NOT a ColorDef — `PubField`
+                        // checks FieldType, so getting this wrong would read as
+                        // drift and disable the verb.
+                        rColor = PubField(restock, "color", typeof(Color?), sDrift);
+
+                        // The customize panel's two remaining gates. The
+                        // material pair is already bound in the read tier and is
+                        // reused; these two are colour-only and belong here.
+                        canCustomizeColor = Del<Func<ThingDef, bool>>(
+                            Bind(catalog, "CanCustomizeColor", typeof(bool),
+                                new[] { typeof(ThingDef) }, true, sDrift));
+                        stylingStationColors = Del<Func<List<Color>>>(
+                            Bind(catalog, "StylingStationColors", typeof(List<Color>),
+                                Type.EmptyTypes, true, sDrift));
+                    }
+                    if (sDrift.Count > 0)
+                    {
+                        restockDriftWhy = ModName + " is loaded and readable, but its STANDING RESTOCK "
+                            + "api has drifted, so reading and writing restock rules is disabled rather "
+                            + "than guessed at (the catalog, ordering and inbound are unaffected): "
+                            + string.Join("; ", sDrift.ToArray());
+                        Log.Warning("[AutoRimmer] " + restockDriftWhy);
+                        Journal.EmitWarning("[AutoRimmer] " + restockDriftWhy);
+                    }
+
+                    // ---- the sweep cadence, optional (see the field's comment)
+                    try
+                    {
+                        var cDrift = new List<string>();
+                        Type tuning = AccessTools.TypeByName(TTuning);
+                        if (tuning == null) cDrift.Add("no type " + TTuning);
+                        else
+                            // A `const`, unlike DeliveryDelayTicks. Reflection
+                            // reads a literal field's value fine — it is only
+                            // Nepo's OWN callers that got it inlined.
+                            tRestockIntervalTicks =
+                                StaticField(tuning, "RestockCheckIntervalTicks", typeof(int), cDrift);
+                        if (tRestockIntervalTicks == null)
+                            sweepWhyNot = ModName + "'s restock sweep interval could not be read: "
+                                + string.Join("; ", cDrift.ToArray());
+                    }
+                    catch (Exception cEx)
+                    {
+                        tRestockIntervalTicks = null;
+                        sweepWhyNot = "reading " + ModName + "'s restock sweep interval threw: "
+                            + cEx.GetType().Name + ": " + Journal.Truncate(cEx.Message, 120);
+                    }
+                }
+                catch (Exception s)
+                {
+                    mSetRestockRule = null;
+                    mGetRestock = null;
+                    gAllRestocks = null;
+                    restockDriftWhy = "probing " + ModName + "'s standing-restock api threw, so "
+                        + "`nepo-restock` is disabled (the catalog, ordering and inbound still work): "
+                        + s.GetType().Name + ": " + Journal.Truncate(s.Message, 160);
+                    Log.Warning("[AutoRimmer] " + restockDriftWhy);
+                    Journal.EmitWarning("[AutoRimmer] " + restockDriftWhy);
                 }
             }
             catch (Exception e)
@@ -713,5 +886,91 @@ namespace AutoRimmer
         /// four conditions — the caller MUST read the write back.
         public static void PlaceOrder(Pawn negotiator, string payload)
             => mPlaceOrder.Invoke(null, new object[] { negotiator, payload });
+
+        // ========================= STANDING RESTOCK ==========================
+
+        /// Every standing rule, SNAPSHOTTED into our own list.
+        ///
+        /// `AllRestocks` hands back `restockOrders.Values`, the live
+        /// `Dictionary.ValueCollection`. Listing straight off it while writing
+        /// in the same pass would throw `InvalidOperationException` the moment a
+        /// `SetRestock` for a def not already in the dictionary INSERTS — so the
+        /// snapshot is not tidiness, it is the fix. Same shape as
+        /// `PendingShipments` / `PendingDispatches` above.
+        ///
+        /// The objects inside are still Nepo's live `RestockOrder`s. Read them;
+        /// never assign to one. `order.threshold = n` would bypass
+        /// `SetRestock`'s clamp, bypass its `SetMaterialPref` side effect and
+        /// bypass multiplayer sync — three silent divergences for one
+        /// convenience.
+        public static List<object> AllRestocks(object c)
+        {
+            var outp = new List<object>();
+            var raw = gAllRestocks.Invoke(c, null) as IEnumerable;
+            if (raw == null) return outp;
+            foreach (var r in raw) if (r != null) outp.Add(r);
+            return outp;
+        }
+
+        /// The rule for one def, or null when there is none.
+        public static object GetRestock(object c, ThingDef def)
+            => mGetRestock.Invoke(c, new object[] { def });
+
+        /// The window's "you have N": everything on `Find.AnyPlayerHomeMap`
+        /// (storage, loose stacks, haul-source containers, carried) plus
+        /// everything already committed (in-flight drops and dispatches
+        /// awaiting a call). Which map that is matters with two home maps, and
+        /// the verb reports it rather than saying "the colony".
+        public static int ColonyAvailableCount(object c, ThingDef def)
+            => (int)mColonyAvailableCount.Invoke(c, new object[] { def });
+
+        public static ThingDef RestockRuleDef(object r) => (ThingDef)rDef.GetValue(r);
+        public static int RestockThreshold(object r) => (int)rThreshold.GetValue(r);
+        public static int RestockTarget(object r) => (int)rTarget.GetValue(r);
+        public static bool RestockEnabled(object r) => (bool)rEnabled.GetValue(r);
+        public static ThingDef RestockStuff(object r) => (ThingDef)rStuff.GetValue(r);
+        public static Color? RestockColor(object r) => (Color?)rColor.GetValue(r);
+
+        /// Nepo's own colour encoder, for the same reason `EncodeOrder` is used
+        /// rather than hand-written: the wire format is Nepo's business.
+        public static string EncodeColor(Color? color)
+            => (string)mEncodeColor.Invoke(null, new object[] { color });
+
+        /// The synced create-or-update. Returns void and returns SILENTLY on a
+        /// null component and on a null def, so the caller MUST re-read with
+        /// `GetRestock` and compare — post-clamp, because `SetRestock` floors
+        /// `threshold` at 0 and raises `target` to at least `threshold + 1`.
+        ///
+        /// NOT `ToggleRestockRule`, which is the window's own CREATE path (its
+        /// number fields only reach the wire when a rule already exists, so the
+        /// on/off button is the sole creator). `SetRestockRule` is idempotent
+        /// create-or-update and expresses both halves; the window's asymmetry is
+        /// a UI accident, not a game rule.
+        public static void SetRestockRule(ThingDef def, int threshold, int target, bool enabled,
+            ThingDef stuff, Color? color)
+            => mSetRestockRule.Invoke(null,
+                new object[] { def, threshold, target, enabled, stuff, EncodeColor(color) });
+
+        public static bool CanCustomizeColor(ThingDef d) => canCustomizeColor(d);
+
+        /// The colour picker's own palette — the styling station's colours, or
+        /// the Structure colours when Ideology is off. Memoised by Nepo into a
+        /// private static and handed back live, the same `Def.LabelCap` case the
+        /// three catalog list builders are, so building it on a read is allowed.
+        /// Never mutated here.
+        public static List<Color> StylingStationColors()
+            => stylingStationColors() ?? new List<Color>();
+
+        /// How often the sweep looks, in ticks. `null` means WE COULD NOT LOOK
+        /// (rule 2) — never a guess at 2500.
+        public static int? RestockSweepIntervalTicks()
+        {
+            Resolve();
+            if (tRestockIntervalTicks == null) return null;
+            return (int)tRestockIntervalTicks.GetValue(null);
+        }
+
+        /// Why the sweep interval is unknown. Null when it is known.
+        public static string SweepUnavailable { get { Resolve(); return sweepWhyNot; } }
     }
 }
