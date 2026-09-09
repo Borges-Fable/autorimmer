@@ -99,6 +99,17 @@ namespace AutoRimmer
     //    baby.
     //    => not read. Ages come from AgeBiologicalYears / AgeChronologicalYears,
     //       which are pure division on ticks (same file).
+    //    => AND THE BABY TEST IS IN A GATE CHAIN, which is new since 2.2.
+    //       Ability.GizmoDisabled's twelfth clause is
+    //       `pawn.DevelopmentalStage.Baby()` -> "IsIncapped", and
+    //       Verse/Pawn.cs has `DevelopmentalStage =>
+    //       ageTracker?.CurLifeStage?.developmentalStage ?? Adult` — straight
+    //       through this getter. An ACT verb may call it (the widget does, so
+    //       the player's click does); the `abilities` OBSERVER may not, and
+    //       calls Baby() below instead, which reads the cached index through a
+    //       field ref and, only when it is stale, RE-DERIVES the index from
+    //       RaceProps.lifeStageAges the way RecalculateLifeStageIndex does —
+    //       without the write, the rename or the component churn.
     //
     //  * Pawn_RelationsTracker.OpinionOf — RimWorld/Pawn_RelationsTracker.cs ->
     //    ThoughtHandler.TotalOpinionOffset -> SituationalThoughtHandler
@@ -158,6 +169,30 @@ namespace AutoRimmer
     //    read instead.
     //  * Pawn.GetDisabledWorkTypes returns THE cached list (Verse/Pawn.cs).
     //    Read, never retained, never mutated.
+    //  * Pawn_AbilityTracker.AllAbilitiesForReading — RimWorld/
+    //    Pawn_AbilityTracker.cs, and it is the worst of this class. On
+    //    `allAbilitiesCachedDirty` the GETTER does `allAbilitiesCached.Clear();
+    //    AddRange(abilities);` and then appends hediff, equipment, apparel,
+    //    mutant, royalty and ideo-role abilities — and in the Anomaly
+    //    mutant-whitelist branch it REASSIGNS the field to a brand-new list
+    //    (`allAbilitiesCached = allAbilitiesCached.Where(...).ToList()`). It
+    //    returns the LIVE internal list either way. Anything during an
+    //    enumeration that fires Notify_TemporaryAbilitiesChanged() — a hediff
+    //    added or removed, an equipment or apparel swap, an ideo role change —
+    //    and then re-reads the property CLEARS the collection under the
+    //    `foreach`: the Collection-was-modified bug 2.1 shipped live. A stored
+    //    reference goes stale SILENTLY rather than throwing, because the
+    //    whitelist branch swaps the object out from under it.
+    //    => Abilities() below: ONE read of the property, copied into our own
+    //       List, and the copy is what every caller iterates. Same technique
+    //       PawnVerbs uses on AllPawnsSpawned. Nothing here retains the
+    //       game's list across a call.
+    //    => `AICastableAbilities` returns the shared `tmpAbilities` FIELD and
+    //       is cleared on the next call by anyone; never read, never held.
+    //    => `pawn.abilities.abilities` (the plain public field) IS eagerly
+    //       initialised and safe to read, and it is still the WRONG list: it
+    //       holds only innate/learned abilities and misses everything the
+    //       property appends. Correctness, not safety, is why it is not used.
     //
     // ------------- CLASS F: WRITES A MEMO, NOT GAME STATE -------------------
     // Accepted deliberately; see the resolution comment on git-bug 69ae91f.
@@ -469,6 +504,131 @@ namespace AutoRimmer
             if (!pawn.Spawned || pawn.Map != map) return true;
             try { return pawn.Position.Fogged(map); }
             catch { return true; }
+        }
+
+        // ---- Class E: the ability list, snapshotted ------------------------
+        // git-bug ae84a07. Pawn_AbilityTracker.AllAbilitiesForReading rebuilds
+        // and returns its LIVE internal list (see the Class E entry above), and
+        // in the Anomaly mutant-whitelist branch it replaces the list object
+        // outright. ONE read, copied; the copy is what callers iterate, and no
+        // reference to the game's list survives this method.
+        //
+        // The rebuild itself is the game's own dirty-flag fill — the same one
+        // Pawn_AbilityTracker.AbilitiesTick and GetGizmos trigger every tick a
+        // pawn is selected — so this does not create state, it only declines to
+        // hold the container. `abilities.abilities` is NOT a substitute: it
+        // misses hediff, equipment, apparel, mutant, royalty and role
+        // abilities, which is most of what a psycaster has.
+        //
+        // A null tracker, a null list and a throwing modded getter all degrade
+        // to an EMPTY list rather than taking the verb down; `ok` says which,
+        // so "has none" and "could not ask" stay distinguishable.
+        public static List<Ability> Abilities(Pawn pawn, out bool ok)
+        {
+            ok = true;
+            var copy = new List<Ability>();
+            if (pawn == null || pawn.abilities == null) return copy;
+            try
+            {
+                var live = pawn.abilities.AllAbilitiesForReading;
+                if (live == null) return copy;
+                for (int i = 0; i < live.Count; i++)
+                    if (live[i] != null) copy.Add(live[i]);
+            }
+            catch (Exception e)
+            {
+                ok = false;
+                copy.Clear();
+                Journal.EmitWarning("abilities: AllAbilitiesForReading failed: " + e.Message);
+            }
+            return copy;
+        }
+
+        public static List<Ability> Abilities(Pawn pawn)
+        {
+            bool ignored;
+            return Abilities(pawn, out ignored);
+        }
+
+        // ---- Class C: the baby test, without the recalculation --------------
+        // Ability.GizmoDisabled clause 12 is `pawn.DevelopmentalStage.Baby()`,
+        // and Verse/Pawn.cs routes that through Pawn_AgeTracker
+        // .CurLifeStageIndex, which on a stale cache RENAMES THE PAWN and
+        // adds/removes components (Class C above). An act verb may call it —
+        // the widget does, so the player's click does; the `abilities` observer
+        // may not.
+        //
+        // The substitute answers the same question two ways, cheapest first:
+        //   "cached"      the tracker's `cachedLifeStageIndex` is already >= 0,
+        //                 so the getter would have returned it untouched. Same
+        //                 answer, no recalculation.
+        //   "re-derived"  the cache is stale. Reproduce Pawn_AgeTracker
+        //                 .RecalculateLifeStageIndex's SELECTION — humanlike
+        //                 compares AgeBiologicalYears, everything else lerps
+        //                 Growth across the last lifeStageAge's minAge, then
+        //                 scans lifeStageAges backwards for the first
+        //                 `minAge <= age + 1E-06f` — and skips every one of its
+        //                 side effects. `lockedLifeStageIndex` wins where it is
+        //                 set, as it does in the original.
+        //   "unavailable" neither route worked. Reported as NOT a baby, because
+        //                 inventing a refusal is worse than missing one, and
+        //                 the caller is handed the source so the row can say
+        //                 the clause was not evaluated.
+        public static bool Baby(Pawn pawn, out string source)
+        {
+            source = "unavailable";
+            var tracker = pawn == null ? null : pawn.ageTracker;
+            if (tracker == null || pawn.RaceProps == null) return false;
+            var stages = pawn.RaceProps.lifeStageAges;
+            if (stages == null || stages.Count == 0) return false;
+            EnsureLifeStageRefs();
+
+            int idx = -1;
+            try { if (cachedLifeStageIndexRef != null) idx = cachedLifeStageIndexRef(tracker); }
+            catch { idx = -1; }
+            if (idx >= 0 && idx < stages.Count) source = "cached";
+            else
+            {
+                idx = -1;
+                try { if (lockedLifeStageIndexRef != null) idx = lockedLifeStageIndexRef(tracker); }
+                catch { idx = -1; }
+                if (idx < 0 || idx >= stages.Count)
+                {
+                    try
+                    {
+                        float age = pawn.RaceProps.Humanlike
+                            ? tracker.AgeBiologicalYears
+                            : UnityEngine.Mathf.Lerp(0f, stages[stages.Count - 1].minAge, tracker.Growth);
+                        for (int i = stages.Count - 1; i >= 0; i--)
+                            if (stages[i].minAge <= age + 1E-06f) { idx = i; break; }
+                        if (idx < 0) idx = 0;
+                    }
+                    catch { return false; }
+                }
+                source = "re-derived";
+            }
+            try
+            {
+                var stage = stages[idx];
+                var def = stage == null ? null : stage.def;
+                if (def == null) { source = "unavailable"; return false; }
+                return def.developmentalStage.Baby();
+            }
+            catch { source = "unavailable"; return false; }
+        }
+
+        private static bool lifeStageRefsTried;
+        private static AccessTools.FieldRef<Pawn_AgeTracker, int> cachedLifeStageIndexRef;
+        private static AccessTools.FieldRef<Pawn_AgeTracker, int> lockedLifeStageIndexRef;
+
+        private static void EnsureLifeStageRefs()
+        {
+            if (lifeStageRefsTried) return;
+            lifeStageRefsTried = true;
+            try { cachedLifeStageIndexRef = AccessTools.FieldRefAccess<Pawn_AgeTracker, int>("cachedLifeStageIndex"); }
+            catch (Exception e) { Journal.EmitWarning("abilities: cachedLifeStageIndex field ref failed: " + e.Message); }
+            try { lockedLifeStageIndexRef = AccessTools.FieldRefAccess<Pawn_AgeTracker, int>("lockedLifeStageIndex"); }
+            catch (Exception e) { Journal.EmitWarning("abilities: lockedLifeStageIndex field ref failed: " + e.Message); }
         }
 
         // ------------------------ small helpers ------------------------------

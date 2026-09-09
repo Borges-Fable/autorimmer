@@ -5047,3 +5047,87 @@ queue by default (an agent flailing mid-experiment must not page triage).
   nobody, the 4087644 defect class exactly. Seating those two private fields is
   git-bug 826d4bf, which is now a strict dependent of this route rather than a
   second copy of it.
+- 2026-09-09 — **`abilities` / `ability-cast` (git-bug `ae84a07`).**
+  `Pawn_AbilityTracker` and `Pawn_PsychicEntropyTracker` were unreached by any
+  of the 139 verbs: an ability a pawn HAD could not be used, and no verb
+  published psylink level, psyfocus or entropy, so an agent could not see that
+  a colonist was a psycaster at all.
+
+  **The read ships as its own verb, and `pawn` gains no section.** All 13
+  entries of `PawnSerializer.AllSections` are gate-free descriptions of state;
+  every gate-EVALUATING discovery surface in the tree is already a separate
+  verb paired with an act verb (`surgery-options`/`surgery-add`,
+  `bill-options`/`bill-add`, `orders`/`prioritize`,
+  `comms-targets`/`comms-call`). A section also cannot take a TARGET, and
+  eleven of the thirty gate clauses need one. `pawn` fills every section by
+  default, so an ability section would put a nineteen-clause × N-abilities
+  evaluation — two `PsycastUtility` job-queue walks and several `GetStatValue`
+  calls among them — on every `pawn <id>` call in a run.
+
+  **The gate chain is thirty clauses, each with its own name.** Nineteen at the
+  gizmo layer: three visibility clauses in `Pawn_AbilityTracker.GetGizmos` /
+  `Ability.GetGizmos` that the issue's own enumeration does not carry (a gizmo
+  that is never drawn cannot be clicked), the five in `Psycast.GizmoDisabled`
+  and the eleven in `Ability.GizmoDisabled`. Eleven at the target layer:
+  `TargetingParameters.CanTarget`, the five of
+  `Verb_CastAbility.ValidateTarget`, the four of
+  `Verb_CastPsycast.ValidateTarget`, and `Ability.CanApplyOn` — the clause
+  `QueueCastingJob` itself gates on and the one that fails SILENTLY.
+
+  **`Ability.CanCast` is not the gate, and using it would have shipped a real
+  bug.** It is an `AcceptanceReport`, not a bool, and `Psycast` overrides it
+  with two mutually exclusive branches: an ability with any entropy gain never
+  has its psyfocus checked there at all. Only `GizmoDisabled` and
+  `Verb_CastPsycast.ValidateTarget` check both, which is why the chain is
+  reproduced clause by clause and `CanCast` appears only as one of the
+  nineteen.
+
+  **`AllAbilitiesForReading` is PawnSafe Class E and now has a guarded route.**
+  It rebuilds on read, returns the game's LIVE list, and in the Anomaly
+  mutant-whitelist branch replaces the list object outright.
+  `PawnSafe.Abilities` takes one snapshot into our own List; nothing retains
+  the game's container. `pawn.abilities.abilities` is safe and is still the
+  wrong list — it misses hediff, equipment, apparel, mutant, royalty and
+  role abilities, which is most of what a psycaster has.
+
+  **The observer/act split runs through clause B12.**
+  `pawn.DevelopmentalStage.Baby()` routes through
+  `Pawn_AgeTracker.CurLifeStageIndex`, which on a stale cache renames the pawn
+  and runs `AddAndRemoveDynamicComponents` (Class C). `abilities` evaluates it
+  through the new `PawnSafe.Baby`, which reads the cached index through a field
+  ref and re-derives it without the write when it is stale, publishing which
+  route answered; `ability-cast` calls the game's own `Ability.GizmoDisabled`
+  as its final authority — which is what the player's click does, and which is
+  also how a modded subclass's override still refuses.
+
+  **The act reproduces `QueueCastingJob`'s callback rather than calling it.**
+  That method returns void, fails silently on `!CanQueueCast || !CanApplyOn`,
+  and wraps its take in `ShowCastingConfirmationIfNeeded`, which for a def with
+  `confirmationDialogText` does `Find.WindowStack.Add` and takes no job — a
+  force-pausing window that halts every subsequent `advance` at 0 ticks.
+  `Ability.GetJob` is public, so the smallest reproduction that has the missing
+  parameters (the confirmation, and `requestQueueing`, which
+  `TryTakeOrderedJob` otherwise only ever reads from live keyboard state) is
+  `TryTakeOrderedJob(GetJob(target, dest), JobTag.Misc)`. The confirmation text
+  is published instead of shown. The one exception is
+  `verbProps.nonInterruptingSelfCast`, where the game itself takes no job and
+  returns BEFORE the confirmation check: there the verb calls
+  `ability.QueueCastingJob` because that branch provably cannot open a window,
+  and reproducing it would mean going around the game rather than through it.
+  Nothing calls `Ability.Activate` or `verb.TryStartCastOn` directly — both
+  skip the job, the warmup and `WarmupTick`'s per-tick re-validation, and the
+  mod under test on this bench treats the cast job as its multiplayer sync
+  boundary.
+
+  **`EffectComps` is touched once before anything trusts `CanApplyOn`.**
+  `Ability.CanApplyOn(LocalTargetInfo)` iterates the PRIVATE `effectComps`
+  field, so on a freshly loaded save it skips every comp silently and returns
+  true; `Verb_CastAbility.ValidateTarget` gates on `Valid` and never calls
+  `CanApplyOn` at all, so the two are never both called. Both verbs read the
+  public property once (the same thing drawing the ability's tooltip does) and
+  then check `CanApplyOn` and `Valid` under separate gate names.
+
+  **WHAT IS NOT DISCHARGED.** Nothing here has been in front of a game — a
+  worker may not launch one. `accept/ae84a07-abilities.md` carries the bench
+  checks as a numbered command list and stays open until the orchestrator has
+  run it.
