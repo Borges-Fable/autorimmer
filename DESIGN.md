@@ -5246,3 +5246,98 @@ queue by default (an agent flailing mid-experiment must not page triage).
   list — including the absent-mod phase and the one that costs up to 2,500
   ticks of `advance`, because the sweep is hourly and a same-call assertion
   would fail on a correct implementation.
+
+- 2026-09-09 — **`interact` is a separate verb on a separate comp root, and its
+  "target" is the pawn — so git-bug `826d4bf` has no counterpart here.**
+  (git-bug 70c1f9e; the shared route is `Source/AutoRimmer/InteractableSafe.cs`,
+  the verbs are `InteractVerbs.cs`.) The filing was written from live play and
+  its chain was transcribed from the decompiled source; four things in it are
+  wrong or incomplete and are corrected here rather than left to the next
+  reader.
+
+  **There is no `TryInteract`.** The re-checking method is
+  `CompInteractable.Interact(Pawn caster, bool force = false)`, and it runs in
+  the LAST toil of `JobDriver_InteractThing`, not at order time. It really does
+  ask a different question — `checkOptionalItems: false` — but the reason is
+  mechanical: the toil immediately above it does
+  `pawn.carryTracker.DestroyCarriedThing()`, so the optional item is already
+  spent and an optional-item check would refuse the interaction it was carried
+  for. Only `CompObeliskDeactivationInteractor` and `CompGoldenCube` read the
+  parameter, both for Shards; the base method ignores it entirely. Modelled as
+  its own concept (`Refusals` takes it, `optional_items` publishes both passes
+  when a type actually reads it), never collapsed into the re-check.
+
+  **The chain does not stop at line 206.** Past `Deathresting` there are exactly
+  two more clauses — `!CapableOf(Manipulation)` and
+  `!CanReach(parent.SpawnedParentOrMe, ClosestTouch, Deadly)` — and the first of
+  them inverts the `use` surface's ruling: on `CompUsable` manipulation is an
+  ADVISORY because the check lives inside `JobDriver_UseItem` while the float
+  menu's `RequiresManipulation` is false; here it is IN `CanInteract`, so the
+  game's own option is disabled and so is ours. Clause 3's message is
+  `refuelable.Props.outOfFuelMessage`, off the REFUELABLE's props — there is no
+  such field on `CompProperties_Interactable`. Seventeen clauses ship, twelve
+  from the base and five from the `CompAnalyzable` family.
+
+  **`Targetable => true` does not mean the interaction is aimed at something.**
+  `CompInteractable.OrderForceTarget(LocalTargetInfo target)` does
+  `target.Pawn.jobs.TryTakeOrderedJob(...)`; `ValidateTarget` refuses
+  `target.Pawn == null`; `OnGUI`'s cursor label is `"ChooseWhoShouldActivate"`
+  (the chips override it to "Choose who should analyze this"). The target IS the
+  activator, so `interact {pawn, thing}` is already the targeted form and there
+  is nothing for a `target` argument to mean. The verb REFUSES a stray `target`
+  key with that said out loud, because a caller reading the issue would supply
+  one. The real second-targeter cases — `CompNociosphere`'s destination cell,
+  `CompInteractableRocketswarmLauncher`'s attack target — are refused by ROUTE
+  instead.
+
+  **`OrderForceTarget` is virtual and the route is what gets refused, not the
+  gate.** Seven vanilla classes override it, so "make an InteractThing job" is
+  one route among several. The route is selected off the DECLARING TYPE of the
+  override by reflection — never a class-name string, so a modded
+  `CompAnalyzable` subclass that does not re-override still analyses — and only
+  two are driven: the base (`JobDefOf.InteractThing`) and `CompAnalyzable`'s
+  (`JobDefOf.AnalyzeItem`, with the bench as TargetB and its cell as TargetC).
+  Everything else is refused with gate `unsupported-route` and a per-class
+  reason read off the source: `CompGoldenCube` opens a `Dialog_MessageBox`
+  confirmation (the exact `d318d4a` wedge, and `dialog-choose` cannot answer a
+  `Dialog_MessageBox`); `CompNociosphere` and the rocketswarm launcher arm
+  `Find.Targeter`; `CompObeliskDeactivationInteractor` hauls Shards as a
+  `targetQueueB` with `job.interactableIndex = 1`; `CompLabyrinthDoor` and
+  `CompDisableUnnaturalCorpse` make a plain InteractThing job but gate their
+  float menu on a class-specific widget precondition
+  (`Building_JammedDoor.Jammed`, `UnnaturalCorpse.Tracker.CanDestroyViaResearch`)
+  that has not been verified in play. Naming what is not driven beats guessing:
+  reproducing the job without the precondition would offer an order the player
+  is not offered, which is the `261f2e9` error facing outward.
+
+  **The un-forbid happens AFTER the gate, which is the opposite of `use`.**
+  `UsableSafe` un-forbids before ordering because no forbidden clause exists
+  anywhere on the `CompUsable` route. Here clauses 7 and 8 are IN the gate —
+  and they are two different questions, `IntVec3.IsForbidden(Pawn)` (allowed
+  area) and `Thing.IsForbidden(Pawn)` (the forbid flag), with two different
+  strings — so a forbidden chip and an undrafted pawn is a refusal the player
+  gets too. `CompAnalyzable.OrderForceTarget` clears `CompForbiddable` only
+  after `ValidateTarget` has passed, and so does this verb; clearing it first
+  would fabricate a permission. Both clauses skip on `Drafted` or
+  `Props.ignoreForbidden`, and both escapes ride on the refusal row so the agent
+  reads them off the reply rather than off this file.
+
+  **No modal is opened, but the analyze route still stops the advance.**
+  Checked, not assumed: neither driven route calls `Find.WindowStack.Add`, and
+  `CompAnalyzable.OnAnalyzed` ends in `Find.LetterStack.ReceiveLetter` — a
+  LETTER. That is a NEWS halt, not a dialog: nothing needs dismissing, but
+  `advance` stops unless `through_news` is passed, and it stops DURING the
+  advance that completes the analysis. Published as `advance_halt` at order
+  time. `CompVoidNode` and `CompCerebrexCore` take the base route and DO raise a
+  `Dialog_NodeTree`; both get an `advance_halt` naming `dialog-choose`.
+
+  **A thing with more than one `CompInteractable` is refused, not resolved.**
+  The void obelisk carries both a trigger and a deactivation comp, and vanilla
+  tells them apart by which GIZMO was clicked (`job.interactableIndex`;
+  `JobDriver_InteractThing` falls back to the FIRST comp at -1). A verb has no
+  click, so `ambiguous-interactable` names the classes instead of guessing.
+
+  **WHAT IS NOT DISCHARGED.** No bench, and a worker may not launch one.
+  `accept/70c1f9e-interact.md` carries the checks as a numbered command list,
+  ending with the chain the run needs: buy a `SignalChip`, `interact`, advance
+  through the letter, `research-set {project:"StandardMechtech"}` -> `ok:true`.
