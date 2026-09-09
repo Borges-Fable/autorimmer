@@ -11,6 +11,45 @@ namespace AutoRimmer
     // trees (Dictionary<string,object> / List<object> / string / double / bool /
     // null) instead of hand-assembling JSON per result shape. No external
     // packages, no Unity JsonUtility (avoids an extra module reference).
+    //
+    // ==================================================== git-bug 4950f14 ===
+    // WHAT THE WRITER CAN REPRESENT. Stated here in full because two authors
+    // have now had to discover it by experiment, and the second one shipped:
+    //
+    //   null | bool | string | int | long | float | double  -> JSON scalars
+    //   Dictionary<string, object>                          -> JSON object
+    //   List<object>                                        -> JSON array
+    //   IEnumerable<string>                                 -> JSON array of
+    //       strings (string[], List<string>, HashSet<string>, a LINQ Select)
+    //
+    // THERE IS NOTHING ELSE. Every other type is a VALUE to this writer, not a
+    // container, and is written as its ToString() inside a JSON string. The
+    // shapes that look like they must work and do not:
+    //
+    //   List<Dictionary<string, object>>   -- `case List<object>` is a CLOSED
+    //                                         type match; this is not it
+    //   Dictionary<string, int>            -- likewise, and the same trap
+    //   List<int>, int[], HashSet<IntVec3> -- likewise
+    //   any Verse collection               -- likewise
+    //
+    // So a list that is going into an envelope is DECLARED `List<object>`
+    // (`EnclosureReport` in PlaceVerbs.cs), or converted where it enters one
+    // (`new List<object>(rows)`, DesignateReach.cs). Getting that wrong used
+    // to be silent: `construction {id}`'s `gaps` shipped as the string
+    // "System.Collections.Generic.List`1[...]" for a whole run, in the one
+    // field that says WHERE a room leaks. The default arm below is loud now.
+    //
+    // WHY THERE IS NO GENERAL `IEnumerable` ARM, which would also have closed
+    // 4950f14. It would have to enumerate whatever it is handed, and Write
+    // runs on the POLLER thread (`Runtime.Result.Data` is, in its own words,
+    // "serialized off-thread"). Enumerating a Verse collection there is Verse
+    // access from the file half of the bridge, which this project forbids
+    // outright; and Verse enumerables are not all inert reads -- some traverse
+    // regions or rebuild a cache on iteration, and one mutated mid-enumeration
+    // throws InvalidOperationException, which would end "the writer must never
+    // throw" two lines after it is asserted. `ToString()` on the default arm
+    // is ONE call, already wrapped; enumeration is an unbounded amount of game
+    // code. The writer stays narrow and says so out loud instead.
     public static class MiniJson
     {
         public static string J(string s)
@@ -39,9 +78,14 @@ namespace AutoRimmer
         // StackOverflowException, which no try/catch in .NET can catch.
         private const int MaxDepth = 64;
 
-        public static void Write(StringBuilder sb, object value) => Write(sb, value, 0);
+        public static void Write(StringBuilder sb, object value) => Write(sb, value, 0, null);
 
-        private static void Write(StringBuilder sb, object value, int depth)
+        // `key` is the nearest enclosing object key, carried purely so the
+        // default arm can NAME the field it could not represent. Elements
+        // inherit their container's key rather than building "gaps[3]": the
+        // reader needs the field to go and fix, and an index would make every
+        // element a distinct warning text and defeat Journal's dedupe.
+        private static void Write(StringBuilder sb, object value, int depth, string key)
         {
             if (depth > MaxDepth)
             {
@@ -67,7 +111,7 @@ namespace AutoRimmer
                         first = false;
                         AppendString(sb, kv.Key);
                         sb.Append(':');
-                        Write(sb, kv.Value, depth + 1);
+                        Write(sb, kv.Value, depth + 1, kv.Key);
                     }
                     sb.Append('}');
                     break;
@@ -78,7 +122,7 @@ namespace AutoRimmer
                     for (int idx = 0; idx < list.Count; idx++)
                     {
                         if (idx > 0) sb.Append(',');
-                        Write(sb, list[idx], depth + 1);
+                        Write(sb, list[idx], depth + 1, key);
                     }
                     sb.Append(']');
                     break;
@@ -93,20 +137,56 @@ namespace AutoRimmer
                     {
                         if (!first) sb.Append(',');
                         first = false;
-                        Write(sb, s, depth + 1);
+                        Write(sb, s, depth + 1, key);
                     }
                     sb.Append(']');
                     break;
                 }
                 default:
                 {
+                    // THIS ARM IS THE SAFETY NET, NOT A FEATURE (git-bug
+                    // 4950f14). Reaching it means the tree carried a type this
+                    // writer has no shape for, and what lands in the envelope
+                    // is a ToString() — usually a .NET type name — sitting in
+                    // the JSON string position, which a consumer reads as a
+                    // plausible answer. `construction`'s `gaps` shipped that
+                    // way beside a `first_gap` that was correct, so a caller
+                    // reading one field saw the truth and a caller reading the
+                    // other saw a type name. That divergence is worse than a
+                    // uniform failure, and it survived because nothing said a
+                    // word.
+                    //
+                    // So say a word. Journal.EmitWarning dedupes on the exact
+                    // text, so this is ONE line per (type, key) per session no
+                    // matter how many elements or how many polls — and it is
+                    // re-entrancy safe by construction: when Write is called
+                    // from inside Journal.Emit, Emit's [ThreadStatic]
+                    // `emitting` guard drops this one rather than claiming a
+                    // seq out of order. Journal-only, deliberately: Verse's
+                    // Log is main-thread, and Write runs on the poller.
+                    //
+                    // Type.ToString(), not FullName: for a generic it is the
+                    // short form, which is EXACTLY the text that just landed in
+                    // the envelope, so the reader can match the warning to the
+                    // garbage they are looking at. FullName is the 700-character
+                    // assembly-qualified spelling of the same thing.
+                    var type = value.GetType();
+                    Journal.EmitWarning(
+                        "minijson: no JSON representation for " + type
+                        + " at key " + (key == null ? "(root)" : "'" + key + "'")
+                        + " — its ToString() was written as a JSON string, which a "
+                        + "consumer cannot tell from an answer. Representable "
+                        + "containers are Dictionary<string,object>, List<object> and "
+                        + "IEnumerable<string>; declare or convert at the source "
+                        + "(`new List<object>(rows)`). See MiniJson.cs's header.");
+
                     // A Verse object's ToString() is arbitrary game code and
                     // can throw or return null. Losing the whole result — and,
                     // before 1.5, the rest of the poller cycle with it — over
                     // one field is not a trade worth making.
                     string s;
                     try { s = value.ToString(); }
-                    catch (Exception e) { s = "<autorimmer: " + value.GetType().Name + ".ToString() threw " + e.GetType().Name + ">"; }
+                    catch (Exception e) { s = "<autorimmer: " + type.Name + ".ToString() threw " + e.GetType().Name + ">"; }
                     AppendString(sb, s);
                     break;
                 }

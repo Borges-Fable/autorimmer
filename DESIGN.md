@@ -4083,3 +4083,51 @@ queue by default (an agent flailing mid-experiment must not page triage).
   through those same validators — is deliberately not in this change.** It is a
   play decision rather than an un-wedging, and it is filed separately; accepting
   the generated name is what makes an unattended run possible today.
+
+- 2026-09-09 — **MiniJson stays NARROW and gets LOUD; it does not grow a general
+  `IEnumerable` arm** (git-bug `4950f14`). `construction {id}`'s `gaps` shipped
+  for a whole run as the string
+  `"System.Collections.Generic.List`1[...Dictionary`2[System.String,System.Object]]"`
+  because `EnclosureReport.Gaps` was declared `List<Dictionary<string, object>>`
+  and `MiniJson.Write` matches `case List<object>` — a CLOSED type. It fell to
+  the default arm and was `ToString()`'d into the JSON string position, beside a
+  `first_gap` that was correct because a lone `Dictionary` serializes fine. A
+  caller reading one field saw the truth and a caller reading the other saw a
+  type name; that divergence is worse than a uniform failure, and nothing said a
+  word about it. Same class as `eef837a`'s absent-vs-null `ingredient_filter`:
+  the envelope looks answered and is not.
+
+  The issue offered two closures and **the general `IEnumerable` arm is
+  REFUSED.** It would have to enumerate whatever it is handed, and `Write` runs
+  on the POLLER thread (`Runtime.Result.Data`: "serialized off-thread").
+  Enumerating a Verse collection there is Verse access from the file half of the
+  bridge, which this document's own architecture rule forbids outright — and
+  Verse enumerables are not all inert reads: some traverse regions or rebuild a
+  cache on iteration, and one mutated mid-enumeration throws
+  `InvalidOperationException`, ending "the writer must never throw" (the
+  invariant `4b65a28` bought) in the one place that owes every command exactly
+  one result file. `ToString()` on the default arm is ONE already-wrapped call;
+  enumeration is an unbounded amount of game code. A clever general case that
+  changes an envelope nobody is looking at is worth less than a warning that
+  surfaces the next occurrence.
+
+  So: the default arm now emits `Journal.EmitWarning` naming the offending TYPE
+  and the KEY it sat under, before writing the `ToString()` as it always did.
+  `Write` carries the nearest enclosing object key for that and nothing else;
+  elements inherit their container's key rather than building `gaps[3]`, because
+  the reader needs the field to go and fix and an index would give every element
+  a distinct text and defeat Journal's per-text dedupe. It is re-entrancy safe
+  by construction — called from inside `Journal.Emit`, `Emit`'s `[ThreadStatic]
+  emitting` guard drops the warning rather than claiming a seq out of order —
+  and journal-only, deliberately, since Verse's `Log` is main-thread. Output is
+  bit-identical for every value that serialized correctly before; the only
+  change to any envelope is `gaps`, fixed at its declaration.
+
+  **A list bound for an envelope is declared `List<object>`.** `Gaps` now is,
+  matching `RoofHoles` and `Rooms` two lines below it in the same class.
+  `DesignateReach`'s `new List<object>(v.Unreadable.ToArray())` STAYS and is
+  commented as load-bearing rather than vestigial: without the general arm it is
+  the thing standing between that field and the same defect. `MiniJson`'s header
+  now lists what the writer can represent, and what it cannot, in full — the
+  survey found eight declarations of the trap type and two authors who had
+  already discovered the rule by experiment.

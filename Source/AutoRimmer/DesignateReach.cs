@@ -455,6 +455,15 @@ namespace AutoRimmer
             if (v.Unreadable.Count > 0)
             {
                 // Named, never silently folded either way — see the roster.
+                //
+                // THE CONVERSION IS LOAD-BEARING, NOT VESTIGIAL. `Unreadable`
+                // is a `List<Dictionary<string, object>>`, which MiniJson does
+                // not represent — handing it to the envelope directly emits
+                // the .NET type name as a JSON string, which is exactly the
+                // defect git-bug 4950f14 closed one file over. Kept rather than
+                // replaced by a general `IEnumerable` arm in the writer: that
+                // arm would have to enumerate off the poller thread, and the
+                // reasons it does not exist are in MiniJson.cs's header.
                 d["unreadable_pawns"] = new List<object>(v.Unreadable.ToArray());
             }
 

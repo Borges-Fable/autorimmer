@@ -1174,7 +1174,18 @@ namespace AutoRimmer
         public bool? Enclosed;
         public bool? UsesOutdoorTemp;
 
-        public readonly List<Dictionary<string, object>> Gaps = new List<Dictionary<string, object>>();
+        // `List<object>`, like the two below it, because these three go
+        // STRAIGHT into the envelope and `List<object>` is what MiniJson
+        // represents as a JSON array. Declared `List<Dictionary<string,
+        // object>>`, this one matched no case in MiniJson.Write, fell to the
+        // default arm and shipped as the string
+        // "System.Collections.Generic.List`1[...]" — a .NET type name in the
+        // one field that says WHERE the room leaks, sitting beside a
+        // `first_gap` that was correct because a lone Dictionary serializes
+        // fine (git-bug 4950f14). The element shape is documented on the Add
+        // site and asserted by accept/a1644d6-enclosure.py, not by this
+        // declaration; MiniJson.cs's header lists what is representable.
+        public readonly List<object> Gaps = new List<object>();
         public readonly List<object> RoofHoles = new List<object>();
         public readonly List<object> Rooms = new List<object>();
 
