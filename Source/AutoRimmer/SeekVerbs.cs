@@ -711,7 +711,13 @@ namespace AutoRimmer
         //
         //   area       REQUIRED in write mode — an area id, an area label, or
         //              null/"none"/"unrestricted" to DECLARE unrestricted.
-        //   pawns      default the whole colonist roster ("colonists").
+        //   pawns      REQUIRED in write mode (git-bug c519477) — ids or names,
+        //              `pawn` for one, or the literal "colonists" to say
+        //              colony-wide DELIBERATELY. It defaults to the whole
+        //              roster on a PURE READ only. See the scope block in the
+        //              handler for the widget citations; the short version is
+        //              that two of the three levers have no colony-wide widget
+        //              at all and the third needs a shift-click.
         //   seek       true (default) | false | "auto" — "auto" is
         //              `seek-at-will`'s shipped skill rule, which is the thing
         //              that would have kept three unarmed colonists home on M1
@@ -995,24 +1001,69 @@ namespace AutoRimmer
         // ------------------------------------------------------------------
         // posture {area, pawns?, seek?, hostility?, dry_run?, allow_empty_area?}
         // ------------------------------------------------------------------
+        // The verb's own argument list, written beside the code that reads it,
+        // so `RefuseStray` can PRINT what `posture` takes. MESSAGE-ONLY, like
+        // the three fixture verbs' lists: the detection is VerbArgs' read log,
+        // which consults this not at all, so its drift mode is a worse sentence
+        // and never a refused legitimate call.
+        private static readonly string[] PostureArgs =
+            { "allow_empty_area", "area", "dry_run", "hostility", "pawn", "pawns", "seek" };
+
+        // The bundle's own declared order — `posture {area, pawns?, seek?,
+        // hostility?}` — which is the order `levers` has always published.
+        // Named once so the envelope and the journal cannot drift apart.
+        private static readonly string[] LeverOrder = { "area", "seek", "hostility" };
+
+        // "'area'" / "'area' and 'seek'" / "'area', 'seek' and 'hostility'".
+        private static string LeverList(List<object> names)
+        {
+            if (names == null || names.Count == 0) return "nothing";
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < names.Count; i++)
+            {
+                if (i > 0) sb.Append(i == names.Count - 1 ? " and " : ", ");
+                sb.Append('\'').Append(names[i]).Append('\'');
+            }
+            return sb.ToString();
+        }
+
         [Verb("posture")]
         public static object Posture(VerbContext ctx)
         {
             var map = Map();
             var a = ctx.Args;
+
+            // PRE-MUTATION, BEFORE THE FIRST LEVER IS EVEN PARSED (git-bug
+            // c519477). `posture` is git-bug 7382bdd comment #7's own shape —
+            // a verb that mutates DIFFERENTLY when a key is dropped — and it
+            // is the one where the run proved the cost: `pawns` absent reached
+            // seven colonists and unbound all of them (audit F-S12-10). A
+            // MISSPELLED `pawns` is that same call, so the general
+            // report-after-the-fact rule is overridden here exactly as the
+            // three fixture verbs override it, and for the same reason.
+            a.RefuseStray("posture", PostureArgs,
+                "Nothing was written. `posture` sets three settings at once, so a key it "
+                + "cannot read is a lever — or a SCOPE — you believe you passed and did not.");
+
             bool dryRun = a.Bool("dry_run", false);
 
             bool wantArea = a.Has("area");
             bool wantSeek = a.Has("seek");
             bool wantHostility = a.Has("hostility");
             bool readOnly = !wantArea && !wantSeek && !wantHostility;
+            bool scoped = a.Has("pawns") || a.Has("pawn");
 
-            // `pawns` defaults to the whole roster: the posture is a property of
-            // the COLONY, and a per-pawn default would make "did I do all of
-            // them" the caller's problem again.
-            var pawns = a.Has("pawns") || a.Has("pawn")
-                ? PawnList(map, a)
-                : PawnList(map, new VerbArgs(new Dictionary<string, object> { ["pawns"] = "colonists" }));
+            // A PURE READ still defaults to the whole roster — "what is our
+            // posture" is a question about the COLONY and answering it writes
+            // nothing. The WRITE path does not: see the refusal below, which
+            // fires after the levers are parsed so a malformed lever still
+            // reports its own fault first, and before the pawn loop so nothing
+            // is mutated.
+            List<Pawn> pawns = readOnly
+                ? (scoped
+                    ? PawnList(map, a)
+                    : PawnList(map, new VerbArgs(new Dictionary<string, object> { ["pawns"] = "colonists" })))
+                : null;
 
             Area area = null;
             bool areaUnrestricted = false;
@@ -1051,11 +1102,55 @@ namespace AutoRimmer
             }
             var hostility = wantHostility ? Hostility(a.Str("hostility")) : HostilityResponseMode.Attack;
 
+            // ------------------- SCOPE IS DECLARED, NEVER INHERITED ---------
+            // git-bug c519477, and the ruling is COCKPIT.md §"Where it lives":
+            // a verb that mutates differently when a key is absent REFUSES on
+            // that key rather than choosing for the caller. Widening is never
+            // the default.
+            //
+            // THE GATE, from the game's own widgets and by member name:
+            //   * RimWorld/PawnColumnWorker_AllowedArea.DoCell paints ONE
+            //     pawn's row (AreaAllowedGUI.DoAllowedAreaSelectors(rect,
+            //     pawn)). Its ONLY all-pawns write is HeaderClicked, and that
+            //     one is gated on `Event.current.shift` and writes just Home
+            //     (button 0) or null (button 1) — the game makes colony-wide an
+            //     EXTRA, deliberate gesture, never the plain click.
+            //   * RimWorld/PawnColumnWorker_HostilityResponse overrides no
+            //     HeaderClicked at all: there is no all-pawns hostility write
+            //     in the game.
+            //   * seek is a per-pawn gizmo
+            //     (SeekAndKill/Patch_PawnGetGizmos.ShowsSeekGizmo).
+            // So two of the three levers have NO colony-wide widget and the
+            // third demands a modifier key. The old default was wider than any
+            // click a player can make, and it is what unbound seven colonists
+            // in openrun-20260902 (audit F-S12-10, theme T8).
+            if (!readOnly)
+            {
+                if (!scoped)
+                    throw new VerbArgsException(
+                        "posture writes three settings and this call names no SCOPE, so it would "
+                        + "have written them to every colonist — pass `pawns` (an array of ids or "
+                        + "names, `pawn` for one), or `pawns:\"colonists\"` to say colony-wide "
+                        + "DELIBERATELY. The game never widens by omission: "
+                        + "RimWorld/PawnColumnWorker_AllowedArea.DoCell paints ONE pawn's row and "
+                        + "its only all-pawns write (HeaderClicked) needs Event.current.shift, "
+                        + "RimWorld/PawnColumnWorker_HostilityResponse has no header write at all, "
+                        + "and seek is a per-pawn gizmo. Nothing was written. "
+                        + "Call `posture` with no levers at all for a pure read of every colonist.");
+                pawns = PawnList(map, a);
+            }
+
             var outcome = new Outcome();
             var ids = new List<object>();
             var incapable = new List<object>();
-            var levers = new List<object>();
-            if (!readOnly) { levers.Add("area"); levers.Add("seek"); levers.Add("hostility"); }
+            // WHAT THE CALLER NAMED, kept apart from what the call WROTE.
+            // `posture` is a three-lever bundle on purpose (b1b3060, not
+            // re-opened here) — so the bundle has to SAY what it added.
+            var asked = new List<object>();
+            if (wantArea) asked.Add("area");
+            if (wantSeek) asked.Add("seek");
+            if (wantHostility) asked.Add("hostility");
+            var wrote = new HashSet<string>();
 
             foreach (var p in pawns)
             {
@@ -1159,6 +1254,10 @@ namespace AutoRimmer
                 });
 
                 var after = dryRun ? before : ReadPosture(p);
+                // The result's `levers` is the UNION of these per-pawn
+                // verdicts, not the constant the bundle used to publish. Read
+                // off `applied` so the headline and the rows cannot disagree.
+                for (int i = 0; i < applied.Count; i++) wrote.Add((string)applied[i]);
                 line["applied"] = applied;
                 line["refused"] = refused;
                 line["after"] = PostureRow(after);
@@ -1180,6 +1279,24 @@ namespace AutoRimmer
                 }
             }
 
+            // ---------------- THE LEVERS THIS CALL ACTUALLY WROTE -----------
+            // git-bug c519477's second half. `levers` used to be the constant
+            // {area, seek, hostility} in every write, which is a statement of
+            // INTENT — the audit read it off the journal and could not tell a
+            // lever that landed from a lever the game refused. It is now the
+            // union of the per-pawn `applied` lists, in the bundle's own
+            // declared order, and one array records it for the envelope and
+            // the journal alike rather than two that can drift.
+            //
+            // In dry_run the delegates return before writing, so this is the
+            // set that WOULD be written; `mode:"dry-run"` is what says so.
+            var levers = new List<object>();
+            foreach (var name in LeverOrder) if (wrote.Contains(name)) levers.Add(name);
+            // What the bundle added that the caller never named — the fact the
+            // cockpit's "you also changed X" line is printed from.
+            var unasked = new List<object>();
+            foreach (var name in levers) if (!asked.Contains(name)) unasked.Add(name);
+
             long seq = (!dryRun && !readOnly)
                 ? ActOn(outcome, PostureV, "posture",
                         (areaUnrestricted ? "unrestricted" : (Safe(() => area.Label) ?? "?"))
@@ -1188,6 +1305,8 @@ namespace AutoRimmer
                         {
                             ["ids"] = ids,
                             ["levers"] = levers,
+                            ["levers_asked"] = asked,
+                            ["levers_unasked"] = unasked,
                             ["hostility"] = hostility.ToString(),
                             ["seek"] = autoSeek ? (object)"auto" : seekValue,
                         })
@@ -1197,6 +1316,15 @@ namespace AutoRimmer
             {
                 ["mode"] = readOnly ? "read" : (dryRun ? "dry-run" : "write"),
                 ["levers"] = levers,
+                ["levers_asked"] = asked,
+                ["levers_unasked"] = unasked,
+                ["also_changed"] = unasked.Count == 0 ? null
+                    : (object)("you passed " + LeverList(asked) + "; this call also "
+                        + (dryRun ? "WOULD write " : "wrote ") + LeverList(unasked)
+                        + ". `posture` is ONE state of three settings that must agree "
+                        + "(git-bug b1b3060), so the levers you did not name took their "
+                        + "defaults — read each row's `applied` for WHICH pawns and its "
+                        + "`after` for what those settings became."),
                 ["area"] = readOnly ? null
                     : (areaUnrestricted ? null : (object)Safe(() => area.Label)),
                 ["area_id"] = readOnly || areaUnrestricted ? null : (object)area.ID,
@@ -1365,7 +1493,7 @@ namespace AutoRimmer
                         + "JobGiver_ConfigurableHostilityResponse is in the HumanlikeConstant tree, "
                         + "which runs BEFORE the main tree and which SeekAndKill does not inject "
                         + "into, so `Flee` BEATS seek. `flee_risk` names every violence-capable pawn "
-                        + "in that state. Repair with `posture {area:…}`.",
+                        + "in that state. Repair with `posture {pawns:[…], area:…}`.",
                 };
             }
             catch (Exception e)

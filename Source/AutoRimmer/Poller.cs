@@ -200,6 +200,7 @@ namespace AutoRimmer
                         sink.Add(Result.Fail(id, op, Err.BadArgs, "'args' must be an object"));
                         continue;
                     }
+                    args = Underscore(args);
                 }
 
                 var verb = VerbRegistry.Get(op);
@@ -225,6 +226,54 @@ namespace AutoRimmer
                     Runtime.Pending.Enqueue(cmd);
                 }
             }
+        }
+
+        // HYPHENATED ARGUMENT KEYS ARE READ AS UNDERSCORED, here and nowhere
+        // else (git-bug c519477; the ruling is COCKPIT.md §"Where it lives",
+        // the same paragraph that generalises 7382bdd's refusal).
+        //
+        // WHY IT IS SAFE: no verb in the tree reads a hyphenated key. Every
+        // read goes through a `VerbArgs` accessor and the key is a literal at
+        // the call site, so the claim is one grep and it holds —
+        //   grep -rnE '\.(Has|Raw|Str|StrReq|Bool|Num|NumReq|Int|IntReq|Long|StrList)\("[a-z_]*-'
+        // finds nothing. The only hyphen anywhere in an argument name is
+        // `LayoutVerbs`' NearMiss ALIAS `stuff-map`, which exists precisely to
+        // catch this typo and which this rewrite now answers before it fires.
+        //
+        // WHY IT REWRITES RATHER THAN REFUSES, which is the opposite of the
+        // rule this same issue applies to STRAY keys: a hyphenated key is not
+        // an unknown argument, it is a known argument spelled the way the CLI
+        // spells it. The run's own instance is the argument for it —
+        // `build {dry-run:true}` was dropped ten times and each call placed a
+        // REAL blueprint on the default path (audit F-S10-30/J2150). Refusing
+        // would also be safe; rewriting is safe AND does what the caller
+        // plainly asked. A key that is genuinely unknown still lands on the
+        // read log, and on the five guarded verbs it is still refused.
+        //
+        // It runs on the poller thread, touches no Verse, and copies rather
+        // than mutating in place: `VerbArgs.Empty` is shared and the parsed
+        // dict is handed on to `Result.Args` for RefusalStreak.
+        private static Dictionary<string, object> Underscore(Dictionary<string, object> args)
+        {
+            bool any = false;
+            foreach (var kv in args)
+                if (kv.Key.IndexOf('-') >= 0) { any = true; break; }
+            if (!any) return args;
+
+            var copy = new Dictionary<string, object>(args.Count);
+            foreach (var kv in args) copy[kv.Key] = kv.Value;
+            foreach (var kv in args)
+            {
+                if (kv.Key.IndexOf('-') < 0) continue;
+                string under = kv.Key.Replace('-', '_');
+                // The caller sent BOTH spellings: leave the hyphenated one
+                // alone so it is reported (or refused) rather than silently
+                // overwriting the key the caller also spelled correctly.
+                if (args.ContainsKey(under)) continue;
+                copy.Remove(kv.Key);
+                copy[under] = kv.Value;
+            }
+            return copy;
         }
 
         private static void Consume(string file)

@@ -1177,9 +1177,32 @@ namespace AutoRimmer
         [Verb("carry")]
         public static object Carry(VerbContext ctx) => TakeToBed(ctx, "carry");
 
+        // The four kinds' shared argument list, beside the code that reads it,
+        // for RefuseStray's message. MESSAGE-ONLY — the detection is VerbArgs'
+        // read log, which does not consult it.
+        private static readonly string[] TakeToBedArgs =
+            { "pawn", "pawns", "queue", "target" };
+
         private static object TakeToBed(VerbContext ctx, string kind)
         {
             var map = Map();
+
+            // PRE-MUTATION (git-bug c519477). THE DESTINATION IS NOT AN
+            // ARGUMENT, and that is why a stray key here is refused rather
+            // than reported: `FindBed` picks the bed (rescue/capture/arrest)
+            // and `carry` has no destination at all, so a key the caller
+            // believes names one is dropped and the order runs to a default
+            // the caller never saw. openrun-20260902 did exactly that four
+            // times — `carry {pawn, target, to:[x,z]}`, `to` dropped, the verb
+            // ran anyway (audit F-S05-24, F-S07-8; journal J1354, J1357,
+            // J3025). One guard for all four kinds because it is one code path
+            // and one hazard.
+            ctx.Args.RefuseStray(kind, TakeToBedArgs,
+                "Nothing was ordered. There is NO destination argument on this verb: "
+                + "rescue/capture/arrest take the bed RestUtility.FindBedFor picks, and `carry` "
+                + "takes none at all — a drafted carrier holds the pawn until you move it. To "
+                + "choose the bed, free or reserve the one you want first.");
+
             var doers = PawnList(map, ctx.Args);
             var t = ThingArg(map, ctx.Args, "target");
             if (!(t is Pawn target))

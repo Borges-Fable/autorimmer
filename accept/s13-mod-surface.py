@@ -1974,6 +1974,100 @@ def phase9():
         eq_val(num, "%s's %s matches every argument the verb reads"
                % (fname, listname), declared, read)
 
+    # 9.11 THE FIVE VERBS THAT MUTATE DIFFERENTLY WHEN A KEY IS DROPPED
+    #      (git-bug c519477). 7382bdd's ruling refused a stray key on the three
+    #      fixture verbs above and reported it everywhere else; the
+    #      openrun-20260902 audit found five more verbs in the same class and
+    #      COCKPIT.md §"Where it lives" generalised the rule to all of them:
+    #      `posture` (no `pawns` meant ALL — the #2 link in the wipe's causal
+    #      chain), `alert-mute` (no `release` means MUTE, the opposite act),
+    #      `carry` (no destination means the bed FindBedFor picks),
+    #      `trade-start` (no `negotiator` means the auto-picked one), and
+    #      `build` (`dry_run` dropped means a REAL blueprint).
+    #
+    #      THE ASSERTION IS A SUPERSET, not the equality 9.10 uses, and the
+    #      direction is the point: a key the verb READS but does not DECLARE
+    #      would be refused on a legitimate call, which is the one drift that
+    #      costs a run. A declared key that goes unread costs nothing but a
+    #      longer sentence. Three of the five read their keys through shared
+    #      helpers (`TakeToBed`, `TraderArg`, `PawnList`), so their own method
+    #      body reads little or nothing and the check passes trivially there —
+    #      it is `posture` and `build`, which read at their own call site, that
+    #      it actually bites on.
+    for num, fname, listname, verbmark in (
+            ("9.11a", "SeekVerbs.cs", "PostureArgs", '[Verb("posture")]'),
+            ("9.11b", "AlertMuteVerbs.cs", "AlertMuteArgs", '[Verb("alert-mute")]'),
+            ("9.11c", "PawnOrderVerbs.cs", "TakeToBedArgs", "private static object TakeToBed("),
+            ("9.11d", "TradeVerbs.cs", "TradeStartArgs", '[Verb("trade-start")]'),
+            ("9.11e", "BuildVerbs.cs", "BuildArgs", '[Verb("build")]')):
+        src = os.path.join(REPO, "Source", "AutoRimmer", fname)
+        if not os.path.exists(src):
+            note(num, "Source/AutoRimmer/%s not in this checkout." % fname)
+            continue
+        with open(src, encoding="utf-8") as fh:
+            text = fh.read()
+        m = re.search(r"string\[\]\s+" + listname + r"\s*=\s*\{(.*?)\};", text, re.S)
+        declared = set(re.findall(r'"(\w+)"', m.group(1))) if m else set()
+        # The verb's OWN method body, brace-matched from its marker, so a
+        # neighbouring verb in the same file cannot contribute reads.
+        body = ""
+        if verbmark in text:
+            i = text.index(verbmark)
+            j = text.find("{", text.index("(", i))
+            depth, k = 0, j
+            while k < len(text) and j >= 0:
+                if text[k] == "{":
+                    depth += 1
+                elif text[k] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                k += 1
+            body = text[j:k + 1]
+        read = set(re.findall(
+            r"\.(?:Has|Raw|Str|StrReq|Bool|Num|NumReq|Int|IntReq|Long|StrList)"
+            r'\("(\w+)"', body))
+        check(num, "%s's %s declares every argument the verb reads at its own "
+                   "call site" % (fname, listname),
+              bool(declared) and read <= declared,
+              "declared >= read", {"declared": sorted(declared),
+                                   "read": sorted(read),
+                                   "undeclared": sorted(read - declared)})
+
+    # 9.12 HYPHENATED KEYS ARE READ AS UNDERSCORED, AT THE POLLER (c519477).
+    #      The rewrite is only safe while NO verb reads a hyphenated key, and
+    #      that is a property of the whole tree rather than of one file — so it
+    #      is re-derived rather than asserted once in a comment. The run's own
+    #      instance is `build --dry-run`, dropped ten times, each call placing a
+    #      real blueprint on the default path (audit F-S10-30, journal J2150).
+    srcdir = os.path.join(REPO, "Source", "AutoRimmer")
+    if not os.path.isdir(srcdir):
+        note("9.12", "Source/AutoRimmer is not in this checkout.")
+    else:
+        hyphenated = []
+        for fn in sorted(os.listdir(srcdir)):
+            if not fn.endswith(".cs"):
+                continue
+            with open(os.path.join(srcdir, fn), encoding="utf-8") as fh:
+                for key in re.findall(
+                        r"\.(?:Has|Raw|Str|StrReq|Bool|Num|NumReq|Int|IntReq|Long|StrList)"
+                        r'\("([^"]*-[^"]*)"', fh.read()):
+                    hyphenated.append("%s: %s" % (fn, key))
+        eq_val("9.12a", "no verb reads a hyphenated argument key, which is what "
+                        "makes Poller.Underscore safe", hyphenated, [])
+        pol = os.path.join(srcdir, "Poller.cs")
+        with open(pol, encoding="utf-8") as fh:
+            ptext = fh.read()
+        check("9.12b", "…and the poller rewrites them before the verb ever sees them",
+              "args = Underscore(args);" in ptext
+              and re.search(r"private static Dictionary<string, object> Underscore\(",
+                            ptext) is not None,
+              "ScanInbox calls Underscore(args)", "not found")
+        check("9.12c", "…while a caller that sent BOTH spellings is left alone, so a "
+                       "self-contradicting call is reported rather than resolved",
+              "if (args.ContainsKey(under)) continue;" in ptext,
+              "the both-spellings guard", "not found")
+
 
 # ---------------------------------------------------------------------- main --
 

@@ -123,7 +123,14 @@ namespace AutoRimmer
         private static int tradeOpenedTick = -1;
 
         // ====================================================================
-        // trade-start {trader, negotiator, gift?, console?}
+        // trade-start {trader, negotiator?, gift?}
+        //
+        // `console` is NOT an argument here and never was read: a passing ship
+        // is addressed BY NAME through `trader`, and the console itself belongs
+        // to `comms-call` (CommsVerbs' ConsoleArg). The header said `console?`
+        // until c519477 added the stray-key refusal below, at which point a
+        // documented key that nothing reads stopped being a silent drop and
+        // became a refusal — so it is corrected here rather than accepted.
         //
         // WHY THIS DOES NOT TAKE THE JOB, and the reasoning is recorded because
         // the spec's session-4 amendment assumed it would ("order-then-advance-
@@ -165,10 +172,33 @@ namespace AutoRimmer
         // journal records warnings and one that fires on every trade start is
         // noise the run does not need. Pre-checked (gate 1) so it never fires.
         // ====================================================================
+        // This verb's own argument list, beside the code that reads it, for
+        // RefuseStray's message. MESSAGE-ONLY — the detection is VerbArgs'
+        // read log, which does not consult it.
+        private static readonly string[] TradeStartArgs =
+            { "gift", "negotiator", "trader" };
+
         [Verb("trade-start")]
         public static object TradeStart(VerbContext ctx)
         {
             const string V = "trade-start";
+
+            // PRE-MUTATION (git-bug c519477). Two of the three keys change the
+            // ACT when they go missing rather than merely narrowing it:
+            // `negotiator` falls through to the auto-picker below (the highest
+            // Social free colonist), and `gift` defaults to false, which is the
+            // difference between offering goods and selling them. The trade
+            // session is static, modal state — `TradeSession.SetupWith` — so
+            // "run anyway and report" would mean opening the wrong session and
+            // then telling the caller about it.
+            //
+            // NOTE, against COCKPIT.md's summary line: `trader` is NOT
+            // defaulted here and never was. `TraderArg` refuses a missing
+            // `trader` outright; the defaulting key is `negotiator`.
+            ctx.Args.RefuseStray(V, TradeStartArgs,
+                "No session was opened. `negotiator` and `gift` both change what this call DOES "
+                + "when they go unread — the negotiator is auto-picked and a gift becomes a sale.");
+
             var map = PawnSafe.CurrentMap() ?? throw new VerbArgsException(V + " needs a current map");
             bool gift = ctx.Args.Bool("gift", false);
 

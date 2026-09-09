@@ -4131,3 +4131,107 @@ queue by default (an agent flailing mid-experiment must not page triage).
   now lists what the writer can represent, and what it cannot, in full — the
   survey found eight declarations of the trap type and two authors who had
   already discovered the rule by experiment.
+
+- 2026-09-09 (`c519477`) — **A bundling verb defaults to the NARROWEST scope it
+  can act on, and a stray or missing key is REFUSED on any verb that mutates
+  differently when that key is absent. Widening is never the default.** This is
+  the openrun-20260902 audit's theme T8 landing in the mod, and it is a
+  generalisation of the 2026-09-01 ruling on `7382bdd` rather than a reversal of
+  it: that ruling refused a stray key on the three fixture verbs whose default
+  mutates and reported it everywhere else, and this run found five more verbs in
+  the same class — `posture` (no `pawns` meant ALL), `alert-mute` (no `release`
+  means MUTE, the opposite act), `carry` (no destination means the one
+  `RestUtility.FindBedFor` picks), `trade-start` (no `negotiator` means the
+  auto-picked one), and `build` (`dry_run` dropped means a REAL blueprint). The
+  rule is stated once and the five adopt `VerbArgs.RefuseStray` at their first
+  line, pre-mutation. `b1b3060` is NOT re-opened: `posture` still writes three
+  settings in one call, on purpose, because a posture with two of three is the
+  bug that verb exists to remove. What changes is its SCOPE default and its
+  REPORTING.
+
+  **THE COST, which is why a p1 arrived for an argument default.** The audit's
+  causal chain for the wipe of Andbourne has this second: the agent needed to
+  free ONE rescuer to reach a downed colonist, issued `posture` with no `pawns`
+  filter, and unbound all seven colonists; nobody was ever re-bound; when the
+  fatal raid landed ~270,000 ticks later the whole colony was scattered 40 to 70
+  cells outside the walls (F-S12-10). The correctly scoped form —
+  `--pawns [53017]` — existed and the same agent used it correctly twenty
+  minutes later in the same slice. Two more of the same shape were caught only
+  because the agent happened to read the `after` block: `posture {area:null}`
+  flipped seek ON for a Shooting-0 pawn 250 cells from base (F-S02-7), and
+  `posture --area lockdown` flipped `will_seek` true for two unarmoured men
+  facing a scyther (F-S10-22). This is not a missing capability; it is a default
+  that punished the caller.
+
+  **THE GAME'S OWN WIDGETS ARE THE GATE, verified by member name.**
+  `RimWorld/PawnColumnWorker_AllowedArea.DoCell` paints ONE pawn's row
+  (`AreaAllowedGUI.DoAllowedAreaSelectors(rect, pawn)`); its only all-pawns
+  write is `HeaderClicked`, which returns immediately unless
+  `Event.current.shift` and then writes just `areaManager.Home` (button 0) or
+  `null` (button 1). `RimWorld/PawnColumnWorker_HostilityResponse` overrides no
+  `HeaderClicked` at all — the game has NO all-pawns hostility write. Seek is a
+  per-pawn gizmo (`SeekAndKill/Patch_PawnGetGizmos.ShowsSeekGizmo`). So two of
+  the three levers have no colony-wide widget and the third demands a modifier
+  key: the old default was wider than any single click a player can make. A
+  write-mode `posture` now REFUSES with `bad-args` / `error.class: refused`
+  (`e440676`'s shape, not a new one), names `pawns` as the key it wants, and
+  offers `pawns:"colonists"` as the way to say colony-wide DELIBERATELY. A
+  `posture` with no lever at all is still a pure read of the whole roster,
+  because reading writes nothing. The refusal fires AFTER the argument-shape
+  refusals (missing `area`, unknown area, bad `seek`, bad `hostility`, zero-cell
+  area) so a malformed lever still reports its own fault, and BEFORE the pawn
+  loop so nothing is written.
+
+  **EVERY VERB THAT WRITES MORE THAN ONE LEVER, its levers and its scope.**
+  | verb | levers it writes | scope default |
+  |---|---|---|
+  | `posture` | `area`, `seek`, `hostility` — ALL THREE on any write, by design (`b1b3060`) | `pawns` **REQUIRED** in write mode; the whole roster on a pure read |
+  | `assign` | `apparel_policy`, `food_policy`, `drug_policy`, `reading_policy`, `area`, `med_care`, `self_tend`, `hostility`, `auto_arm` — only those PASSED; absent means leave alone | `pawns` required (`PawnActs.PawnList`) |
+  | `work-priorities` | one priority per named work type; absent means leave alone | `pawns` required |
+  | `schedule` | the named hour span only | `pawns` required |
+
+  `posture` is the only verb in the tree that ever defaulted a pawn set — one
+  grep, `"colonists"` across `Source/AutoRimmer/` — so this rule costs exactly
+  one behaviour change. `assign`, `work-priorities` and `schedule` bundle but
+  never widen: a lever they were not passed is not written, so their result's
+  `levers` cannot contain a surprise. **`assign`'s `levers` is deliberately left
+  as the REQUESTED set** rather than converted to the written one: it can differ
+  from the written set only where the game refused a lever, and its per-pawn
+  `refused` rows already name that with the widget clause. Changing it would
+  move `1a072fa`'s `auto_arm` contract (`accept/auto-arm-lever.md`) for no
+  evidence in this run; noted here so the next reader knows it was considered.
+
+  **THE RESULT NOW SEPARATES THE REQUEST FROM THE FACT.** `posture` published
+  `levers: ["area","seek","hostility"]` as a CONSTANT on every write — a
+  statement of intent that reads exactly like a statement of fact, which is how
+  the audit came to quote it as evidence. It is now the union of the per-pawn
+  `applied` lists in the bundle's declared order, beside `levers_asked` (what
+  the caller named) and `levers_unasked` (what the bundle added), with
+  `also_changed` carrying the sentence a human reads. All four go to the
+  envelope AND to the journal's `action` payload from the same arrays, because
+  the audit read `levers` off the journal and not off the envelope. Under
+  `dry_run` the levers are what WOULD be written and `mode:"dry-run"` is what
+  says so. Nothing new is invented for this: `JournalHooks` was already
+  capturing the `Log.Warning` that `7382bdd` emits, and the `levers` array
+  already existed — what was missing is that it was a constant.
+
+  **HYPHENATED ARGUMENT KEYS ARE READ AS UNDERSCORED, at the poller
+  (`Poller.Underscore`) and nowhere else.** No verb in the tree reads a
+  hyphenated key — every read goes through a `VerbArgs` accessor with a literal
+  key, so the claim is one grep
+  (`grep -rnE '\.(Has|Raw|Str|StrReq|Bool|Num|NumReq|Int|IntReq|Long|StrList)\("[a-z_]*-'`,
+  empty) — and the only hyphen in any argument name is `LayoutVerbs`' NearMiss
+  ALIAS `stuff-map`, which exists to catch this very typo. This one is a REWRITE
+  and not a refusal, deliberately opposite to the stray-key rule above, because
+  a hyphenated key is not an unknown argument but a known one spelled the way a
+  CLI spells it: the run sent `build --dry-run` ten times, each was dropped, and
+  each placed a real blueprint on the default path (F-S10-30, journal J2150).
+  The rewrite is skipped when the caller sent BOTH spellings, so a
+  self-contradicting call is still reported rather than silently resolved.
+
+  **WHAT IS NOT DISCHARGED.** None of this has been in front of a game. The
+  refusals, the reordering, the new `levers` arrays and the poller rewrite are
+  source-level only; `accept/b1b3060-posture.py` carries the bench checks
+  (0.9f-o for the two refusals, 2.1c/2.7 for the request-versus-fact split) and
+  has not been run against `_RimWorld-Agent`. `c519477`'s Acceptance section
+  stays open until it has.

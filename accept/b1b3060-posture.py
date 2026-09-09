@@ -90,6 +90,13 @@ CAPTURE = None  # phase 10 only; see probe()
 
 AREA_NAME = "acc-posture"
 
+# THE SCOPE, DECLARED. Since c519477 a write-mode `posture` REFUSES a call that
+# names no `pawns`, so this suite says colony-wide out loud instead of getting
+# it by omission — which is the whole change: the roster is still the scope of
+# every check below, it is just no longer the default. `posture` with no lever
+# at all is still a pure read of every colonist and takes no `pawns`.
+ALL = "colonists"
+
 # The closed verdict vocabulary, from SeekVerbs.ContactVerdicts. Every one is
 # published at every read, zero included, so a predicate over
 # `posture.on_contact.flee` keeps arming on a colony that has no fleer today.
@@ -499,17 +506,60 @@ def phase0():
 
     banner("PHASE 0b - THE REFUSALS: a posture with two of three settings is the bug")
 
-    e = send("posture", {"seek": True})
+    e = send("posture", {"pawns": ALL, "seek": True})
     bad_args("0.9a", "a lever without `area` is refused — the whole point of the verb",
              e, "three settings")
     contains("0.9b", "…and the refusal says how to declare unrestricted", e,
              "error.detail", "area:null")
-    e = send("posture", {"area": "no-such-area-999"})
+    e = send("posture", {"pawns": ALL, "area": "no-such-area-999"})
     bad_args("0.9c", "an unknown area name is refused", e, "no area named")
-    e = send("posture", {"area": AREA_NAME, "seek": "sometimes"})
+    e = send("posture", {"pawns": ALL, "area": AREA_NAME, "seek": "sometimes"})
     bad_args("0.9d", "seek must be true, false or \"auto\"", e, "auto")
-    e = send("posture", {"area": AREA_NAME, "hostility": "Cower"})
+    e = send("posture", {"pawns": ALL, "area": AREA_NAME, "hostility": "Cower"})
     bad_args("0.9e", "an unknown hostility mode is refused", e, "Ignore|Attack|Flee")
+
+    # ------------------------------------------------------------------------
+    # THE SCOPE REFUSAL AND THE STRAY-KEY REFUSAL (git-bug c519477). These are
+    # the two shapes the openrun-20260902 audit's theme T8 is made of, and the
+    # first one is the #2 link in the agent's own causal chain for the wipe:
+    # `posture` with no `pawns` unbound all SEVEN colonists to free one
+    # rescuer, nobody re-bound them, and the fatal raid landed ~270,000 ticks
+    # later with the whole colony 40-70 cells outside the walls (F-S12-10).
+    # The correctly scoped form existed and the same agent used it twenty
+    # minutes later in the same slice, so this is a default that punished the
+    # caller rather than a missing capability.
+    #
+    # NOTE THE ORDER these are asserted in: the scope refusal deliberately
+    # fires AFTER the argument-shape refusals above (0.9a-e), so a malformed
+    # lever still reports its own fault, and BEFORE the pawn loop, so nothing
+    # is written. Both facts are checked — the second by 0.9m.
+    e = send("posture", {"area": AREA_NAME, "seek": True, "hostility": "Attack"})
+    bad_args("0.9f", "a WRITE naming no `pawns` is REFUSED, not widened to everyone",
+             e, "names no SCOPE")
+    contains("0.9g", "…naming the key it wants", e, "error.detail", "`pawns`")
+    contains("0.9h", "…and the deliberate colony-wide form", e, "error.detail",
+             'pawns:"colonists"')
+    contains("0.9i", "…citing the widget that never widens by omission", e,
+             "error.detail", "PawnColumnWorker_AllowedArea")
+    eq("0.9j", "…and it is a refusal, not a fault", e, "error.class", "refused")
+    contains("0.9k", "…and says outright that nothing was written", e,
+             "error.detail", "Nothing was written")
+
+    # The same call with the scope DECLARED is the one that works — the point
+    # being that the capability was never missing.
+    e = send("posture", {"pawns": ALL, "area": AREA_NAME, "seek": True,
+                         "hostility": "Attack"})
+    eq("0.9l", "…while the same call WITH a declared scope is accepted",
+       e, "ok", True)
+
+    # A MISSPELLED SCOPE IS THE SAME CALL AS A MISSING ONE, which is why the
+    # general report-after-the-fact rule (7382bdd) is overridden on this verb:
+    # `RefuseStray` runs before the first lever is parsed.
+    e = send("posture", {"pawnz": ALL, "area": AREA_NAME, "seek": True})
+    bad_args("0.9m", "a MISSPELLED scope key is refused pre-mutation", e, "pawnz")
+    contains("0.9n", "…naming what the verb does accept", e, "error.detail", "pawns")
+    contains("0.9o", "…and saying nothing was written", e, "error.detail",
+             "Nothing was written")
 
     # THE ZERO-CELL AREA. This is the refusal that keeps the digest honest:
     # ForbidUtility.InAllowedArea short-circuits on `TrueCount > 0`, so binding
@@ -519,7 +569,7 @@ def phase0():
         e = send("area", {"kind": "allowed", "op": "create", "name": AREA_NAME + "-empty"})
         S["area_empty_id"] = dig(e, "data.id")
     if ARGS.dry_run or S.get("area_empty_id") is not None:
-        e = send("posture", {"area": S.get("area_empty_id")})
+        e = send("posture", {"pawns": ALL, "area": S.get("area_empty_id")})
         bad_args("0.10a", "a ZERO-CELL area is refused rather than silently bound", e,
                  "ZERO cells")
         contains("0.10b", "…citing the game's own short-circuit", e,
@@ -552,6 +602,14 @@ def phase1():
     contains("1.2b", "…and says why in words", e, "data.action.provenance",
              "not applicable")
     eq("1.2c", "no lever was named", e, "data.levers", [])
+    # THE SHAPE CONTRACT for c519477's three new fields, proved on the READ
+    # before phase 2 leans on them: a dig path that does not exist must not be
+    # allowed to go green through `eq(..., [])`.
+    shape("1.2c1", "posture", e, "data.levers_asked", list)
+    shape("1.2c2", "posture", e, "data.levers_unasked", list)
+    shape("1.2c3", "posture", e, "data.also_changed")
+    eq("1.2c4", "…and a read asked for nothing", e, "data.levers_asked", [])
+    eq("1.2c5", "…and wrote nothing unasked", e, "data.levers_unasked", [])
     eq("1.2d", "no area was chosen", e, "data.area", None)
     eq("1.2e", "no hostility was chosen", e, "data.hostility", None)
 
@@ -599,14 +657,32 @@ def phase2():
 
     # Set the WRONG posture first, deliberately, so phase 2's write has
     # something to change and "already" cannot masquerade as success.
-    send("posture", {"area": None, "seek": False, "hostility": "Flee"})
+    send("posture", {"pawns": ALL, "area": None, "seek": False, "hostility": "Flee"})
 
-    e = send("posture", {"area": AREA_NAME, "seek": True, "hostility": "Attack"})
+    e = send("posture", {"pawns": ALL, "area": AREA_NAME, "seek": True, "hostility": "Attack"})
     S["write"] = e
     eq("2.1a", "the write succeeded", e, "ok", True)
     eq("2.1b", "…and says which mode it ran in", e, "data.mode", "write")
-    eq("2.1c", "all three levers are named", e, "data.levers",
+    # THE REQUEST AND THE FACT ARE TWO FIELDS (c519477). `levers_asked` is what
+    # the caller named; `levers` is what the call actually WROTE, unioned from
+    # the per-pawn `applied` rows. Before c519477 `levers` was the constant
+    # {area, seek, hostility} on every write, so a lever the game refused for
+    # every pawn read exactly like one that landed — which is how the
+    # openrun-20260902 audit ended up reading intent off the journal and
+    # calling it evidence.
+    eq("2.1c", "all three levers were ASKED for", e, "data.levers_asked",
        ["area", "seek", "hostility"])
+    check("2.1c2", "…and `levers` reports only what actually landed",
+          set(as_list(dig(e, "data.levers"))) <= {"area", "seek", "hostility"}
+          and "area" in as_list(dig(e, "data.levers")),
+          "a subset of the three, including 'area'", dig(e, "data.levers"))
+    eq("2.1c3", "…and nothing was written that the caller did not name",
+       e, "data.levers_unasked", [])
+    # NOT `eq(..., None)`: that passes on an ABSENT key, which is the trap this
+    # whole suite is built around. Present AND null is the assertion.
+    check("2.1c4", "…so there is no 'you also changed X' line to print",
+          has_key(e, "data.also_changed") and dig(e, "data.also_changed") is None,
+          "the key present and null", dig(e, "data.also_changed"))
     eq("2.1d", "the area it bound to is echoed", e, "data.area", AREA_NAME)
     eq("2.1e", "the hostility it set is echoed", e, "data.hostility", "Attack")
     ge("2.1f", "…and the area's cell count, so `bound` is checkable", e,
@@ -687,6 +763,60 @@ def phase2():
            dig(d, "data.posture.attack_n"), dig(e, "data.posture.attack_n"))
     S["digest_after_write"] = d
 
+    # ------------------------------------------------------------------------
+    # 2.7 THE BUNDLED LEVER THE CALLER DID NOT PASS (git-bug c519477). This is
+    #     T8's own shape, three times over in openrun-20260902: `posture
+    #     {area:null}` flipped seek ON for a Shooting-0 pawn 250 cells out
+    #     (F-S02-7); `posture --area lockdown` flipped `will_seek` true for two
+    #     unarmoured men facing a scyther (F-S10-22). The three-lever bundle
+    #     STAYS — b1b3060 built it on purpose and this issue does not re-open
+    #     it — so what changes is that the bundle SAYS what it added.
+    #
+    #     Staged, not hoped for: set the opposite of the defaults first, so the
+    #     one-lever call below genuinely has both other levers to change.
+    send("posture", {"pawns": ALL, "area": None, "seek": False, "hostility": "Flee"})
+    e2 = send("posture", {"pawns": ALL, "area": AREA_NAME})
+    eq("2.7a", "a ONE-lever call still succeeds — the bundle is not re-opened",
+       e2, "ok", True)
+    eq("2.7b", "…and `levers_asked` holds only the lever the caller named",
+       e2, "data.levers_asked", ["area"])
+    check("2.7c", "…while `levers` reports the bundle's real writes",
+          "hostility" in as_list(dig(e2, "data.levers")),
+          "'hostility' among the levers written", dig(e2, "data.levers"))
+    check("2.7d", "…and `levers_unasked` names what the caller never passed",
+          "hostility" in as_list(dig(e2, "data.levers_unasked")),
+          "'hostility' among the unasked levers", dig(e2, "data.levers_unasked"))
+    contains("2.7e", "…and `also_changed` says it in a sentence a human reads",
+             e2, "data.also_changed", "hostility")
+    contains("2.7f", "…naming what WAS asked for beside it", e2,
+             "data.also_changed", "area")
+    if dig(e2, "data.posture.seek_mod") is True:
+        check("2.7g", "…and seek too, on a bench that has SeekAndKill",
+              "seek" in as_list(dig(e2, "data.levers_unasked")),
+              "'seek' among the unasked levers", dig(e2, "data.levers_unasked"))
+    else:
+        note("2.7g", "SeekAndKill is NOT loaded — seek cannot be an unasked "
+                     "write here, and its absence is the correct answer")
+
+    # THE JOURNAL CARRIES THE SAME THREE ARRAYS, because the audit read
+    # `levers` off the journal and not off the envelope.
+    j = send("journal", {"since_seq": max(0, (dig(e2, "data.action.journal_seq") or 1) - 1),
+                         "types": ["action"], "limit": 20})
+    row = None
+    for r in as_list(dig(j, "data.events")):
+        if isinstance(r, dict) and dig(r, "payload.verb") == "posture":
+            row = r
+    check("2.7h", "the journal's action row carries the levers actually written",
+          row is not None and "hostility" in as_list(dig(row, "payload.levers")),
+          "payload.levers containing 'hostility'", dig(row or {}, "payload.levers"))
+    check("2.7i", "…and what the caller asked for, so the two are comparable",
+          row is not None and as_list(dig(row, "payload.levers_asked")) == ["area"],
+          "payload.levers_asked == ['area']", dig(row or {}, "payload.levers_asked"))
+
+    # Leave the colony in the posture phases 3-5 expect.
+    send("posture", {"pawns": ALL, "area": AREA_NAME, "seek": True,
+                     "hostility": "Attack"})
+
 
 # ------------------------------------------------------------------- phase 3 --
 
@@ -737,7 +867,7 @@ def phase3():
           % (DIM, name, spawned, OFF))
     S["nonviolent"] = name
 
-    e = send("posture", {"area": AREA_NAME, "seek": True, "hostility": "Attack"})
+    e = send("posture", {"pawns": ALL, "area": AREA_NAME, "seek": True, "hostility": "Attack"})
 
     # 3.2 THE HEADLINE. Branchable without walking rows — the same shape
     #     work_coverage.under has.
@@ -800,7 +930,7 @@ def phase4():
     banner("PHASE 4 - digest.posture: n/m both ways, and what they will DO")
 
     ensure_area("4.0")
-    send("posture", {"area": AREA_NAME, "seek": True, "hostility": "Attack"})
+    send("posture", {"pawns": ALL, "area": AREA_NAME, "seek": True, "hostility": "Attack"})
     e = send("digest")
     p = dig(e, "data.posture") or {}
 
@@ -867,7 +997,7 @@ def phase4():
     # 4.6 THE FAILING DIRECTION, measured rather than argued. Set Flee and watch
     #     the block name the pawns — `attack_n` falls, `flee_risk` fills, `ok`
     #     goes false. Without this the block could be hard-coded green.
-    send("posture", {"area": AREA_NAME, "seek": True, "hostility": "Flee"})
+    send("posture", {"pawns": ALL, "area": AREA_NAME, "seek": True, "hostility": "Flee"})
     e = send("digest")
     eq("4.6a", "with Flee set, the posture is NOT ok", e, "data.posture.ok", False)
     ge("4.6b", "…and flee_risk names the violence-capable pawns in it",
@@ -888,7 +1018,7 @@ def phase4():
                            "finding: Flee BEATS seek", fr[0].get("will_seek"), True)
 
     # Put it back, so the bench is left in the posture the checklist asks for.
-    send("posture", {"area": AREA_NAME, "seek": True, "hostility": "Attack"})
+    send("posture", {"pawns": ALL, "area": AREA_NAME, "seek": True, "hostility": "Attack"})
     e = send("digest")
     eq("4.7", "the repair is one call and the digest confirms it", e,
        "data.posture.on_contact.flee", 0)
@@ -900,10 +1030,10 @@ def phase5():
     banner("PHASE 5 - dry_run decides and reports, and writes NOTHING")
 
     ensure_area("5.0")
-    send("posture", {"area": AREA_NAME, "seek": True, "hostility": "Attack"})
+    send("posture", {"pawns": ALL, "area": AREA_NAME, "seek": True, "hostility": "Attack"})
     before = send("digest")
 
-    e = send("posture", {"area": AREA_NAME, "seek": False, "hostility": "Flee",
+    e = send("posture", {"pawns": ALL, "area": AREA_NAME, "seek": False, "hostility": "Flee",
                          "dry_run": True})
     eq("5.1a", "the dry run succeeded", e, "ok", True)
     eq("5.1b", "…and says which mode it ran in", e, "data.mode", "dry-run")
@@ -935,7 +1065,7 @@ def phase6():
     ensure_area("6.0a")
 
     # Seek ON, hostility FLEE — the M1 state, declared deliberately.
-    e = send("posture", {"area": AREA_NAME, "seek": True, "hostility": "Flee"})
+    e = send("posture", {"pawns": ALL, "area": AREA_NAME, "seek": True, "hostility": "Flee"})
     seek_mod = dig(e, "data.posture.seek_mod")
     precondition("6.1", "SeekAndKill loaded (this phase is about seek losing)",
                  ARGS.dry_run or seek_mod is True,
@@ -983,7 +1113,7 @@ def phase6():
           "at least one colonist job reading as flee/cower", jobs)
 
     # THE REPAIR, live: one call, and the same colony fights instead.
-    send("posture", {"area": AREA_NAME, "seek": True, "hostility": "Attack"})
+    send("posture", {"pawns": ALL, "area": AREA_NAME, "seek": True, "hostility": "Attack"})
     advance({"ticks": 2500})
     d = send("digest")
     eq("6.4a", "after the repair nobody is counted as a fleer", d,
@@ -1002,7 +1132,7 @@ def phase7():
     banner("PHASE 7 - the SAVE half (a human saves and loads between 7 and 8)")
 
     ensure_area("7.0")
-    e = send("posture", {"area": AREA_NAME, "seek": True, "hostility": "Attack"})
+    e = send("posture", {"pawns": ALL, "area": AREA_NAME, "seek": True, "hostility": "Attack"})
     eq("7.1a", "the posture was set", e, "ok", True)
     d = send("digest")
     j = send("journal", {"since_seq": 999999999, "limit": 1})
@@ -1178,6 +1308,10 @@ GOOD_DIGEST = {"ok": True, "op": "digest", "data": {
 
 GOOD_POSTURE = {"ok": True, "op": "posture", "data": {
     "verb": "posture", "mode": "write", "levers": ["area", "seek", "hostility"],
+    # c519477: the request and the fact are two fields, and this fixture is the
+    # clean case where they agree.
+    "levers_asked": ["area", "seek", "hostility"], "levers_unasked": [],
+    "also_changed": None,
     "area": "acc-posture", "area_id": 7, "area_cells": 144, "hostility": "Attack",
     "seek": True, "dry_run": False,
     "action": {"journal_seq": 412},

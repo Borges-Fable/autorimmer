@@ -15,6 +15,14 @@ in this file is a plan, not a measurement.
 Exit `0` all passed · `1` at least one FAIL · `2` a fixture precondition could
 not be met, which is not a spec failure.
 
+**This suite also carries `c519477`'s bench half** (checks `0.9f`–`0.9o` and
+`2.7a`–`2.7i`), because the fixture it needs — an area, a roster, a known
+posture — is the one already built here. `accept/c519477-narrowest-scope.md` is
+that issue's own doc and names the four non-`posture` verbs it also covers.
+Since `c519477` a write-mode `posture` **refuses a call that names no `pawns`**,
+so every write below says `pawns:"colonists"` out loud; the roster is still the
+scope, it is just no longer the default.
+
 **Read the exit code from `$?`, not from a pipe.** Session 12 reported `EXIT=0`
 for a command it had piped to `tail`, and read `tail`'s status.
 

@@ -87,11 +87,29 @@ namespace AutoRimmer
         // where it asked without a second round trip.
         private const int EchoMargin = 3;
 
+        // This verb's own argument list, beside the code that reads it, for
+        // RefuseStray's message. MESSAGE-ONLY — the detection is VerbArgs'
+        // read log, which does not consult it.
+        private static readonly string[] BuildArgs =
+            { "at", "def", "dry_run", "pos", "rot", "stuff" };
+
         [Verb("build")]
         public static object Build(VerbContext ctx)
         {
             var map = Find.CurrentMap ?? throw new VerbArgsException("no current map");
             var a = ctx.Args;
+
+            // PRE-MUTATION (git-bug c519477). `dry_run` is a bool defaulting to
+            // FALSE, so a key this verb cannot read is not a narrowing — it is
+            // the difference between a preflight and a real blueprint on the
+            // map. openrun-20260902 ran ten `build --dry-run` calls with the
+            // hyphenated spelling; each one was dropped and each one took the
+            // placing path (audit F-S10-30, journal J2150). The hyphen half is
+            // now answered at the poller (Poller.Underscore); this is the other
+            // half, for every spelling a rewrite cannot fix.
+            a.RefuseStray("build", BuildArgs,
+                "Nothing was placed. A key `build` cannot read is not a smaller build — "
+                + "`dry_run` defaults to false, so a dropped preflight flag is a real blueprint.");
 
             var def = SiteGate.Named(a.StrReq("def"));
             // CAN A PLAYER BUILD THIS AT ALL — the game's own predicate, which

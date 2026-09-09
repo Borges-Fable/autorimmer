@@ -257,6 +257,12 @@ namespace AutoRimmer
         // two verbs are the same ruling applied to two subjects, and an agent
         // that has learned one should not have to learn the other.
         // --------------------------------------------------------------------
+        // This verb's own argument list, beside the code that reads it, for
+        // RefuseStray's message. MESSAGE-ONLY — the detection is VerbArgs'
+        // read log, which does not consult it.
+        private static readonly string[] AlertMuteArgs =
+            { "ids", "reason", "release", "release_all" };
+
         [Verb("alert-mute")]
         public static object AlertMute(VerbContext ctx)
         {
@@ -264,6 +270,18 @@ namespace AutoRimmer
             var store = AlertMuteComponent.Current
                 ?? throw new VerbArgsException("no mute store (no game loaded?)");
             var a = ctx.Args;
+
+            // PRE-MUTATION (git-bug c519477). `alert-mute` is one of the five
+            // verbs the openrun-20260902 audit found that MUTATE DIFFERENTLY
+            // when a key is dropped rather than passed: `release` and
+            // `release_all` are booleans defaulting to false, so a misspelling
+            // of either turns "un-mute these" into "MUTE these" — the opposite
+            // act, on the surface whose whole purpose is that no alert goes
+            // quiet without a recorded reason. Refused with nothing written,
+            // exactly as the three fixture verbs of 7382bdd comment #7 are.
+            a.RefuseStray(V, AlertMuteArgs,
+                "Nothing was muted or released. Dropping `release` or `release_all` here does "
+                + "not weaken the call, it INVERTS it.");
 
             if (a.Bool("release_all", false))
             {

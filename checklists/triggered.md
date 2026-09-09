@@ -99,7 +99,10 @@ to execute.
 12. **Standing combat posture** — confirm the posture verb ran. Paint an
     `Area_Allowed` over base + fields + cleared ground (`area allowed create`,
     then `area {kind:"allowed", op:"add", rect:[…]}`), then one call:
-    `posture {area:"<label>", seek:"auto"}`. It sets all three settings that
+    `posture {pawns:"colonists", area:"<label>", seek:"auto"}`. **Name the
+    scope**: since `c519477` a write with no `pawns` is REFUSED rather than
+    widened to everyone, so colony-wide is something you say, not something
+    you get by leaving a key out. It sets all three settings that
     must agree and names every pawn it refused. Verdict is
     `digest.posture.ok`; anything in `posture.flee_risk` is the M1 state and
     is not a start posture. [[seek-off-is-a-decision-to-flee]]
