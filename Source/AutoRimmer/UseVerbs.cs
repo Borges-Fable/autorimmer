@@ -101,8 +101,22 @@ namespace AutoRimmer
                                  && thing.def.ingestible.showIngestFloatOption;
                 }
                 catch { }
+                // THE ONWARD POINTER (git-bug 70c1f9e addition). `CompAnalyzable`
+                // extends CompInteractable, NOT CompUsable, so every mech chip
+                // and every obelisk lands here — and "no Use option" read as
+                // "nothing can be done with it" is exactly the round trip that
+                // made 70c1f9e p1. Named before the ingestible branch because a
+                // thing can carry both.
+                bool interactable = false;
+                try { interactable = thing.TryGetComp<CompInteractable>() != null; } catch { }
                 outcome.NoThing(thing, UsableSafe.GateNotUsable,
                     "this thing has no CompUsable, so the game offers no Use option for it"
+                    + (interactable
+                        ? ". It DOES carry a CompInteractable — a different comp root with a different gate "
+                          + "(CanInteract) and a different job. The mech chips are CompAnalyzableUnlock"
+                          + "Research and land here. Call `interact {pawn, thing}` "
+                          + "(`interact-options` lists what is interactable and why not)."
+                        : "")
                     + (ingestible
                         ? ". It IS ingestible and the game offers a consume option instead — use `consume`."
                         : ". `orders` lists what a pawn can be told to do WITH it as work."));
