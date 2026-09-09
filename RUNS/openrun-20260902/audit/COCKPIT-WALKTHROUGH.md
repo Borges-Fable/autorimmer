@@ -93,9 +93,23 @@ Two notes for the rewrite, neither of them a decision taken here:
   to zero. So what is currently muted belongs ON the screen, and the sketch
   should say whether a mute expires, or is per-condition, or holds until lifted.
 
+### Element 4 of 9 — what arrives vs. what is fetched — **KEEP, unamended**
+
+Arrives unasked every turn: the stop line, the map (home area, the stop's place,
+what is gone), the colonist bar, the gauges, what changed since it last looked,
+and the decisions owed with their acts.
+
+Fetched by id when a decision needs it: the raw journal rows, a render of any
+other rectangle, one pawn's detail, `things`/`room`/`zones`, `inspect`, and the
+dry runs that reply with the ghost the player would see before placing.
+
+The rule: the screen names the id, the fetch takes the id, and nothing the agent
+must remember to do on a schedule lives on the fetch side — theme T11 measured
+scheduled fetches going to zero.
+
 ## Open — the question on the table
 
-Element 4 of 9 is next; nothing is currently awaiting an answer.
+Element 5 of 9 is next; nothing is currently awaiting an answer.
 
 ## Not yet reached — elements 4 to 9
 
