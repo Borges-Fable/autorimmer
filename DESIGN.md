@@ -2177,9 +2177,9 @@ queue by default (an agent flailing mid-experiment must not page triage).
   preflight an agent should run, would be refused. (2) A fallback unread on the
   happy path: `dev:spawn-thing` reads `pos` only when `stockpile` is absent or
   storage refused, which is the documented "store it, else drop it here" call.
-  (3) `queue` sits after the per-pawn gates in twelve verbs (`attack`, `equip`,
-  `wear`, `drop`, `consume`, `extinguish`, `beat-fire`, `tend`, `repair`,
-  `man-turret`, `rest-until-healed`, `TakeToBed`), so `wear {pawn, thing,
+  (3) `queue` sits after the per-pawn gates in thirteen verbs (`attack`,
+  `equip`, `wear`, `drop`, `consume`, `use`, `extinguish`, `beat-fire`, `tend`,
+  `repair`, `man-turret`, `rest-until-healed`, `TakeToBed`), so `wear {pawn, thing,
   queue:true}` refused by its gate is a success envelope with `queue` unread —
   and `accept/4087644-order-honesty.py` is a suite about exactly those
   refusals. (4) Whole-verb refusals return BEFORE the config block: `bill-add`
@@ -5005,3 +5005,45 @@ queue by default (an agent flailing mid-experiment must not page triage).
   worker may not launch one. `accept/nepo-order.md` carries the bench checks as
   a numbered command list, including the absent-mod phase, and stays open until
   the orchestrator has run it.
+
+- 2026-09-09 — **`use` reproduces `CompUsable.TryStartUseJob`'s `StartJob()`
+  rather than calling `TryStartUseJob`, because the game's own method opens a
+  modal nothing on this bench can answer.** (git-bug d318d4a; the shared route
+  is `Source/AutoRimmer/UsableSafe.cs`, the verbs are `UseVerbs.cs`.)
+  `TryStartUseJob` ends
+  `Find.WindowStack.Add(Dialog_MessageBox.CreateConfirmation(text, StartJob))`
+  whenever ANY `CompUseEffect.ConfirmMessage(pawn)` is non-empty, and
+  `RimWorld/CompUsableImplant.cs` raises a SECOND, separate
+  `new Dialog_MessageBox(text, "Yes", …, "No")` from
+  `CompRoyalImplant.CheckForViolations` before it ever reaches base.
+  `Verse/Dialog_MessageBox.cs` sets `forcePause`, so per spec 1.7 one of those
+  halts every subsequent `advance` at 0 ticks with `reason:"dialog"` — and 3.5
+  does NOT clear it: `dialog-choose` takes a `Dialog_NodeTree` and reads
+  `curNode.options`, while `Dialog_MessageBox` is a plain `Window` with
+  `buttonAAction`/`buttonBAction`; `dialog-dismiss` would `TryRemove` it, which
+  CANCELS the confirmation so the use never happens. There is no route to
+  "Accept". The three vanilla `ConfirmMessage` overriders are
+  `CompUseEffect_CallBossgroup` (always non-empty), `_InstallImplantMechlink`
+  and `_GainAbility`; `CompUsableImplant` is the comp class on **`Mechlink` and
+  `PsychicAmplifier`**, i.e. on exactly the two defs the issue was filed for. So
+  the confirmation set is PRE-COLLECTED, transacted as accepted and published as
+  `confirmations` + `dialogs_skipped` — the shipped pattern from `equip`
+  (bladelink / persona weapon), `wear` (mechanitor bandwidth) and
+  `MedicalBillVerbs`' `sendMessages:false`. A royal-title violation is a real
+  consequence, so it is named rather than swallowed. Reproducing `StartJob` is
+  also the ONLY way `queue` is honourable here: vanilla's local ends
+  `pawn.jobs.TryTakeOrderedJob(job, JobTag.Misc)` with no `requestQueueing`,
+  which is the shape that made `attack` refuse `queue` with a gate (bc2250b).
+  **Two adjacent rulings.** (a) The gate chain is NINE clauses, reproduced
+  clause by clause so each refusal gets its own name — and clauses 1
+  (`!p.RaceProps.IsFlesh`) and 2 (the `allowedMutants` whitelist) return a bare
+  `false`, so `AcceptanceReport.Reason` is `""`; every refusal therefore carries
+  `reason_from:"game"|"autorimmer"` so a phrase of ours is never quoted back as
+  RimWorld's. (b) A `CompTargetable` whose `PlayerChoosesTarget` is true is
+  REFUSED with gate `needs-target`, not ordered: its `SelectedUseOption` calls
+  `Find.Targeter.BeginTargeting` and returns true, so `TryStartUseJob` is never
+  reached, and `CompTargetable.DoEffect` returns early while its private
+  `selectedTarget` is null — an order would complete the job and resurrect
+  nobody, the 4087644 defect class exactly. Seating those two private fields is
+  git-bug 826d4bf, which is now a strict dependent of this route rather than a
+  second copy of it.

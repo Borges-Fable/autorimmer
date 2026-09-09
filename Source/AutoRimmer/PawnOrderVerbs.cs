@@ -37,9 +37,13 @@ namespace AutoRimmer
     //
     //   HONOURED (reads `queue`, passes it to TryTakeOrderedJob):
     //     move-to · prioritize · rescue · capture · arrest · carry · equip ·
-    //     wear · drop · consume · extinguish · beat-fire · tend · repair ·
-    //     man-turret · rest-until-healed (on its job branch — the in-place
-    //     branch takes no job and says so on the line)
+    //     wear · drop · consume · use · extinguish · beat-fire · tend ·
+    //     repair · man-turret · rest-until-healed (on its job branch — the
+    //     in-place branch takes no job and says so on the line)
+    //     `use` (UseVerbs.cs, git-bug d318d4a) is honoured only BECAUSE it
+    //     reproduces CompUsable.TryStartUseJob's local StartJob() instead of
+    //     calling it: vanilla's local ends `TryTakeOrderedJob(job, JobTag.Misc)`
+    //     with no requestQueueing, the same shape that made `attack` refuse.
     //   REFUSED WITH A GATE, because it cannot be honoured without
     //   reimplementing the game's own targeting:
     //     attack — FloatMenuUtility.GetRangedAttackAction /
@@ -1590,7 +1594,22 @@ namespace AutoRimmer
 
             string gate = null, reason = null;
             if (thing.def.ingestible == null || !thing.def.ingestible.showIngestFloatOption)
-            { gate = "not-ingestible"; reason = "the game offers no consume option for this def"; }
+            {
+                gate = "not-ingestible";
+                // THE ONWARD POINTER (git-bug d318d4a addition L). This gate is
+                // where the four Anomaly serums land, correctly — JuggernautSerum,
+                // MetalbloodSerum, MindNumbSerum and VoidsightSerum carry an
+                // <ingestible> block AND CompProperties_Usable with
+                // showIngestFloatOption=false, so the player only ever sees "Use"
+                // even though their Props.useJob IS Ingest. So does every other
+                // CompUsable thing. Naming `use` here costs one clause and saves
+                // the round trip that made this issue p1.
+                reason = "the game offers no consume option for this def"
+                    + (thing.HasComp<CompUsable>()
+                        ? ". It carries a CompUsable and the game offers a USE option instead — "
+                          + "call `use {pawn, thing}` (`use-options` lists what is usable and why not)."
+                        : "");
+            }
             else if (!thing.IngestibleNow || !pawn.RaceProps.CanEverEat(thing.def))
             { gate = "cannot-eat"; reason = "this pawn cannot ever eat this"; }
             else if (!thing.def.IsDrug && !thing.def.ingestible.nonDrugIngestibleWithoutFoodNeed
