@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using RimWorld;
+using UnityEngine;
 using Verse;
 using Verse.AI;
 
@@ -131,8 +132,27 @@ namespace AutoRimmer
         private static readonly string[] NepoOrderArgs =
             { "animals", "console", "dry_run", "items", "mechs", "negotiator", "slaves" };
 
+        private static readonly string[] NepoRestockArgs =
+            { "cap", "color", "def", "dry_run", "enabled", "stuff", "target", "threshold" };
+
         private static readonly string[] NepoItemLineKeys = { "count", "def", "stuff" };
         private static readonly string[] NepoKindLineKeys = { "count", "kind" };
+
+        // Standing rules are made one at a time by hand, so this is a browse
+        // cap and not a paging strategy; `total`/`more` still ride the reply.
+        public const int NepoRestockCap = 50;
+
+        // The customize panel's option lists on a single-def read. Bounded
+        // already (a def's allowed stuffs, and the styling station's palette),
+        // capped so a modded bench with four hundred fabrics cannot make a read
+        // reply enormous.
+        public const int NepoRestockOptionCap = 60;
+
+        // `Nepo/Window_DadCatalog.DrawRestockPanel` draws BOTH numbers with
+        // `Widgets.TextFieldNumeric(…, 0f, 999999f)`. A player cannot type a
+        // negative or anything past this, so the verb refuses those rather than
+        // handing them to the backend, whose only defence is a silent clamp.
+        public const int NepoRestockFieldMax = 999999;
 
         public const string NepoKindWords = "all|items|mechs|animals|slaves";
 
@@ -833,24 +853,972 @@ namespace AutoRimmer
             return d;
         }
 
+        // ====================================================================
+        // nepo-restock {def?, threshold?, target?, enabled?, stuff?, color?,
+        //               dry_run?, cap?}
+        //
+        //   {}                                   every standing rule
+        //   {def}                                one rule, and what a write of
+        //                                        it may say (stuffs, palette)
+        //   {def, threshold, target}             create or update it
+        //   {def, enabled:false}                 stop the sweep acting on it,
+        //                                        the numbers kept
+        //   {…, dry_run:true}                    every gate runs, nothing writes
+        //
+        // A STANDING RULE IS NOT AN ORDER, and that is the whole reason this
+        // verb exists next to `nepo-order`. `Nepo/NepoGameComponent
+        // .RunRestockSweep` walks every enabled rule once an in-game HOUR
+        // (`NepoTuning.RestockCheckIntervalTicks`, and only on a tick where
+        // `now % 250 == 0 && DadAvailable`), and for any def whose available
+        // count has fallen to or below `threshold` it orders `target -
+        // available`. With `requireCommsForRestock` on — the default — that
+        // becomes a `PendingDispatch` a colonist must call in at a console
+        // (`Nepo/WorkGiver_DispatchRestockOrder`), which `nepo-inbound` already
+        // reports. Before this verb the agent could SEE those dispatches and had
+        // no way to cause one.
+        //
+        // ============ THERE IS NO DELETE, AND THAT IS NOT AN OMISSION ========
+        // `Nepo/NepoGameComponent.SetRestock` has no removal branch:
+        // `threshold = Max(0, threshold); target = Max(threshold + 1, target);`
+        // then update-or-insert, so a zeroed rule is STORED at 0/1, not removed.
+        // `RemoveRestock` exists, has zero callers in Nepo, has no `NepoSync`
+        // wrapper and is not in `MpBridge.RegisterAll` — calling it would be an
+        // unsynced write to scribed state, which is the argument that keeps
+        // `ScheduleShipment` unbound. The catalog window cannot delete a rule
+        // either; its toggle only disables. So "remove" is spelled
+        // `enabled:false`, and asking for a delete gets that sentence.
+        //
+        // ============ THE GATE LIVES IN THE WIDGET — ALL FOUR OF THEM ========
+        // The backend enforces exactly two things, and they are both clamps.
+        // Every actual gate on a restock rule is drawn in
+        // `Nepo/Window_DadCatalog`, so a verb that binds `SetRestockRule` and
+        // stops there would hand the agent a rule on a def with no catalog row,
+        // in a material the picker never offers, in a colour outside the
+        // palette, with numbers no text field would accept — and Nepo would
+        // price and ship all of it. The four are reproduced and cited:
+        //   * CATALOG MEMBERSHIP — the panel exists only on rows built from
+        //     `CatalogBuilder.OrderableDefs()`, predicate
+        //     `CatalogBuilder.IsOrderable(ThingDef)`.
+        //   * MATERIAL — offered only when `CatalogBuilder
+        //     .CanCustomizeMaterial(def)`, chosen from `AllowedStuffs(def)`;
+        //     `Window_DadCatalog.RestockStuff(e)` hard-nulls it otherwise.
+        //   * COLOUR — offered only when `CatalogBuilder.CanCustomizeColor(def)`
+        //     (`IsApparel && HasComp(CompColorable)`), chosen from
+        //     `CatalogBuilder.StylingStationColors()`.
+        //   * RANGE — `Widgets.TextFieldNumeric(…, 0f, 999999f)` on both
+        //     fields. Refused here as bad args rather than left to the
+        //     backend's silent clamp.
+        //
+        // ============ TWO GATES DELIBERATELY NOT REPRODUCED ==================
+        // `dad-unavailable`: every other write in this file refuses on it, and
+        // this one MUST NOT. The restock panel has no `DadAvailable` check — a
+        // player can edit a rule with Dad gone — and what is gated is the SWEEP,
+        // inside `GameComponentTick`. Refusing here would fabricate a
+        // restriction the player does not have, which DESIGN's `261f2e9` entry
+        // names as the same class of error as bypassing a gate, facing the other
+        // way. So the rule is stored, `mode.dad_available` reports the fact, and
+        // `sweep` says in words that nothing will fire until he is back.
+        //
+        // THE CONSOLE CHAIN, likewise not reproduced, and this one is a closer
+        // call: reaching `DrawRestockPanel` at all means the catalog window is
+        // open, which means a sighted colonist walked to a powered console. It
+        // is not reproduced because editing a standing rule is bookkeeping —
+        // nothing is charged, nothing ships, and the act it schedules is itself
+        // re-gated on `DadAvailable` at sweep time and, under
+        // `requireCommsForRestock`, on a colonist walking to a console to call
+        // it in. The difference is WHEN the rule may be written, not WHAT it can
+        // buy. `nepo-order`, which does charge and does ship, keeps the whole
+        // chain. Recorded so the omission is a decision.
+        //
+        // ============ ONE CROSS-VERB EFFECT, PUBLISHED NOT DISCOVERED ========
+        // `SetRestock`'s last line is `SetMaterialPref(def, stuff, color)`, on
+        // every call, and `SetMaterialPref` REMOVES the entry when the choice is
+        // default-stuff-and-no-colour. So a write here also rewrites Nepo's
+        // remembered material for that def. Measured rather than assumed: the
+        // only reader of `materialPrefs` is
+        // `Window_DadCatalog.SeedCustomizationFromPrefs`, and even there a
+        // standing rule WINS over the pref — so the effect lands on what a
+        // human's next catalog visit comes up pre-filled with, and on nothing
+        // else. `nepo-order` is untouched by it: it sends an explicit `stuff`
+        // and `PlaceOrder` ships the manifest it is given.
+        //
+        // ============ READ THE WRITE BACK ====================================
+        // `NepoSync.SetRestockRule` is `void` and returns SILENTLY on a null
+        // component and on a null def. The verb re-reads with `GetRestock` and
+        // compares field by field POST-CLAMP; a disagreement is
+        // `restock-did-not-take` with the diagnosis, never a success.
+        // ====================================================================
+        [Verb("nepo-restock")]
+        public static object NepoRestock(VerbContext ctx)
+        {
+            const string V = "nepo-restock";
+            var a = ctx.Args;
+
+            // The delete ruling first, so a caller reaching for one gets the
+            // reason rather than the stray-key rule's generic sentence.
+            NepoNoDelete(ctx.Command?.Args);
+
+            a.NearMiss("def", "item", "thing", "defname");
+            a.NearMiss("threshold", "restock_at", "at", "min", "low", "reorder_at");
+            a.NearMiss("target", "restock_to", "to", "max", "up_to", "top_up");
+            a.NearMiss("enabled", "enable", "active", "on");
+            a.NearMiss("stuff", "material", "mat");
+            a.NearMiss("color", "colour", "tint", "dye");
+            a.NearMiss("dry_run", "preview", "simulate", "plan");
+            a.RefuseStray(V, NepoRestockArgs,
+                "Nothing was read and nothing was written. `dry_run` defaults to false, so a dropped "
+                + "preflight flag writes a real rule — and a rule is a STANDING instruction the hourly "
+                + "sweep spends credits on, not a one-shot order.");
+
+            // The mode is decided by which keys are present, before anything is
+            // read: any of the five rule fields makes this a write.
+            bool wantsWrite = a.Has("threshold") || a.Has("target") || a.Has("enabled")
+                || a.Has("stuff") || a.Has("color");
+            string defName = a.Str("def", null);
+            if (wantsWrite && defName == null)
+                throw new VerbArgsException("a rule is keyed by ThingDef, so a write needs `def`. "
+                    + "Send {def:\"MealSimple\", threshold:20, target:60}; send no arguments at all to "
+                    + "list every rule. Nothing was written.");
+
+            // The restock tier, and NOT the dad gate — see the header.
+            var gate = NepoGate(V, wantsWrite, out object comp, restockTier: true, requireDad: false);
+            if (gate != null) return gate;
+
+            if (defName == null) return NepoRestockList(V, a, comp);
+
+            ThingDef def = DefDatabase<ThingDef>.GetNamedSilentFail(defName);
+            if (def == null)
+                throw new VerbArgsException("no ThingDef named '" + defName
+                    + "' (see `nepo-catalog {filter:\"" + defName + "\"}`)");
+
+            return wantsWrite ? NepoRestockWrite(V, a, comp, def) : NepoRestockRead(V, comp, def);
+        }
+
+        /// Every standing rule. A pure read — and a snapshot one: `AllRestocks`
+        /// is the live `Dictionary.ValueCollection`, so the bridge copies it out
+        /// before anything walks it.
+        private static object NepoRestockList(string V, VerbArgs a, object comp)
+        {
+            int cap = a.Int("cap", NepoRestockCap);
+            if (cap < 1 || cap > 200) throw new VerbArgsException("cap must be 1..200");
+
+            var rules = Nepo.AllRestocks(comp);
+            rules.Sort((x, y) => string.CompareOrdinal(NepoRuleKey(x), NepoRuleKey(y)));
+
+            var rows = new List<object>();
+            int on = 0, firing = 0;
+            foreach (var r in rules)
+            {
+                var row = NepoRuleRow(comp, r);
+                if (row["enabled"] as bool? == true) on++;
+                if (row["would_fire"] as bool? == true) firing++;
+                if (rows.Count < cap) rows.Add(row);
+            }
+
+            var d = new Dictionary<string, object>
+            {
+                ["verb"] = V,
+                ["ok"] = true,
+                ["mode"] = NepoMode(comp),
+                ["total"] = rules.Count,
+                ["enabled"] = on,
+                ["would_fire_now"] = firing,
+                ["shown"] = rows.Count,
+                ["more"] = Math.Max(0, rules.Count - rows.Count),
+                ["cap"] = cap,
+                ["rows"] = rows,
+                ["shown_note"] = rows.Count + " of " + rules.Count + " standing rule(s) shown; "
+                    + on + " enabled, " + firing + " at or below threshold right now.",
+                ["basis"] = "Nepo/NepoGameComponent.AllRestocks — `restockOrders.Values`, the live "
+                    + "dictionary, snapshotted before it is walked. Rules are GLOBAL PER SAVE: nothing "
+                    + "keys on a Map.",
+                ["available_basis"] = NepoHomeMapBlock(),
+                ["sweep"] = NepoSweepBlock(comp),
+                ["removal"] = NepoRemovalNote,
+                ["action"] = NoStamp(),
+            };
+            return d;
+        }
+
+        /// One rule, plus what a write of it would be allowed to say. The option
+        /// lists are here and not in the list reply because they are per-def and
+        /// this is the call that asked about a def.
+        private static object NepoRestockRead(string V, object comp, ThingDef def)
+        {
+            object rule = null;
+            try { rule = Nepo.GetRestock(comp, def); }
+            catch (Exception e)
+            {
+                return NepoRefuse(V, "gate-unreadable", "Nepo/NepoGameComponent.GetRestock",
+                    "reading the rule threw: " + e.GetType().Name + ": "
+                    + Journal.Truncate(e.Message, 160), NepoMode(comp));
+            }
+
+            var d = new Dictionary<string, object>
+            {
+                ["verb"] = V,
+                ["ok"] = true,
+                ["mode"] = NepoMode(comp),
+                ["def"] = def.defName,
+                ["label"] = WorldSafe.Safe(() => def.LabelCap.ToString()),
+                ["has_rule"] = rule != null,
+                ["rule"] = rule == null ? null : NepoRuleRow(comp, rule),
+                ["available"] = NepoAvailable(comp, def),
+                ["available_basis"] = NepoHomeMapBlock(),
+                ["orderable_now"] = NepoBool(() => Nepo.IsOrderable(def)),
+                ["customize"] = NepoCustomizeBlock(def),
+                ["sweep"] = NepoSweepBlock(comp),
+                ["removal"] = NepoRemovalNote,
+                ["action"] = NoStamp(),
+            };
+            string uncountable = NepoUncountable(def);
+            if (uncountable != null) d["available_note"] = uncountable;
+            if (rule == null)
+                d["note"] = "no standing rule for this def. Create one with {def:\"" + def.defName
+                    + "\", threshold:N, target:M}; both numbers are required and neither is "
+                    + "defaulted. Nepo's own panel stages stackLimit/2 and stackLimit for a def with "
+                    + "no rule, but a player sees those numbers before clicking and an agent would "
+                    + "not, so this verb refuses instead of inventing them.";
+            return d;
+        }
+
+        /// Create or update one rule, through the synced entry point, with the
+        /// four widget gates in front of it and a read-back behind it.
+        private static object NepoRestockWrite(string V, VerbArgs a, object comp, ThingDef def)
+        {
+            bool dryRun = a.Bool("dry_run", false);
+
+            // ---- GATE 1: catalog membership ---------------------------------
+            bool orderable;
+            try { orderable = Nepo.IsOrderable(def); }
+            catch (Exception e)
+            {
+                // A gate that threw has not passed.
+                return NepoRefuse(V, "gate-unreadable", "Nepo/CatalogBuilder.IsOrderable",
+                    "reading it threw: " + e.GetType().Name + ": " + Journal.Truncate(e.Message, 160),
+                    NepoMode(comp));
+            }
+            if (!orderable)
+                return NepoRefuse(V, "not-orderable",
+                    "Nepo/CatalogBuilder.IsOrderable — the predicate OrderableDefs() filters on, and "
+                    + "Nepo/Window_DadCatalog draws its restock panel only on a row that list built",
+                    "'" + def.defName + "' has no row in Dad's catalog, so no restock panel exists for "
+                    + "it and no player could set this rule. Nepo would still sweep and ship it — the "
+                    + "sweep never re-checks orderability — which is exactly why this is refused. "
+                    + "(A minifiable BUILDING additionally needs `allowMinifiableBuildings` unless it "
+                    + "is art; that setting is currently "
+                    + (Nepo.AllowMinifiableBuildings(comp) ? "ON" : "OFF") + ".) Nothing was written.",
+                    NepoMode(comp));
+
+            object existing;
+            try { existing = Nepo.GetRestock(comp, def); }
+            catch (Exception e)
+            {
+                return NepoRefuse(V, "gate-unreadable", "Nepo/NepoGameComponent.GetRestock",
+                    "reading the current rule threw, so this write cannot say what it would change: "
+                    + e.GetType().Name + ": " + Journal.Truncate(e.Message, 160), NepoMode(comp));
+            }
+
+            // THE SNAPSHOT MUST HAPPEN HERE. `SetRestock` mutates the EXISTING
+            // RestockOrder in place when one is present, so a "before" row read
+            // after the write would be the "after" row wearing a different key.
+            var before = existing == null ? null : NepoRuleRow(comp, existing);
+            bool wasEnabled = existing != null && Nepo.RestockEnabled(existing);
+
+            // ---- the numbers ------------------------------------------------
+            bool hasThreshold = a.Has("threshold");
+            bool hasTarget = a.Has("target");
+            if (existing == null && (!hasThreshold || !hasTarget))
+                return NepoRefuse(V, "incomplete-rule",
+                    "Nepo/Window_DadCatalog.DrawRestockPanel stages both numbers before its toggle "
+                    + "can create a rule (Nepo/NepoSync.ToggleRestockRule takes threshold and target), "
+                    + "and Nepo/NepoGameComponent.SetRestock has no defaults of its own",
+                    "there is no standing rule for '" + def.defName + "' yet, so creating one needs "
+                    + "BOTH `threshold` and `target`. Neither is defaulted: a guessed threshold is a "
+                    + "standing instruction to spend credits every hour, and the panel's own staged "
+                    + "defaults (stackLimit/2 and stackLimit) are numbers a player reads before "
+                    + "clicking. Nothing was written.",
+                    NepoMode(comp));
+
+            int threshold = hasThreshold ? a.Int("threshold", 0) : Nepo.RestockThreshold(existing);
+            int target = hasTarget ? a.Int("target", 0) : Nepo.RestockTarget(existing);
+
+            // Only what the CALLER supplied is range-checked. A value carried
+            // forward is what the rule already holds, and re-sending it is what
+            // the panel does; refusing it would make a numbers-untouched write
+            // fail on a state this verb did not create.
+            if (hasThreshold) NepoRestockRange("threshold", threshold);
+            if (hasTarget) NepoRestockRange("target", target);
+
+            // `SetRestock`'s own two lines, applied here so the read-back has
+            // something to compare against and the reply can say it happened.
+            // The panel pre-clamps the same way before it sends.
+            int storedTarget = Math.Max(threshold + 1, target);
+
+            // ---- enabled ----------------------------------------------------
+            // Absent means "leave it as it is" on an existing rule and "on" for
+            // a new one — the widget exactly: its number fields re-send the
+            // rule's current `active`, and its toggle creates enabled.
+            bool enabled = a.Bool("enabled", existing == null || wasEnabled);
+
+            // ---- GATE 2: the material ---------------------------------------
+            ThingDef stuff;
+            string stuffSource;
+            if (a.Has("stuff"))
+            {
+                object raw = a.Raw("stuff");
+                if (raw == null)
+                {
+                    stuff = null;
+                    stuffSource = "cleared by this call — the reorder will ship in the def's default "
+                        + "stuff (Verse/GenStuff.DefaultStuffFor)";
+                }
+                else
+                {
+                    if (!(raw is string sName) || sName.Length == 0)
+                        throw new VerbArgsException("`stuff` must be a non-empty defName string, or "
+                            + "null to clear it back to the def's default stuff");
+                    stuff = DefDatabase<ThingDef>.GetNamedSilentFail(sName);
+                    if (stuff == null)
+                        throw new VerbArgsException("no ThingDef named '" + sName + "' for the "
+                            + "`stuff` of '" + def.defName + "'");
+                    if (!Nepo.CanCustomizeMaterial(def))
+                        return NepoRefuse(V, "stuff-not-customizable",
+                            "Nepo/CatalogBuilder.CanCustomizeMaterial (`MadeFromStuff && (IsArt || "
+                            + "IsApparel)`) gates the customize panel's material picker, and "
+                            + "Nepo/Window_DadCatalog.RestockStuff hard-nulls the stuff a rule is "
+                            + "written with when the row does not offer one",
+                            "'" + def.defName + "' has no material picker in the catalog, so a rule "
+                            + "for it cannot carry a `stuff`. Drop the key. Nothing was written.",
+                            NepoMode(comp));
+                    if (!Nepo.AllowedStuffs(def).Contains(stuff))
+                        return NepoRefuse(V, "stuff-not-allowed",
+                            "Nepo/CatalogBuilder.AllowedStuffs(def) — `GenStuff.AllowedStuffsFor` — is "
+                            + "the material picker's whole option list in Nepo/Window_DadCatalog"
+                            + ".DrawMaterialPicker",
+                            "'" + stuff.defName + "' is not one of the materials Dad will make '"
+                            + def.defName + "' from. `nepo-restock {def:\"" + def.defName + "\"}` "
+                            + "lists the ones he will. Nothing was written.",
+                            NepoMode(comp));
+                    stuffSource = "set by this call";
+                }
+            }
+            else
+            {
+                // Carried, not dropped. `SetRestockRule` has no optional
+                // parameters, so every write sends a stuff — and sending null
+                // because the caller said nothing would silently change what the
+                // next reorder ships in.
+                stuff = existing == null ? null : Nepo.RestockStuff(existing);
+                stuffSource = existing == null
+                    ? "not set — a new rule with no `stuff` ships in the def's default stuff"
+                    : "carried forward from the stored rule (the key was absent, and an absent key "
+                      + "must not silently change what the reorder ships in)";
+            }
+
+            // ---- GATE 3: the colour -----------------------------------------
+            Color? color;
+            string colorSource;
+            if (a.Has("color"))
+            {
+                object raw = a.Raw("color");
+                if (raw == null)
+                {
+                    color = null;
+                    colorSource = "cleared by this call — the reorder ships in the material's own "
+                        + "colour, which is the panel's \"natural\"";
+                }
+                else
+                {
+                    if (!(raw is string cName) || cName.Length == 0)
+                        throw new VerbArgsException("`color` must be a ColorDef defName string (the "
+                            + "palette is Nepo/CatalogBuilder.StylingStationColors(); "
+                            + "`nepo-restock {def:\"" + def.defName + "\"}` lists it), or null for "
+                            + "the natural colour");
+                    ColorDef cd = DefDatabase<ColorDef>.GetNamedSilentFail(cName);
+                    if (cd == null)
+                        throw new VerbArgsException("no ColorDef named '" + cName + "'. The palette "
+                            + "is named by ColorDef because Nepo stores a raw UnityEngine.Color and "
+                            + "an agent cannot type one; `nepo-restock {def:\"" + def.defName
+                            + "\"}` lists every colour the picker offers, by defName.");
+                    if (!Nepo.CanCustomizeColor(def))
+                        return NepoRefuse(V, "color-not-customizable",
+                            "Nepo/CatalogBuilder.CanCustomizeColor (`IsApparel && "
+                            + "HasComp(CompColorable)`) gates the customize panel's colour palette, "
+                            + "and Nepo/Window_DadCatalog.RestockColor hard-nulls the colour a rule "
+                            + "is written with when the row is not colourable",
+                            "'" + def.defName + "' has no colour picker in the catalog — it is not "
+                            + "apparel carrying CompColorable — so a rule for it cannot carry a "
+                            + "`color`. Drop the key. Nothing was written.",
+                            NepoMode(comp));
+                    if (!NepoInPalette(cd.color))
+                        return NepoRefuse(V, "color-not-in-palette",
+                            "Nepo/CatalogBuilder.StylingStationColors() is the whole option list "
+                            + "Nepo/Window_DadCatalog.DrawCustomizePanel hands Widgets.ColorSelector",
+                            "'" + cd.defName + "' is a real ColorDef but its colour is not one the "
+                            + "catalog's picker offers. That list is the styling station's own "
+                            + "(ColorType.Ideo and .Misc, falling back to .Structure when Ideology is "
+                            + "off), so with Ideology absent most ideoligion colours are unreachable. "
+                            + "`nepo-restock {def:\"" + def.defName + "\"}` lists the reachable ones. "
+                            + "Nothing was written.",
+                            NepoMode(comp));
+                    color = cd.color;
+                    colorSource = "set by this call, from ColorDef " + cd.defName;
+                }
+            }
+            else
+            {
+                color = existing == null ? (Color?)null : Nepo.RestockColor(existing);
+                colorSource = existing == null
+                    ? "not set — a new rule with no `color` ships in the natural colour"
+                    : "carried forward from the stored rule (an absent key must not silently recolour "
+                      + "what the reorder ships)";
+            }
+
+            // ---- the shape of what is about to be written -------------------
+            var wanted = NepoRuleRowOf(comp, def, threshold, storedTarget, enabled, stuff, color);
+            var clamp = target == storedTarget ? null : new Dictionary<string, object>
+            {
+                ["target_sent"] = target,
+                ["target_stored"] = storedTarget,
+                ["why"] = "Nepo/NepoGameComponent.SetRestock is `target = Mathf.Max(threshold + 1, "
+                    + "target)`, so a reorder always brings in at least one unit. "
+                    + "Nepo/Window_DadCatalog.DrawRestockPanel pre-clamps the same way before it "
+                    + "sends, so this is the number a player would have committed too.",
+            };
+
+            var gates = new Dictionary<string, object>
+            {
+                ["reproduced"] = new List<object>
+                {
+                    "catalog membership — Nepo/CatalogBuilder.IsOrderable",
+                    "material — Nepo/CatalogBuilder.CanCustomizeMaterial + .AllowedStuffs",
+                    "colour — Nepo/CatalogBuilder.CanCustomizeColor + .StylingStationColors",
+                    "range 0.." + NepoRestockFieldMax
+                        + " — Nepo/Window_DadCatalog.DrawRestockPanel's Widgets.TextFieldNumeric",
+                },
+                ["not_reproduced"] = "`dad-unavailable`, and the comms-console chain that opens the "
+                    + "catalog window. The restock panel itself has no DadAvailable check — what is "
+                    + "gated is the SWEEP (Nepo/NepoGameComponent.GameComponentTick's "
+                    + "`&& DadAvailable`) — and editing a rule charges nothing and ships nothing. See "
+                    + "`sweep` for whether this rule can actually fire.",
+            };
+
+            // ---- dry run ----------------------------------------------------
+            if (dryRun)
+            {
+                var pre = new Dictionary<string, object>
+                {
+                    ["verb"] = V,
+                    ["ok"] = true,
+                    ["mode"] = NepoMode(comp),
+                    ["dry_run"] = true,
+                    ["written"] = false,
+                    ["def"] = def.defName,
+                    ["would"] = wanted,
+                    ["would_create"] = existing == null,
+                    ["before"] = before,
+                    ["stuff_source"] = stuffSource,
+                    ["color_source"] = colorSource,
+                    ["gates"] = gates,
+                    ["sweep"] = NepoSweepBlock(comp),
+                    ["available_basis"] = NepoHomeMapBlock(),
+                    ["material_pref"] = NepoMaterialPrefNote(stuff, color),
+                    ["removal"] = NepoRemovalNote,
+                    ["note"] = "nothing was written. Every gate above ran — catalog membership, the "
+                        + "material, the colour and the numeric range — so this is what the real call "
+                        + "would store, not a guess. Re-send without `dry_run` to write it.",
+                    ["action"] = NoStamp(),
+                };
+                if (clamp != null) pre["clamp"] = clamp;
+                return pre;
+            }
+
+            // ---- the act ----------------------------------------------------
+            // `NepoSync.SetRestockRule`, never `NepoGameComponent.SetRestock`:
+            // only the former is registered with MP.RegisterSyncMethod
+            // (Nepo/MpBridge.RegisterAll, "restock rule write"). The colour goes
+            // through Nepo's own `EncodeColor` inside the bridge.
+            try { Nepo.SetRestockRule(def, threshold, storedTarget, enabled, stuff, color); }
+            catch (Exception e)
+            {
+                string diag = "Nepo/NepoSync.SetRestockRule threw: " + e.GetType().Name + ": "
+                    + Journal.Truncate(e.Message, 200);
+                Journal.EmitWarning("[AutoRimmer] nepo-restock: " + diag);
+                return NepoRefuse(V, "set-threw", "Nepo/NepoSync.SetRestockRule",
+                    diag + ". Re-read with `nepo-restock {def:\"" + def.defName + "\"}` before "
+                    + "assuming nothing changed.",
+                    NepoMode(comp));
+            }
+
+            // ---- READ THE WRITE BACK ----------------------------------------
+            object after = null;
+            try { after = Nepo.GetRestock(comp, def); } catch { }
+            if (after == null)
+            {
+                string diag = "Nepo/NepoSync.SetRestockRule returned without storing anything — it "
+                    + "returns silently when NepoGameComponent.Active is null and when the def is "
+                    + "null, and GetRestock now answers null for '" + def.defName + "'.";
+                Journal.EmitWarning("[AutoRimmer] nepo-restock: the rule did not take. " + diag);
+                return NepoRefuse(V, "restock-did-not-take",
+                    "Nepo/NepoSync.SetRestockRule, read back against Nepo/NepoGameComponent.GetRestock",
+                    diag, NepoMode(comp));
+            }
+
+            var wrong = new List<string>();
+            if (Nepo.RestockThreshold(after) != threshold)
+                wrong.Add("threshold is " + Nepo.RestockThreshold(after) + ", sent " + threshold);
+            if (Nepo.RestockTarget(after) != storedTarget)
+                wrong.Add("target is " + Nepo.RestockTarget(after) + ", sent " + storedTarget
+                    + " (already clamped)");
+            if (Nepo.RestockEnabled(after) != enabled)
+                wrong.Add("enabled is " + Nepo.RestockEnabled(after) + ", sent " + enabled);
+            if (Nepo.RestockStuff(after) != stuff)
+                wrong.Add("stuff is " + (Nepo.RestockStuff(after)?.defName ?? "null") + ", sent "
+                    + (stuff?.defName ?? "null"));
+            Color? afterColor = Nepo.RestockColor(after);
+            if (afterColor.HasValue != color.HasValue
+                || (color.HasValue && !NepoSameColor(afterColor.Value, color.Value)))
+                wrong.Add("color is " + (afterColor.HasValue ? NepoHex(afterColor.Value) : "null")
+                    + ", sent " + (color.HasValue ? NepoHex(color.Value) : "null")
+                    + " — it crosses Nepo/NepoSync.EncodeColor as a string and comes back through "
+                    + "its private DecodeColor, which answers null on anything it cannot parse");
+            if (wrong.Count > 0)
+            {
+                string diag = "the stored rule disagrees with what was sent: "
+                    + string.Join("; ", wrong.ToArray());
+                Journal.EmitWarning("[AutoRimmer] nepo-restock: " + diag);
+                return NepoRefuse(V, "restock-did-not-take",
+                    "Nepo/NepoSync.SetRestockRule, read back field by field against "
+                    + "Nepo/NepoGameComponent.GetRestock",
+                    diag + ". The rule that IS stored is in `stored`.", NepoMode(comp),
+                    new Dictionary<string, object> { ["stored"] = NepoRuleRow(comp, after) });
+            }
+
+            var stored = NepoRuleRow(comp, after);
+            var changed = NepoRuleDiff(before, stored);
+
+            long seq = Act(V, "restock", def.defName, new Dictionary<string, object>
+            {
+                ["created"] = existing == null,
+                ["threshold"] = threshold,
+                ["target"] = storedTarget,
+                ["enabled"] = enabled,
+                ["stuff"] = stuff?.defName,
+                ["color"] = color.HasValue ? NepoHex(color.Value) : null,
+                ["changed"] = changed,
+            });
+
+            var d = new Dictionary<string, object>
+            {
+                ["verb"] = V,
+                ["ok"] = true,
+                ["mode"] = NepoMode(comp),
+                ["dry_run"] = false,
+                ["written"] = true,
+                ["created"] = existing == null,
+                ["def"] = def.defName,
+                ["rule"] = stored,
+                ["before"] = before,
+                ["changed"] = changed,
+                ["stuff_source"] = stuffSource,
+                ["color_source"] = colorSource,
+                ["gates"] = gates,
+                ["sweep"] = NepoSweepBlock(comp),
+                ["available_basis"] = NepoHomeMapBlock(),
+                ["material_pref"] = NepoMaterialPrefNote(stuff, color),
+                ["removal"] = NepoRemovalNote,
+                ["action"] = Stamp(seq),
+            };
+            if (clamp != null) d["clamp"] = clamp;
+            if (!enabled)
+                d["disabled_note"] = "the rule is stored and the sweep will skip it "
+                    + "(Nepo/NepoGameComponent.RunRestockSweep's `if (!order.enabled) continue;`). "
+                    + "The numbers are kept — this is what \"remove\" is spelled as.";
+            return d;
+        }
+
+        // ==================================================================
+        // ------------------------- restock helpers ------------------------
+        // ==================================================================
+
+        private const string NepoRemovalNote =
+            "there is no delete. Nepo/NepoGameComponent.SetRestock has no removal branch — a zeroed "
+            + "rule is STORED at threshold 0 / target 1 — and RemoveRestock has no NepoSync wrapper "
+            + "and is not registered with Multiplayer, so calling it would be an unsynced write. The "
+            + "catalog window cannot delete a rule either; its toggle only disables. Send "
+            + "{def:\"…\", enabled:false} to stop the sweep acting on a rule while keeping its numbers.";
+
+        /// A delete key is refused BY NAME, before the stray-key rule gets to
+        /// it, because "the verb does not accept `remove`" is a much worse
+        /// answer than "a rule is disabled, not deleted, and here is why".
+        private static void NepoNoDelete(Dictionary<string, object> raw)
+        {
+            // Deliberately the RAW dictionary and not `VerbArgs.Has`: a `Has`
+            // here would MARK these keys as read, so a later refactor that lost
+            // the throw would let them slip past RefuseStray in silence — the
+            // exact widening the stray-key rule exists to stop.
+            if (raw == null) return;
+            string[] words = { "remove", "delete", "clear", "unset", "drop", "cancel" };
+            foreach (var w in words)
+                if (raw.ContainsKey(w))
+                    throw new VerbArgsException("this verb has no delete mode and does not read '" + w
+                        + "'. " + NepoRemovalNote);
+        }
+
+        private static string NepoRuleKey(object rule)
+        {
+            var def = Nepo.RestockRuleDef(rule);
+            return def?.defName ?? "";
+        }
+
+        private static Dictionary<string, object> NepoRuleRow(object comp, object rule)
+            => NepoRuleRowOf(comp, Nepo.RestockRuleDef(rule), Nepo.RestockThreshold(rule),
+                Nepo.RestockTarget(rule), Nepo.RestockEnabled(rule), Nepo.RestockStuff(rule),
+                Nepo.RestockColor(rule));
+
+        /// One row, built from values rather than from a rule object, so the
+        /// dry run's preview and the stored rule are the same shape and can be
+        /// compared key by key.
+        private static Dictionary<string, object> NepoRuleRowOf(object comp, ThingDef def,
+            int threshold, int target, bool enabled, ThingDef stuff, Color? color)
+        {
+            int? available = def == null ? null : NepoAvailable(comp, def);
+            int? qty = available.HasValue ? (int?)Math.Max(0, target - available.Value) : null;
+            int? unit = null;
+            if (def != null)
+                try { unit = Nepo.PriceFor(def, stuff); } catch { }
+
+            var d = new Dictionary<string, object>
+            {
+                ["def"] = def?.defName,
+                ["label"] = def == null ? null : WorldSafe.Safe(() => def.LabelCap.ToString()),
+                ["enabled"] = enabled,
+                ["threshold"] = threshold,
+                ["target"] = target,
+                ["stuff"] = stuff?.defName,
+                ["color"] = color.HasValue ? NepoHex(color.Value) : null,
+                ["color_def"] = color.HasValue ? NepoColorDefName(color.Value) : null,
+                ["available"] = available,
+                ["would_order"] = qty,
+                // The sweep's own two tests, in its own order: enabled, def
+                // non-null, and `available <= threshold`. `target` is always at
+                // least `threshold + 1`, so a crossed threshold always yields a
+                // positive quantity.
+                ["would_fire"] = enabled && def != null && available.HasValue
+                    && available.Value <= threshold,
+                ["unit_price"] = unit,
+                ["reorder_cost"] = unit.HasValue && qty.HasValue ? (object)((long)unit.Value * qty.Value) : null,
+            };
+            if (def == null)
+            {
+                d["note"] = "this rule's def no longer resolves (a mod was removed after the save "
+                    + "was written). Nepo/NepoGameComponent.RunRestockSweep skips it: "
+                    + "`if (!order.enabled || order.def == null) continue;`.";
+            }
+            else
+            {
+                // Null is "we could not look", and only a measured FALSE earns
+                // the warning — a def we could not test must not be reported as
+                // one that fell out of the catalog.
+                bool? stillOrderable = NepoBool(() => Nepo.IsOrderable(def)) as bool?;
+                d["orderable_now"] = stillOrderable;
+                string uncountable = NepoUncountable(def);
+                if (uncountable != null) d["available_note"] = uncountable;
+                if (stillOrderable == false)
+                    d["note"] = "this def is no longer in Dad's catalog "
+                        + "(Nepo/CatalogBuilder.IsOrderable is false for it), but the sweep does not "
+                        + "re-check that — it will still be ordered, priced and shipped.";
+            }
+            return d;
+        }
+
+        /// The two rows differing, in words, so the journal line and the reply
+        /// say what a write actually moved rather than only what it stored.
+        private static List<object> NepoRuleDiff(Dictionary<string, object> before,
+            Dictionary<string, object> after)
+        {
+            var outp = new List<object>();
+            if (before == null) { outp.Add("created"); return outp; }
+            string[] keys = { "enabled", "threshold", "target", "stuff", "color_def", "color" };
+            foreach (var k in keys)
+            {
+                object b = before.TryGetValue(k, out var bv) ? bv : null;
+                object v = after.TryGetValue(k, out var av) ? av : null;
+                if (Equals(b, v)) continue;
+                // `color` and `color_def` describe the same change; the defName
+                // is the readable half and the hex is the fallback when no
+                // ColorDef matches.
+                if (k == "color" && !Equals(before.TryGetValue("color_def", out var bd) ? bd : null,
+                        after.TryGetValue("color_def", out var ad) ? ad : null))
+                    continue;
+                outp.Add(k + " " + (b ?? "null") + " -> " + (v ?? "null"));
+            }
+            if (outp.Count == 0) outp.Add("nothing — the rule already said this");
+            return outp;
+        }
+
+        /// Nepo's own "you have N". Null is WE COULD NOT LOOK, never zero.
+        private static int? NepoAvailable(object comp, ThingDef def)
+        {
+            if (def == null || NepoUncountable(def) != null) return null;
+            try { return Nepo.ColonyAvailableCount(comp, def); }
+            catch { return null; }
+        }
+
+        /// Why this def's available count must not be asked for, or null.
+        ///
+        /// `ColonyAvailableCount` reaches `Verse/ListerThings.ThingsOfDef`,
+        /// which `Log.ErrorOnce`s for `MinifiedThing` and tells the caller to
+        /// use the group instead — a RED ERROR raised by an agent-supplied
+        /// `def`, which this repo's zero-red-errors invariant forbids.
+        /// `SpatialVerbs.Nearest` and `things` route around the same call; this
+        /// one cannot route around it (the count is Nepo's, computed inside the
+        /// other mod), so it declines to ask and says so. `nepo-restock
+        /// {def:"MinifiedThing"}` is one word away from every other read, so
+        /// this is reachable, not theoretical.
+        private static string NepoUncountable(ThingDef def)
+        {
+            ThingDef minified = null;
+            try { minified = ThingDefOf.MinifiedThing; } catch { }
+            if (minified != null && def == minified)
+                return "`available` was NOT read for this def. Nepo/NepoGameComponent"
+                    + ".ColonyAvailableCount goes through Verse/ListerThings.ThingsOfDef, which "
+                    + "Log.ErrorOnce's on MinifiedThing and tells you to ask for the group instead — "
+                    + "and a red error raised by an argument is a thing this mod does not do. Null "
+                    + "here is 'not asked', not 'none'.";
+            return null;
+        }
+
+        /// WHICH map the availability count came from. `ColonyAvailableCount`
+        /// and `RunRestockSweep` both open `Find.AnyPlayerHomeMap`, so with two
+        /// home maps "the colony has N" is a statement about ONE of them, and
+        /// the drop lands there too.
+        private static Dictionary<string, object> NepoHomeMapBlock()
+        {
+            Map home = null;
+            int homes = 0;
+            try
+            {
+                home = Find.AnyPlayerHomeMap;
+                var maps = Find.Maps;
+                if (maps != null)
+                    for (int i = 0; i < maps.Count; i++)
+                        if (maps[i] != null && maps[i].IsPlayerHome) homes++;
+            }
+            catch { }
+
+            var d = new Dictionary<string, object>
+            {
+                ["map_id"] = home?.uniqueID,
+                ["map"] = home == null ? null : WorldSafe.Safe(() => home.Parent?.LabelCap.ToString()),
+                ["player_home_maps"] = homes,
+                ["basis"] = "Nepo/NepoGameComponent.ColonyAvailableCount is MapCount(map, def) + "
+                    + "CommittedCount(def) on `Find.AnyPlayerHomeMap` — storage, loose stacks, "
+                    + "haul-source containers and carried units, plus in-flight drops and dispatches "
+                    + "awaiting a call. Nepo/NepoGameComponent.RunRestockSweep opens the SAME map and "
+                    + "returns early when it is null. Reading it is observer-safe: its only cache "
+                    + "effect is Verse/MapPawns.SpawnedPawnsInFaction creating an EMPTY per-faction "
+                    + "list for a faction that has none — create-if-missing, not the clear-and-refill "
+                    + "class WorldSafe.cs refuses — and it is what Nepo's own panel does every "
+                    + "redraw.",
+            };
+            if (home == null)
+                d["note"] = "there is no player home map, so the sweep returns before it looks at any "
+                    + "rule and `available` could not be read.";
+            else if (homes > 1)
+                d["note"] = "there are " + homes + " player home maps. `available` is this one's, not "
+                    + "the colony's, and the reorder is decided and delivered against whichever map "
+                    + "`Find.AnyPlayerHomeMap` returns at sweep time.";
+            return d;
+        }
+
+        /// When the sweep next looks, and whether it will look at all.
+        private static Dictionary<string, object> NepoSweepBlock(object comp)
+        {
+            int now = 0;
+            try { now = Find.TickManager.TicksGame; } catch { }
+            int? interval = Nepo.RestockSweepIntervalTicks();
+            object next = null;
+            if (interval.HasValue && interval.Value > 0)
+                next = now + (interval.Value - now % interval.Value);
+
+            var d = new Dictionary<string, object>
+            {
+                ["now_tick"] = now,
+                ["interval_ticks"] = interval.HasValue ? (object)interval.Value : null,
+                ["next_sweep_tick"] = next,
+                ["dad_available"] = NepoBool(() => Nepo.DadAvailable(comp)),
+                ["require_comms_for_restock"] = NepoBool(() => Nepo.RequireCommsForRestock(comp)),
+                ["basis"] = "Nepo/NepoGameComponent.GameComponentTick runs the sweep only when "
+                    + "`now % NepoTuning.RestockCheckIntervalTicks == 0 && DadAvailable`, inside a "
+                    + "tick that has already returned unless `now % 250 == 0` and `IsNepoGame`. "
+                    + "RunRestockSweep itself is PRIVATE — there is no way to force it from a verb, "
+                    + "and DevForceRestockSweep is Nepo's own dev-only entry. A rule written now is "
+                    + "therefore not visible in `nepo-inbound` until the next sweep tick above.",
+            };
+            if (interval.HasValue)
+                d["waiting"] = "advance up to " + interval.Value + " ticks with the threshold "
+                    + "genuinely crossed to see this fire.";
+            else
+                d["interval_unknown"] = Nepo.SweepUnavailable
+                    + " — so this verb will not say how long a sweep is. Not 2500: unread.";
+            d["outcome"] = NepoBool(() => Nepo.RequireCommsForRestock(comp)) as bool? == false
+                ? "with `requireCommsForRestock` OFF, a fired rule is charged and shipped on the spot "
+                  + "and shows up in `nepo-inbound`'s SHIPMENTS."
+                : "with `requireCommsForRestock` ON (the default), a fired rule becomes a "
+                  + "PendingDispatch — unpaid, waiting for a colonist to call it in at a comms "
+                  + "console (Nepo/WorkGiver_DispatchRestockOrder) — and shows up in "
+                  + "`nepo-inbound`'s DISPATCHES.";
+            return d;
+        }
+
+        /// What a write of this rule also did to Nepo's remembered material.
+        private static string NepoMaterialPrefNote(ThingDef stuff, Color? color)
+        {
+            string what = stuff == null && !color.HasValue
+                ? "REMOVED Nepo's remembered material for this def"
+                : "overwrote Nepo's remembered material for this def";
+            return "writing a rule also " + what + " — Nepo/NepoGameComponent.SetRestock's last line "
+                + "is `SetMaterialPref(def, stuff, color)`, and SetMaterialPref removes the entry for "
+                + "a default-stuff, no-colour choice. Measured: the only reader of `materialPrefs` is "
+                + "Nepo/Window_DadCatalog.SeedCustomizationFromPrefs, where a standing RULE already "
+                + "wins over the pref — so what this changes is what a human's next catalog visit "
+                + "comes up pre-filled with. `nepo-order` is unaffected: it sends an explicit `stuff` "
+                + "and Nepo/NepoSync.PlaceOrder ships the manifest it is handed.";
+        }
+
+        /// What a write of this def may say, from the customize panel's own
+        /// predicates and option lists.
+        private static Dictionary<string, object> NepoCustomizeBlock(ThingDef def)
+        {
+            bool canMat = false, canCol = false;
+            try { canMat = Nepo.CanCustomizeMaterial(def); } catch { }
+            try { canCol = Nepo.CanCustomizeColor(def); } catch { }
+
+            var stuffs = new List<object>();
+            int stuffTotal = 0;
+            if (canMat)
+            {
+                var all = Nepo.AllowedStuffs(def);
+                stuffTotal = all.Count;
+                for (int i = 0; i < all.Count && stuffs.Count < NepoRestockOptionCap; i++)
+                    if (all[i] != null) stuffs.Add(all[i].defName);
+            }
+
+            var colors = new List<object>();
+            int colorTotal = 0;
+            if (canCol)
+            {
+                var palette = Nepo.StylingStationColors();
+                colorTotal = palette.Count;
+                for (int i = 0; i < palette.Count && colors.Count < NepoRestockOptionCap; i++)
+                    colors.Add(new Dictionary<string, object>
+                    {
+                        ["color_def"] = NepoColorDefName(palette[i]),
+                        ["hex"] = NepoHex(palette[i]),
+                    });
+            }
+
+            return new Dictionary<string, object>
+            {
+                ["can_material"] = canMat,
+                ["can_color"] = canCol,
+                ["stuffs_total"] = stuffTotal,
+                ["stuffs"] = stuffs,
+                ["colors_total"] = colorTotal,
+                ["colors"] = colors,
+                ["cap"] = NepoRestockOptionCap,
+                ["basis"] = "Nepo/CatalogBuilder.CanCustomizeMaterial (`MadeFromStuff && (IsArt || "
+                    + "IsApparel)`) with .AllowedStuffs, and .CanCustomizeColor (`IsApparel && "
+                    + "HasComp(CompColorable)`) with .StylingStationColors(). `color` is passed as a "
+                    + "ColorDef DEFNAME: Nepo stores a raw UnityEngine.Color, the palette is built "
+                    + "from ColorDefs, and a defName is the only handle an agent can type. A palette "
+                    + "entry with a null `color_def` is a colour no ColorDef in this bench matches by "
+                    + "value and cannot be named.",
+            };
+        }
+
+        private static void NepoRestockRange(string key, int v)
+        {
+            if (v < 0 || v > NepoRestockFieldMax)
+                throw new VerbArgsException("'" + key + "' must be 0.." + NepoRestockFieldMax
+                    + " (got " + v + "). Nepo/Window_DadCatalog.DrawRestockPanel draws both numbers "
+                    + "with `Widgets.TextFieldNumeric(…, 0f, 999999f)`, so a player cannot commit one "
+                    + "outside that range. The backend would clamp a negative to 0 silently, which is "
+                    + "a rule you did not ask for. Nothing was written.");
+        }
+
+        // ---- colours ------------------------------------------------------
+        // Nepo stores `UnityEngine.Color?` and the palette is a List<Color>, so
+        // nothing on that surface has a name. These map between the raw colour
+        // and the ColorDef the palette was built from, which is the only handle
+        // an agent can send.
+
+        private static bool NepoSameColor(Color a, Color b)
+            // `==` on Color is Unity's APPROXIMATE compare (squared magnitude of
+            // the difference under 1e-10), which is what a round trip through
+            // Nepo/NepoSync.EncodeColor's "R" formatting and back wants.
+            // `List<Color>.Contains` would use exact float equality instead.
+            => a == b;
+
+        private static bool NepoInPalette(Color c)
+        {
+            List<Color> palette;
+            try { palette = Nepo.StylingStationColors(); }
+            catch { return false; }
+            for (int i = 0; i < palette.Count; i++)
+                if (NepoSameColor(palette[i], c)) return true;
+            return false;
+        }
+
+        private static string NepoColorDefName(Color c)
+        {
+            try
+            {
+                var all = DefDatabase<ColorDef>.AllDefsListForReading;
+                for (int i = 0; i < all.Count; i++)
+                    if (all[i] != null && NepoSameColor(all[i].color, c)) return all[i].defName;
+            }
+            catch { }
+            return null;
+        }
+
+        private static string NepoHex(Color c)
+            => "#" + NepoChan(c.r) + NepoChan(c.g) + NepoChan(c.b) + NepoChan(c.a);
+
+        private static string NepoChan(float v)
+            => Mathf.Clamp(Mathf.RoundToInt(v * 255f), 0, 255).ToString("X2");
+
         // ==================================================================
         // ------------------------------ gates -----------------------------
         // ==================================================================
 
         /// The refusals every nepo verb shares, in order, cheapest first.
         /// Returns null when the call may proceed and `comp` is non-null.
-        private static object NepoGate(string verb, bool forWrite, out object comp)
+        ///
+        /// `restockTier` picks `Nepo.RestockAvailable` over the read/order
+        /// tiers, so a drifted restock api costs `nepo-restock` and nothing
+        /// else (NepoBridge.cs's three-tier comment).
+        ///
+        /// `requireDad` is a DECISION, not a default, and only `nepo-restock`
+        /// turns it off — see that verb's header. Every other write keeps it.
+        private static object NepoGate(string verb, bool forWrite, out object comp,
+            bool restockTier = false, bool requireDad = true)
         {
             comp = null;
 
-            if (forWrite ? !Nepo.OrderAvailable : !Nepo.Available)
+            bool blocked = restockTier ? !Nepo.RestockAvailable
+                : forWrite ? !Nepo.OrderAvailable : !Nepo.Available;
+            if (blocked)
             {
                 // Absence and drift are different news. Absence is the ordinary
                 // case on a bench without the mod and is NOT an error.
                 return NepoRefuse(verb, Nepo.Absent ? "nepo-absent" : "nepo-api-drift",
                     "AutoRimmer/NepoBridge.cs Resolve() — bound by name AND signature, so a changed "
                     + "shape disables the verb instead of throwing inside it",
-                    forWrite ? Nepo.OrderUnavailable : Nepo.Unavailable,
+                    restockTier ? Nepo.RestockUnavailable
+                        : forWrite ? Nepo.OrderUnavailable : Nepo.Unavailable,
                     null);
             }
 
@@ -881,7 +1849,7 @@ namespace AutoRimmer
                     + "early. Nothing was ordered.",
                     NepoMode(comp));
 
-            if (forWrite)
+            if (forWrite && requireDad)
             {
                 bool dad;
                 try { dad = Nepo.DadAvailable(comp); }
