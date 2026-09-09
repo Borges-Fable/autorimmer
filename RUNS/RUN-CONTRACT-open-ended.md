@@ -102,11 +102,69 @@ Read these; they exist because they killed people.
 - `error.class` on failures — `refused` and `flow` are the protocol working;
   `fault` is a problem. Do not treat a `busy` as a failure.
 
+### Added 2026-09-09 — thirteen changes, none of them yet run in a game
+
+**Read this section twice. It is the largest change to the protocol since the run
+contract was written, and none of it has been in front of RimWorld.**
+
+- **`advance` now replies with a SCREEN, not a field set.** Six panels in order:
+  the stop line, the map, the colonists, the gauges, what changed since you last
+  looked, and the decisions you owe. `look` returns the same object on demand. The
+  stop line is the first thing in it and says why the clock stopped.
+  **Do not pipe this reply through a filter.** Last run 2,821 of 2,988 `rwa` calls
+  went through `python3 -c`, `head` or `/dev/null`, and the audit's "the agent
+  ignored 52 truthful fields" turned out to be "the agent's own filter deleted 49 of
+  them before it saw them". The screen is the reply. Read the reply.
+- **`decisions` are served one kind at a time**, with `groups_pending` and
+  `total_owed` beside them. Nothing forces you to answer yet — the answer gate is
+  not built — but `decisions.gate` says so on every screen, and an unanswered
+  decision is still a decision you skipped.
+- **Every journal row now says `by`**: `agent`, `mod`, `game` or `human`. A human
+  row is Dorian doing something by hand. Last run 22 of his interventions were
+  invisible and three "deaths" were debug-menu residue.
+- **A `destroyed` event exists.** Player buildings, frames and corpses, carrying the
+  game's own `DestroyMode`. Last run a manhunter pack destroyed two turrets and an
+  autocannon and the journal recorded nothing; the agent rebuilt the two it counted
+  and never learned about the third. That was the first link in the wipe.
+- **Losses are levels.** A destroyed building stays on its gauge as "was N" until
+  it is rebuilt. There is no `write-off` verb yet, so a level you do not rebuild
+  persists — that is deliberate.
+- **`threats.hostiles_active` and `.hostiles_dormant` sit beside `hostiles`.** A
+  dormant mech cluster is hostile by faction but is not fighting anyone. Last run 31
+  digests read `hostiles: 5` beside `danger: "None"` and every "is the fight over"
+  read was wrong. Key "the fight is over" on `hostiles_active`, not `hostiles`.
+- **Time that moves with no advance in flight is now journaled** as `clock` rows,
+  and every advance carries `since_last_look` — including spans where a human drove.
+  Last run 15.3% of all game time was invisible.
+- **`posture` with no `pawns` is REFUSED.** It used to widen to every colonist: one
+  such call unbound all seven and they were 40–70 cells outside the walls when the
+  fatal raid landed. Pass `pawns` explicitly, or `pawns:"colonists"` to say
+  colony-wide **on purpose**.
+- **A stray or missing key is refused on any verb whose default mutates** —
+  `posture`, `alert-mute`, `carry`, `trade-start`, `build`. A dropped `dry_run` used
+  to place a real blueprint; it did that eleven times last run.
+- **Hyphenated argument keys now work.** `dry-run` is read as `dry_run`.
+- **You can order from Dad's catalog**: `nepo-catalog`, `nepo-order`,
+  `nepo-inbound`. Items, mechs, animals and slaves. With unlimited money and instant
+  delivery set, **this colony cannot starve** — if food is short, order food. Do not
+  let a colonist die of hunger and then report it as a finding.
+
+### Your squads behave differently now (seekandkill)
+
+- **An engagement leash bounds every fight the mod picks**, default 60 cells from
+  home. A squad will not march across the map any more. Last run a pawn walked 130
+  cells to melee shamblers and the downing that followed started the infection that
+  killed him.
+- **Runt clusters skip squad dispatch.** One or two stragglers are handled by
+  individual initiative rather than by marching a formation at them.
+- Both refusals are visible in the log under `[SK/Leash]` and `[SK/Density]`.
+
 ## Known-blind, work around it
 
 - Armour rating (G3 above).
-- `construction.gaps` returns a .NET type name, not cells — `4950f14`. Enclosure
-  is detected; *where* the hole is, is not. Use `room-at` on interior cells.
+- ~~`construction.gaps` returns a .NET type name~~ — **FIXED 2026-09-09** (`4950f14`).
+  `gaps` is now a JSON array of cells, the same shape as `first_gap`. You no longer
+  need the `room-at` workaround.
 - `resources.*` is stockpile-scoped with no map-wide twin except `food_rot`. "0 in
   stockpiles" is not "none on the map" — this was misread three times last run.
 
