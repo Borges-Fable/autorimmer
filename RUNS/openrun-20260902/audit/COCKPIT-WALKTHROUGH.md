@@ -145,9 +145,30 @@ Standing against it: element 5's call that the categories themselves get a Fable
 round. Keeping the line here is keeping the sort as drawn, not a finding that the
 four categories are the right four.
 
+### Element 7 of 9 — how it stays honest — **PROVISIONAL KEEP, owed an agent read**
+
+Six defences against the audit's central finding that a truthful field the agent
+did not ask for goes unread, 52 of 52: the screen is the reply rather than a
+field beside it; decisions hold the clock and deferring costs a logged reason,
+replacing the read gate that was defeated four ways; losses are levels rather
+than events; gauges come from a full count; chores need no attention; and every
+screen is a file on disk so the next audit measures compliance instead of
+reconstructing it.
+
+**Dorian's answer:** "should an agent look at this? too much to focus on right
+now but seems okay." Recorded as a provisional keep — nothing here is rejected,
+and the section is owed an independent read before it is treated as settled.
+
+Why this section in particular rewards one: it is the only element that makes
+falsifiable claims rather than taste calls. Each of the six is checkable against
+the audit's own evidence, and two are already admitted UNKNOWN in the sketch —
+whether the lower panels get read when the stop line was all the agent wanted,
+and whether a pushed picture gets opened. An independent reader can test the
+other four the same way rather than agreeing with them.
+
 ## Open — the question on the table
 
-Element 7 of 9 is next; nothing is currently awaiting an answer.
+Element 8 of 9 is next; nothing is currently awaiting an answer.
 
 ## Not yet reached — elements 4 to 9
 
@@ -179,4 +200,6 @@ the sketch's three trailing sections (§"Calls that could have gone the other wa
 4. The chore list re-examined in its own Fable round with element 6: `roof`
    folded into a wider care-of-items concern, `save` moved out of the chore
    category to plain automatic behaviour, and the categories themselves tested.
-5. Whatever elements 7 to 9 change.
+5. An independent agent read of element 7's six honesty claims, which are
+   falsifiable against the audit rather than matters of taste.
+6. Whatever elements 8 to 9 change.
