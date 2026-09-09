@@ -107,9 +107,31 @@ The rule: the screen names the id, the fetch takes the id, and nothing the agent
 must remember to do on a schedule lives on the fetch side — theme T11 measured
 scheduled fetches going to zero.
 
+### Element 5 of 9 — chores — **KEEP the rule, but the LIST is not settled**
+
+The rule itself stands: if every branch of the response can be computed from
+state the mod already publishes, the mod does it, and the playbook keeps
+judgement. Eleven such rules were kept by hand this run and their use decayed by
+quarter until the quarter with the wipe; a chore has no attention budget.
+
+**Dorian's objections, both about the categories rather than the behaviours:**
+
+- **`roof` is a symptom dressed as a chore.** Roofing the cells where items are
+  deteriorating treats the effect. The question it skips is why items are sitting
+  in an unroofed storage slot at all. It belongs inside a wider "taking care of
+  items" concern, not as its own trigger keyed on a deterioration reason.
+- **`save` should not be a chore, it should just be automatic.** It has no
+  trigger to judge and no procedure to get wrong; putting it in the same table as
+  rescuing the downed is a category error.
+
+**Standing call: this section is owed its own Fable round**, to check the list
+for logical consistency and to test whether the categories themselves are sound —
+not to re-decide the behaviours. Element 6 is the taxonomy those categories come
+from, so that round should almost certainly take both sections together.
+
 ## Open — the question on the table
 
-Element 5 of 9 is next; nothing is currently awaiting an answer.
+Element 6 of 9 is next; nothing is currently awaiting an answer.
 
 ## Not yet reached — elements 4 to 9
 
@@ -138,4 +160,7 @@ the sketch's three trailing sections (§"Calls that could have gone the other wa
    in its own voice that each panel is owed its own session.
 3. The agent-held mute list for stop reasons, its shape against the existing
    `AlertMuteComponent`, its visibility on the screen, and whether a mute expires.
-4. Whatever elements 4 to 9 change.
+4. The chore list re-examined in its own Fable round with element 6: `roof`
+   folded into a wider care-of-items concern, `save` moved out of the chore
+   category to plain automatic behaviour, and the categories themselves tested.
+5. Whatever elements 6 to 9 change.
