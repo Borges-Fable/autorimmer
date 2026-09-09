@@ -4235,3 +4235,120 @@ queue by default (an agent flailing mid-experiment must not page triage).
   (0.9f-o for the two refusals, 2.1c/2.7 for the request-versus-fact split) and
   has not been run against `_RimWorld-Agent`. `c519477`'s Acceptance section
   stays open until it has.
+
+- 2026-09-09 — **`digest.threats.hostiles` is not, and never was, a fight-over
+  predicate. `hostiles_active` and `hostiles_dormant` are published beside it;
+  `hostiles` does not move.** (openrun-20260902 audit,
+  `RUNS/openrun-20260902/audit/ROUNDS-2.md` "Round 4" §1.)
+
+  `ThreatSection` counts `!p.Downed && !p.Dead && p.HostileTo(Faction.OfPlayer)`
+  over `MapPawns.AllPawnsSpawned`. That overload of
+  `GenHostility.HostileTo(Thing, Faction)` has exactly one dormancy clause,
+  `IsActivityDormant`, whose own first branch is
+  `if (canBeDormant != null && !canBeDormant.Awake) return false` — so it
+  excludes ANOMALY activity entities only and DELIBERATELY keeps a
+  `CompCanBeDormant`-asleep mechanoid hostile by faction. Measured, not
+  inferred: all 37 digest envelopes from tick 8,793,512 to the wipe read
+  `hostiles: 5` for a dormant Padenik cluster that was fighting nobody, so every
+  rule keyed on `hostiles == 0` — `PLAY-LOOP.md` §Emergency posture step 5,
+  `turn.md §hostiles-standing`, M1 finding C10's `raid-end` — was inert across
+  the entire quarter that killed the colony.
+
+  **THE PREDICATE IS THE GAME'S OWN, not a hand-rolled one.**
+  `GenHostility.IsActiveThreatToPlayer` is what
+  `AutoUndrafter.AnyHostilePreventingAutoUndraft` runs to decide whether a
+  drafted colonist may stand down — vanilla's literal "the fight is over" rule —
+  and what `GenHostility.AnyHostileActiveThreatTo(map, faction, …)` runs over
+  `attackTargetsCache.TargetsHostileToFaction`. Anything else here would mean
+  the mod and the game disagreeing about whether a colonist may undraft.
+  Verified clause by clause against `RimWorld/GenHostility.cs`, by member name:
+  `IsActiveThreatTo` excludes `!HostileTo`, `Fogged()` (under the default
+  `canBeFogged: false`) and a hive lord with no `AssaultColony` duty;
+  `IsPotentialThreat` excludes a non-`IAttackTargetSearcher`,
+  `ThreatDisabled(null)`, `PanicFlee`/`IsPrisoner`, `!pawn.Awake()`,
+  `CompCanBeDormant != null && !Awake`, `CompMechanoid.Deactivated`,
+  `CompInitiatable !Initiated`, and unreachable-unfogged.
+
+  **The round's own §1 is wrong on one attribution, recorded here so nobody
+  quotes it.** It credits the `ThreatDisabled` exclusion to "the `SleepForever`
+  duty". `DutyDef.threatDisabled` exists and `Pawn.ThreatDisabled` reads it, but
+  the `SleepForever` DutyDef does not set it and **no vanilla DutyDef in the 1.6
+  Data tree sets it at all** — it is a modding hook (`grep -rl threatDisabled`
+  over `Data/` is empty). A `LordToil_Sleep` pawn is excluded anyway, by
+  `!pawn.Awake()` (that toil assigns `PawnDuty(DutyDefOf.SleepForever)`, whose
+  thinkNode ends in `JobGiver_ForceSleepNow`) and, for a cluster mech, by the
+  `CompCanBeDormant` clause. The conclusion stands; the attribution does not.
+
+  **`TargetsHostileToColony` is safe to read, and checking that was the point.**
+  CLAUDE.md's standing hazard is the observer that mutates and lazy-init getters
+  are the named trap, so this was verified before it was used:
+  `Map.attackTargetsCache` is a plain public FIELD assigned in the Map
+  constructor, `TargetsHostileToColony` is
+  `TargetsHostileToFaction(Faction.OfPlayer)`, and that member is one
+  `Dictionary.TryGetValue` returning the live `HashSet` or a static `emptySet`.
+  No rebuild, no lazy init, no write — the cache is maintained by EVENTS
+  (`Notify_ThingSpawned` / `Notify_ThingDespawned` /
+  `Notify_FactionHostilityChanged` / `UpdateTarget` / `Notify_FactionAdded` /
+  `Notify_FactionRemoved`), never by its reader. Two consequences are coded for
+  in `WorldSafe.ActiveHostilePawns`: the set handed back is the cache's OWN, so
+  it is counted and dropped rather than held or edited; and
+  `TargetsHostileToFaction(null)` `Log.Warning`s rather than returning empty, so
+  a null `Faction.OfPlayer` is checked BEFORE the call. **Nor does the predicate
+  pathfind on this call path**: `IsPotentialThreat`'s last clause runs
+  `Reachability.CanReachUnfogged` under
+  `generatorDef.defeatRequiresCantReachUnfogged`, which DEFAULTS TRUE — but that
+  method's own first test is `if (!c.Fogged(map)) return true`, and
+  `IsActiveThreatTo` has already returned false for a fogged thing under
+  `canBeFogged: false`. So it short-circuits before
+  `RegionTraverser.BreadthFirstTraverse` and touches no region or reachability
+  cache. Pass `canBeFogged: true` and that stops being true.
+
+  **`hostiles_dormant` reuses `ThreatPardonComponent.Dormant`; a second dormancy
+  helper was not written.** That helper — the cluster's own machinery,
+  `LordJob_StructureThreatCluster`'s `CurLordToil is LordToil_Sleep` where there
+  is such a lord, `!CompCanBeDormant.Awake` where there is not — was until now
+  consulted only to LAPSE a pardon. It answers the same question for two
+  reasons, which is one helper, not two. Its `null` (no dormancy state at all)
+  counts as neither dormant nor awake.
+
+  **THE THREE COUNTS DO NOT SUM, deliberately.** `hostiles` and
+  `hostiles_dormant` walk `AllPawnsSpawned` minus downed and dead;
+  `hostiles_active` reads the attack-targets cache, which also holds downed
+  hostiles (excluded again by `ThreatDisabled`) and, unfiltered, turrets and
+  hives. `hostiles_active` is filtered to PAWNS for parity with `hostiles`; the
+  price is that an all-turret cluster reads `hostiles_active: 0`, and a
+  fight-over rule that ever needs turrets needs a third field rather than a
+  change to this one. `hostiles_active` is also NULLABLE: `null` is the degraded
+  read and is never `0`, because `0` is the value a halt acts on.
+
+  **Would `threats.danger` alone have done? Nearly — and that is worth knowing
+  before adding fields, so it is recorded rather than buried.** The mod has
+  published `map.dangerWatcher.DangerRating` since 2.1, and 31 of the run's 419
+  stored envelopes read `danger: "None"` beside `hostiles: 5`. The
+  dormancy-aware zero was one field over for the whole run and nobody read it:
+  that is a READING failure, not a missing-field failure, and the play loop's
+  `hostiles == 0` rule should have been `danger == "None"` from the start. But
+  `None` is not the same claim, checked against `RimWorld/DangerWatcher.cs`:
+  `CalculateDangerRating` SUMS `kindDef.combatPower` over
+  `TargetsHostileToColony` filtered by `AffectsStoryDanger`, and returns `None`
+  when the sum is `0f`. So (a) a non-mortar hostile turret contributes zero and
+  an all-turret cluster shooting at the colony reads `None`; (b)
+  `AffectsStoryDanger` additionally drops pawns on `LordJob_DefendPoint` /
+  `LordJob_MechanoidDefendBase` that are not currently attacking — awake
+  defenders that fight the moment anyone walks in; (c) it is a three-value
+  bucket, so it cannot carry the `> 0 → 0` EDGE a trigger wants or say how many;
+  (d) it is stale by up to 101 ticks and its getter WRITES
+  `dangerRatingInt`/`lastUpdateTick` (accepted under StateWatch's
+  observers-never-mutate note) where `hostiles_active` writes nothing. `danger`
+  stays the cheap glance; `hostiles_active` is the predicate.
+
+  **No new halt machinery was needed and none was added.**
+  `until:{condition:{path:"threats.hostiles_active", op:"==", value:0}}` already
+  addresses the field, and `edge` already defaults true — so the round's
+  requested `hostiles_active > 0 → 0` trigger is spellable today.
+  `threat-pardon` keeps the narrower real job it always had.
+
+  **WHAT IS NOT DISCHARGED.** None of this has been in front of a game; the
+  worker may not launch one. `accept/hostiles-active.md` is the bench half — six
+  numbered phases needing a `MechCluster` fixture — and
+  `accept/s13-mod-surface.py` checks 0.6f–0.6i are the offline shape half.

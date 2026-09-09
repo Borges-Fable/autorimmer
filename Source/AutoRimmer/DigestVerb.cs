@@ -61,6 +61,18 @@ namespace AutoRimmer
     // plus a frame under advance) — assert windows, not exact ticks. It is
     // sorted by priority descending here; the readout's own list is unsorted.
     //
+    // `threats.hostiles` IS NOT A FIGHT-OVER PREDICATE and never was. It counts
+    // faction hostility, and `Thing.HostileTo(Faction)` keeps a dormant mech
+    // cluster hostile on purpose — so `hostiles == 0` cannot be reached while a
+    // sleeping cluster stands on the map, which is what happened for the whole
+    // of openrun-20260902's last quarter. `threats.hostiles_active` is the
+    // dormancy-aware count and is the one a halt should key on; it is the
+    // predicate the GAME keys its own auto-undraft on
+    // (`AutoUndrafter.AnyHostilePreventingAutoUndraft` ->
+    // `GenHostility.IsActiveThreatToPlayer`). `threats.hostiles_dormant` says
+    // why the two differ. `threats.danger == "None"` is a THIRD, coarser
+    // reading of roughly the same fact — see ThreatSection.
+    //
     // `food_days` is the vanilla Alert_LowFood division (human-edible nutrition
     // / (colonists + prisoners)), not a consumption simulation. It is also
     // STOCKPILE-ONLY and FRESH-ONLY and has NO ROT TERM — `resources.food_rot`
@@ -642,6 +654,7 @@ namespace AutoRimmer
         {
             int hostiles = 0;
             int pardoned = 0;
+            int dormant = 0;
             var kinds = new Dictionary<string, int>();
             // Safe to iterate: AllPawnsSpawned returns the real pawnsSpawned
             // list, not a cache rebuilt on read (decompiled MapPawns.cs:327).
@@ -656,6 +669,15 @@ namespace AutoRimmer
                 // Pure read: ThreatPardonComponent.Pardoned never prunes the
                 // scribed set, precisely so an observer cannot write.
                 if (ThreatPardonComponent.Pardoned(p)) pardoned++;
+                // THE SAME HELPER `threat-pardon` LAPSES A PARDON ON, read here
+                // for a second reason and not re-derived: ThreatPardonComponent
+                // .Dormant is the cluster's own machinery — LordJob_Structure-
+                // ThreatCluster's `CurLordToil is LordToil_Sleep` where there is
+                // such a lord, `!CompCanBeDormant.Awake` where there is not, and
+                // NULL where the pawn has no dormancy state at all. Only `true`
+                // counts: a null is "no such state", not "awake", and rolling it
+                // into either count would be a guess.
+                if (ThreatPardonComponent.Dormant(p) == true) dormant++;
                 string kind = p.kindDef?.label ?? p.def.label;
                 kinds[kind] = kinds.TryGetValue(kind, out var c) ? c + 1 : 1;
             }
@@ -678,6 +700,30 @@ namespace AutoRimmer
             {
                 // Recomputes every 101 ticks and re-enters FreeColonistsSpawned
                 // internally — called here outside every pawn loop on purpose.
+                //
+                // WOULD THIS ALONE HAVE DONE? Nearly, and it is worth saying so
+                // rather than quietly shipping two fields beside it: 31 of
+                // openrun-20260902's stored envelopes read `danger: "None"`
+                // beside `hostiles: 5`, so the dormancy-aware zero was already
+                // on the wire and nobody read it. But `None` is not the same
+                // claim as `hostiles_active == 0`, checked against
+                // RimWorld/DangerWatcher.cs: CalculateDangerRating SUMS
+                // `kindDef.combatPower` over TargetsHostileToColony filtered by
+                // AffectsStoryDanger and returns None when the sum is 0f. So
+                // (a) a hostile TURRET that is not a mortar contributes 0 and
+                //     an all-turret cluster shooting at the colony reads None;
+                // (b) AffectsStoryDanger additionally drops pawns on
+                //     LordJob_DefendPoint / LordJob_MechanoidDefendBase that
+                //     are not currently attacking — awake defenders that will
+                //     fight the moment anyone walks in;
+                // (c) it is a three-value bucket, so it can never carry the
+                //     `> 0 -> 0` EDGE a trigger wants, or say how many;
+                // (d) it is stale by up to 101 ticks, and its getter WRITES
+                //     `dangerRatingInt`/`lastUpdateTick` (accepted, see
+                //     StateWatch's observers-never-mutate note) where
+                //     `hostiles_active` writes nothing.
+                // `danger` stays the cheap glance; `hostiles_active` is the
+                // predicate.
                 ["danger"] = map.dangerWatcher.DangerRating.ToString(),
                 // `hostiles` KEEPS its meaning — the total, everything, always.
                 // A pardon is a recorded decision, not a filter, so it must never
@@ -688,6 +734,32 @@ namespace AutoRimmer
                 ["hostiles"] = hostiles,
                 ["hostiles_pardoned"] = pardoned,
                 ["hostiles_unpardoned"] = hostiles - pardoned,
+                // openrun-20260902 (RUNS/openrun-20260902/audit/ROUNDS-2.md,
+                // "Round 4" §1). `hostiles` is faction hostility, and
+                // `Thing.HostileTo(Faction)`'s only dormancy clause is
+                // `IsActivityDormant`, which short-circuits for Anomaly
+                // entities and deliberately keeps a `CompCanBeDormant`-asleep
+                // mech hostile. So all 37 digests from tick 8,793,512 to the
+                // wipe read `hostiles: 5` for a dormant Padenik cluster that
+                // was not fighting anyone, and every rule keyed on
+                // `hostiles == 0` was inert for the quarter that killed the
+                // colony. These two are the dormancy-aware view; `hostiles`
+                // does not move, for the same reason the pardon fields did not
+                // move it. See WorldSafe.ActiveHostilePawns for the clause-by-
+                // clause verification and for what is safe about the cache.
+                //
+                // THE THREE DO NOT SUM, and are not meant to. `hostiles` and
+                // `hostiles_dormant` are over MapPawns.AllPawnsSpawned minus
+                // downed and dead; `hostiles_active` is over
+                // attackTargetsCache.TargetsHostileToColony, which also holds
+                // downed hostiles (excluded again by ThreatDisabled) and, were
+                // it not filtered to pawns here, turrets and hives. Read them
+                // as three separate readings of the same map, not as a
+                // partition. `hostiles_active` is NULL, never 0, when the read
+                // degrades — the field a halt acts on must not be able to
+                // invent a zero.
+                ["hostiles_active"] = WorldSafe.ActiveHostilePawns(map),
+                ["hostiles_dormant"] = dormant,
                 ["kinds"] = top,
             };
             // Alert_FireInHomeArea covers only the home area and no other

@@ -139,6 +139,20 @@ namespace AutoRimmer
     //    ZoneManager.AllZones and AreaManager.AllAreas likewise. BillStack.Bills
     //    likewise. OutfitDatabase.AllOutfits / FoodRestrictionDatabase
     //    .AllFoodRestrictions / DrugPolicyDatabase.AllPolicies likewise.
+    //  * AttackTargetsCache.TargetsHostileToColony (Verse.AI/AttackTargetsCache
+    //    .cs) is `TargetsHostileToFaction(Faction.OfPlayer)`, and THAT member is
+    //    one `targetsHostileToFaction.TryGetValue` returning the live HashSet or
+    //    the static `emptySet`. No rebuild, no lazy init, no write: the cache is
+    //    MAINTAINED BY EVENTS (Notify_ThingSpawned / Notify_ThingDespawned /
+    //    Notify_FactionHostilityChanged / UpdateTarget / Notify_FactionAdded /
+    //    Notify_FactionRemoved) and never by its reader, and
+    //    `Map.attackTargetsCache` is a plain public FIELD assigned in the Map
+    //    constructor, not a getter. Two things still put it in this class: the
+    //    set handed back is the cache's OWN, so it must be counted and dropped
+    //    rather than held or edited; and TargetsHostileToFaction(null)
+    //    `Log.Warning`s instead of returning empty, so a null Faction.OfPlayer
+    //    must be checked BEFORE the call rather than by it.
+    //    => ActiveHostilePawns(): counts, holds nothing, guards the null.
     //
     // ------------------- CLASS COST: LAZY, NOT WRONG ------------------------
     //
@@ -557,6 +571,98 @@ namespace AutoRimmer
                 catch { foggedCells++; }
             }
             return foggedCells >= cells.Count;
+        }
+
+        // ------------ ACTIVE THREATS: THE GAME'S OWN FIGHT-OVER TEST --------
+        // `Thing.HostileTo(Faction)` (RimWorld/GenHostility.cs) answers a
+        // DIFFERENT question from "is anyone still fighting us". Its only
+        // dormancy clause is `IsActivityDormant`, whose own first branch is
+        // `if (canBeDormant != null && !canBeDormant.Awake) return false` — so
+        // it excludes ANOMALY activity entities only and deliberately keeps a
+        // `CompCanBeDormant`-asleep mech hostile BY FACTION. That is right for
+        // "whose side is it on" and useless for "is the fight over":
+        // openrun-20260902 read `hostiles: 5` for a dormant Padenik cluster in
+        // every one of the 37 digests from tick 8,793,512 to the wipe.
+        //
+        // The game's own fight-over test is `GenHostility.IsActiveThreatTo` —
+        // what `AutoUndrafter.AnyHostilePreventingAutoUndraft` runs to decide
+        // whether a drafted colonist may stand down, and what
+        // `GenHostility.AnyHostileActiveThreatTo(map, faction, …)` runs over
+        // exactly this cache. Verified clause by clause against
+        // RimWorld/GenHostility.cs (1.6), BY MEMBER NAME:
+        //   IsActiveThreatToPlayer(t) -> IsActiveThreatTo(t, Faction.OfPlayer,
+        //                                ignoreHives: true, canBeFogged: false)
+        //   IsActiveThreatTo  : !Thing.HostileTo(faction)             -> false
+        //                       !canBeFogged && Thing.Fogged()        -> false
+        //                       hive lord with no AssaultColony duty  -> false
+        //                       !IsPotentialThreat(t)                 -> false
+        //   IsPotentialThreat : Thing is not IAttackTargetSearcher    -> false
+        //                       t.ThreatDisabled(null)                -> false
+        //                       pawn PanicFlee, or IsPrisoner         -> false
+        //                       !pawn.Awake()                         -> false
+        //                       CompCanBeDormant != null && !Awake    -> false
+        //                       CompMechanoid != null && Deactivated  -> false
+        //                       CompInitiatable != null && !Initiated -> false
+        //                       generatorDef.defeatRequiresCantReach-
+        //                         Unfogged && !CanReachUnfogged       -> false
+        //
+        // THAT LAST CLAUSE IS THE ONE TO RE-CHECK BEFORE COPYING THIS ANYWHERE
+        // ELSE. `defeatRequiresCantReachUnfogged` DEFAULTS TRUE
+        // (Verse/MapGeneratorDef.cs), so it does run on ordinary maps — but
+        // `Reachability.CanReachUnfogged`'s own first test is
+        // `if (!c.Fogged(map)) return true`, and under `canBeFogged: false`
+        // IsActiveThreatTo has ALREADY returned false for a fogged thing. So on
+        // THIS call path it short-circuits before RegionTraverser
+        // .BreadthFirstTraverse and touches no region or reachability cache at
+        // all. Pass `canBeFogged: true` and that stops being true. Don't.
+        //
+        // ONE CORRECTION to the analysis this implements (RUNS/openrun-20260902
+        // /audit/ROUNDS-2.md, "Round 4" §1): it attributes the `ThreatDisabled`
+        // exclusion to "the `SleepForever` duty". `DutyDef.threatDisabled`
+        // exists (Verse.AI/DutyDef.cs) and `Pawn.ThreatDisabled` reads it, but
+        // the SleepForever DutyDef does NOT set it, and no vanilla DutyDef in
+        // the 1.6 Data tree sets it at all — it is a modding hook. A sleeping
+        // cluster pawn is excluded anyway: by `!pawn.Awake()` (LordToil_Sleep
+        // assigns `PawnDuty(DutyDefOf.SleepForever)`, whose thinkNode ends in
+        // JobGiver_ForceSleepNow) and, for a cluster mech, by the
+        // CompCanBeDormant clause. The conclusion stands; the attribution does
+        // not, and nobody should quote it as source.
+        //
+        // PAWNS ONLY, for parity with `digest.threats.hostiles`, which is a
+        // walk of MapPawns.AllPawnsSpawned. This cache also holds hostile
+        // TURRETS and hives, and counting those here would make the two fields
+        // uncomparable. The pawn test is applied FIRST, so a non-pawn target
+        // never reaches a modded ThreatDisabled override at all.
+        //
+        // NULL IS NOT ZERO. A degraded read reports null, never 0, because 0 is
+        // the value a fight-over rule ACTS on and a swallowed exception must not
+        // be able to say "stand down". PawnSerializer's degrade-one-field-to-
+        // null rule, pointed the safe way.
+        public static int? ActiveHostilePawns(Map map)
+        {
+            if (map == null) return null;
+            try
+            {
+                var player = Faction.OfPlayer;
+                if (player == null) return null;
+                var cache = map.attackTargetsCache;
+                if (cache == null) return null;
+                int n = 0;
+                // The cache's OWN HashSet: counted and dropped, never held,
+                // never edited. Nothing in this loop re-enters the cache.
+                foreach (var t in cache.TargetsHostileToColony)
+                {
+                    if (t == null || !(t.Thing is Pawn)) continue;
+                    // `Awake`, `ThreatDisabled` and every comp on that path are
+                    // virtual, so this reaches mod code. The catch is PER
+                    // TARGET rather than per call: one bad pawn must not be able
+                    // to zero the count.
+                    try { if (GenHostility.IsActiveThreatToPlayer(t)) n++; }
+                    catch { }
+                }
+                return n;
+            }
+            catch { return null; }
         }
 
         // ------------------------- THE SITE (M1 finding I1) -----------------

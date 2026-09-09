@@ -552,7 +552,7 @@ def phase0():
                "no `%s` — %s (observer-mutation hazard, deliberately skipped)" % (k, why),
                e, "data.site." + k)
 
-    # ---- D: digest.threats, the three counters ----------------------------
+    # ---- D: digest.threats, the five counters -----------------------------
     shape("0.6a", "digest", e, "data.threats.hostiles", NUM)
     shape("0.6b", "digest", e, "data.threats.hostiles_pardoned", NUM)
     shape("0.6c", "digest", e, "data.threats.hostiles_unpardoned", NUM)
@@ -560,6 +560,24 @@ def phase0():
     eq_val("0.6e", "unpardoned = hostiles - pardoned, on the digest's own numbers",
            dig(e, "data.threats.hostiles_unpardoned"),
            (dig(e, "data.threats.hostiles") or 0) - (dig(e, "data.threats.hostiles_pardoned") or 0))
+    # openrun-20260902 Round 4 §1. The dormancy-aware pair. `hostiles_active`
+    # is nullable BY DESIGN — null is the degraded read, so the shape check
+    # asserts the KEY, and the type check is conditional on it not being null.
+    # See accept/hostiles-active.md for the bench half, which needs a dormant
+    # cluster and therefore a fixture this file cannot stage.
+    shape("0.6f", "digest", e, "data.threats.hostiles_active")
+    shape("0.6g", "digest", e, "data.threats.hostiles_dormant", NUM)
+    ha = dig(e, "data.threats.hostiles_active")
+    true_val("0.6h", "threats.hostiles_active is a number or null, never a string",
+             ha is None or is_num(ha), "number or null", ha)
+    # Not a partition — `hostiles_active` is over a different population — but
+    # dormant pawns ARE a subset of `hostiles` by construction: both walk
+    # AllPawnsSpawned minus downed and dead. Computed rather than le_val'd so a
+    # missing field FAILS instead of raising on `int <= None`.
+    hd, ht = dig(e, "data.threats.hostiles_dormant"), dig(e, "data.threats.hostiles")
+    true_val("0.6i", "threats.hostiles_dormant <= threats.hostiles",
+             is_num(hd) and is_num(ht) and hd <= ht,
+             "dormant <= hostiles, both numbers", [hd, ht])
 
     # ---- D: the threat-pardon listing envelope ----------------------------
     e = send("threat-pardon")
