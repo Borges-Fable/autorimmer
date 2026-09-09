@@ -216,13 +216,13 @@ section; this table is the list, not the specs.
 
 | chore | trigger | what the mod does | the knob |
 |---|---|---|---|
-| after a fight | standing hostiles reach 0 | rescue downed colonists, nearest capable pawn first; tend each until stable; finish off or capture downed enemies; unforbid what the fight dropped; undraft everyone | finish off, on only while there is no prison (`cc8988c`) |
+| after a fight | standing hostiles reach 0, counting only hostiles that can currently fight — a dormant cluster is hostile by faction with no dormancy short-circuit, and would have held this trigger shut for the entire final quarter: all 37 digests from tick 8,793,512 to the wipe read `hostiles: 5` | rescue downed colonists, nearest capable pawn first; tend each until stable; finish off or capture downed enemies; unforbid what the fight dropped; undraft everyone | finish off, on only while there is no prison (`cc8988c`) |
 | butcher | a fresh corpse of a colony kill or hunt, and a butcher spot or table | make sure one butcher bill exists and can run; if there is no spot, a decision owed with the rot deadline | which animals; default all but pets |
 | care of stored items | any stored item whose deterioration reasons include being unroofed (`Thing.GetInspectStringLowPriority`, `SteadyEnvironmentEffects.FinalDeteriorationRate`) | designate a roof over those cells, as a player would with the roof area tool — but see below: this treats the symptom | on by default |
 | research queue | a project finishes and the game auto-picks | put the next project from the agent's queue back; if the queue is empty, a decision owed | the queue is the agent's |
 | a joiner | a pawn joins | essentials to priority 1 (firefighting, patient, basic work, doctor if capable); nothing at 0 unless incapable; the colony's food and outfit policy; the colony's posture | the essentials list |
 | a doctor gone | the only doctor is downed or dead | promote the next best medic (`40ed42f`, already specified) | — |
-| tend until stable | a colonist needs tending and no doctor job starts within a short window | force the nearest capable pawn, awake or not, and repeat until tending is no longer needed | — |
+| tend until stable | a colonist needs tending and no doctor job starts within a short window | `prioritize` the nearest capable pawn onto `DoctorTendEmergency`, which fetches medicine, and repeat until tending is no longer needed. NOT the `tend` verb: it is drafted-only and inventory-only, so a forced tend is bare-handed — Ellis died of infection with 18 medicine in stock | which medicine, and whether to wake a sleeper |
 
 **Saving is not a chore. It is automatic.** It has no trigger to judge and no
 procedure to get wrong, so it does not belong in the same table as rescuing the
@@ -308,12 +308,39 @@ to hand those over framed, and to take everything else away.
 ## How it stays honest when the agent stops paying attention
 
 The audit's central finding is that a truthful field the agent did not ask for goes
-unread: fifty-two of fifty-two. Every part of this design was checked against that.
+unread: fifty-two of fifty-two. A blind read of these six defences on 2026-09-08 found
+the mechanism behind that number, and it is not the one this section first assumed.
+`ignored_args` reached the agent's context in **3 of 2,550 tool results** — the other
+49 were never *displayed*. Of **2,988 shell commands invoking `rwa`, 167 were bare**:
+2,546 went through a `python3 -c` filter or the agent's own wrapper, 246 through
+`head`/`tail`, 185 to `/dev/null`. **The agent read its filter's output, not the
+reply.** The counts and the re-measurement are in `ROUNDS.md`.
 
-1. **The screen is the reply, not a field beside it.** What the agent read this run
-   was the thing it asked for: the stop reason, a refusal, `triage`'s verdict. What it
-   did not read was anything next to a success. So the screen is what `advance`
-   returns, and the stop line is its first line.
+That changes what this section has to do. Position was never the variable. The agent
+read a field sitting beside a success whenever its own filter printed it — `posture`'s
+`after` block caught the seek flip twice, the returned mute list caught an inverted
+`alert-mute` — and it missed the thing it had asked for when the filter dropped it:
+`halted_on` was shown 76 times and quoted none. **You cannot make an agent read. You
+can only make not-reading fail, and make the failure visible.**
+
+1. **The screen is the reply, and the reply is load-bearing for the next command.**
+   Making the screen the reply is still right, but for a smaller reason than this
+   design first claimed: it removes the thing the agent has to remember to fetch. It
+   does not, on its own, make the screen read. The mod already returns a proto-screen
+   on `advance` — `halted_on`, `muted_alerts`, `news_rode_past`, `letters`,
+   `unread_after` (`TimeDriver.cs:1902-2061`) — and it was filtered about nine times
+   in ten. A bigger reply is a bigger thing to pipe through `python3 -c`.
+
+   So the screen ends with the decision and alert ids it owes, plus a per-screen
+   token, and **the verb that answers a decision must cite an id that appears only on
+   that screen.** A filter that drops the decisions panel breaks the agent's own next
+   move; a filter that keeps it has necessarily read the decision and the acts under
+   it. Compliance stops being a matter of belief and becomes a join between screen
+   content and the next verb's arguments, computable from the transcripts alone.
+
+   The honest limit, stated rather than hidden: this makes the *decisions* panel
+   unfilterable. It does not make the gauges panel unfilterable, and nothing does.
+   What it buys there is item 6.
 2. **Decisions owed hold the clock.** An answer is a verb that names the decision.
    Deferring is `defer {id, reason}`, per call, with a required reason, journaled,
    the same three controls `unread_ok` already has. This replaces the read gate. The
@@ -333,16 +360,40 @@ unread: fifty-two of fifty-two. Every part of this design was checked against th
    still butchered and the stockpile is still roofed. The cost of a skimmed screen is
    confined to judgement.
 6. **It is measured.** Every screen is a file on disk (`frames/<tick>.json` and
-   `.png`). The harness log shows whether the agent quoted it. The journal counts
-   deferrals and write-offs. The next audit reads those instead of reconstructing
-   compliance from command counts.
+   `.png`). The journal counts deferrals and write-offs. The next audit reads those
+   instead of reconstructing compliance from command counts. **Not the harness log,
+   which this section used to name first:** it holds the filter's output, not the
+   screen, and the four sessions of this run recorded `thinking_chars = 0`. The
+   measurement that works is item 1's join, because it reads the agent's own next
+   command rather than its narration.
+7. **A verb writes only the levers it was passed, and defaults to the narrowest
+   scope.** The seventh defence, returned by the blind round as the one the other six
+   leave open, and the run agrees: `posture` with no `pawns` unbound all seven
+   colonists to free one rescuer, and they were forty to seventy cells outside the
+   walls when the fatal raid landed 270,000 ticks later — the agent's own second link
+   in its wipe chain, with the correctly scoped form used twenty minutes later in the
+   same slice. `posture {area:null}` and `posture --area lockdown` each flipped `seek`
+   on for pawns who should not hunt; `attack` defaulted to melee and sent a Melee-3
+   pawn at a scyther; `auto_arm` reverted a deliberate equip. Each is a write the
+   caller never asked for.
 
-Two of these need an honest caveat. Whether the lower panels of a screen get read
-when the stop line was what the agent wanted is UNKNOWN; the evidence only says that
-the reply gets read better than a sibling field. And whether a pushed picture gets
-opened is UNKNOWN; seven fetched pictures in twenty-six hours says nothing about a
-picture that arrives every turn. Both are measurable from the first run on the
-cockpit, and item 6 is how.
+   This is theme **T8, and it is UNFILED**. It is also the only defence here that
+   stops a mistake rather than reporting one, which is why it is stated next to item
+   5 rather than away from it: **a chore may act unasked; a verb may not write a lever
+   its caller did not name.**
+
+Two of these still need an honest caveat, and the blind round sharpened both. Whether
+the lower panels get read when the stop line was what the agent wanted is UNKNOWN and
+**confirmed unknowable from this run** — no extended thinking was recorded and the
+harness log holds filter output — so item 1's citation join is what settles it going
+forward rather than any reading of the past. And whether a pushed picture gets opened
+was miscounted here: **ten pictures were opened, not seven.** The distribution is the
+worse fact: six on the first day, four on the second before 12:50, then **none across
+the session containing nine deaths and none after 12:50** — which covers five mech
+raids and the wipe. That is measurable today, but only from the harness, because
+`render` writes no transcript step; making `render` a step fixes that. Whether an
+opened picture was *used* wants a nonce or legend key burned into the PNG that the
+next verb has to echo.
 
 ---
 
@@ -457,19 +508,43 @@ runs. `e440676` is unchanged and still owes its bench in full.
 
 This sketch was read element by element on 2026-09-03/04 and finished on 2026-09-08.
 Six of the nine elements were kept as written; the amendments are folded in above and
-the pass itself, with what each answer was, is in `COCKPIT-WALKTHROUGH.md` beside
-this file. Three things it deliberately did not settle:
+the pass itself is in `COCKPIT-WALKTHROUGH.md` beside this file.
 
-- **The chore list and the four-way line are owed a round.** Not to re-decide the
-  behaviours, but to check the list for logical consistency and test whether chore,
-  gauge, stop and decision are the right four categories. `roof` and `save` are the
-  two rows that found the seam. It runs before the chores root is built.
-- **The honesty section is owed an independent read.** It is the only part of this
-  design making falsifiable claims rather than taste calls: six statements checkable
-  against the audit's own evidence, two of which are already admitted UNKNOWN below.
-  An agent that has read the audit and not this sketch can test the other four.
-- **Every panel is owed its own session.** The screen section states what each panel
-  is for and stops there, on purpose. The mock is the shape, not the specification.
+Two of the three things it left open have since been done, and their results are in
+`ROUNDS.md`:
+
+- **The categories round: RUN.** It found the four categories are not a partition but
+  four settings of one attribute — a gauge is a level, a light is the threshold on it,
+  and chore, decision and stop differ only in who responds. The compound rows are that
+  pipeline read in order. It also found four things fitting none of the four: the verb
+  reply or refusal, the record, un-framed judgement, and the 18.3% of this run's ticks
+  that moved outside any advance and so produce no screen at all. Its sharpest catch is
+  fixed above: `after a fight` triggered on hostiles reaching zero and would have been
+  inert across the entire quarter that killed the colony.
+- **The honesty read: RUN, blind.** It contradicted this design's keystone on a number
+  nobody had measured, and §How it stays honest is rewritten around what it found. It
+  returned a seventh defence, now item 7 there.
+- **Every panel is still owed its own session.** The screen section states what each
+  panel is for and stops there, on purpose. The mock is the shape, not the
+  specification.
+
+What the rounds raised and this sketch has NOT resolved:
+
+- **`threat-pardon` is the escape hatch for the corrected `after a fight` trigger, and
+  it is a judgement act that was called zero times this run.** A chore whose trigger
+  depends on an act the agent never performs is still inert. Either the trigger reads
+  dormancy directly, or dormancy becomes a fact the mod publishes.
+- **Three more chores trigger on a late symptom** the way `roof` does — `tend until
+  stable` is the symptom layer of `a doctor gone`, `research queue` fires after the
+  picker has already moved, and `butcher`'s cause is corpses lying forbidden where they
+  fell. A quality defect rather than a category one, and T11 still says a symptom-chore
+  beats a decayed rule.
+- **Three chores carry an undeclared policy in an empty knob column**: which doctor
+  count, which medicine and whether to wake a sleeper, and what to do when the head of
+  the research queue cannot start.
+- **The auto-picker `research queue` exists to revert is not vanilla** and is in none
+  of the 76 decompiled mods. Its origin is unidentified; if a mod setting turns it off,
+  that chore may not be needed at all.
 
 ---
 
@@ -500,8 +575,13 @@ this file. Three things it deliberately did not settle:
 ## What is UNKNOWN
 
 - Whether the lower panels of a screen are read when the stop line is what the agent
-  came for. Measurable: quoted lines in the harness log.
-- Whether a pushed picture is opened. Measurable: `Read` calls on `frames/*.png`.
+  came for. **Confirmed unknowable from this run** by the 2026-09-08 blind round, and
+  NOT measurable from quoted lines in the harness log, which holds the filter's
+  output. Settled going forward by the citation join in §How it stays honest item 1.
+- Whether a pushed picture is opened. **Ten were opened this run, not seven** — and
+  none in the session holding nine deaths, none after 12:50 on the second day.
+  Measurable from `Read` calls in the harness, and only from there until `render`
+  writes a transcript step of its own.
 - The token cost of a screen in practice. Estimated at two to four thousand per turn;
   the ASCII crop is most of it.
 - Whether a postfix on `Building.Destroy` is cheap enough on a 38-mod bench.

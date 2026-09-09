@@ -458,6 +458,13 @@ narrowest scope, or must echo "you also changed X" prominently.**
 **Verdict: UNFILED.** This is a direct consequence of a closed issue's design and needs
 to be reasoned about as a follow-on, not a regression.
 
+> **FILED 2026-09-08 as `c519477`** (p1, wave:6), after the blind review of the
+> cockpit's honesty defences returned this theme as the seventh defence the other six
+> leave open — the only one that stops a write rather than reporting it. This line is
+> an update to a dated record, not a revision of it: the verdict above was correct on
+> 2026-09-03. See `ROUNDS.md`.
+
+
 ---
 
 # T9 — No plural form: 53% of all commands were bursts
