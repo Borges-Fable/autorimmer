@@ -65,22 +65,37 @@ Nothing was reported missing from the six.
 detail under it comes out. The detail is a later session's, one per panel, and **the
 sketch should say so rather than pretend to have settled it.**
 
+### Element 3 of 9 — when the clock stops — **KEEP, amended**
+
+Unchanged from today: every letter, every new alert, an own-faction casualty, a
+force-pausing dialog, a red error, the caller's own `until` condition, and one
+in-game day of quiet.
+
+Added: something the colony built was destroyed (`Building.Destroy` /
+`Frame.Destroy`, player faction only, carrying the game's own `DestroyMode`), and
+a decision owed with a deadline inside the next day.
+
+Not added: a human at the controls (recorded and shown, no stop), and a chore
+that ran (reported, not announced).
+
+**Amendment (Dorian):** the agent can stop any announcement from pausing its
+game if it chooses — **it keeps a list**. Some things really do not need to stop
+the clock, and others are situational on the state of the game.
+
+Two notes for the rewrite, neither of them a decision taken here:
+
+- This extends a mechanism the mod already ships rather than inventing one.
+  `AlertMuteVerbs.cs` has `AlertMuteComponent` with `Muted(string id)` and an
+  off-thread mirror of muted ids; stop reasons want the same shape, keyed by
+  reason rather than by alert.
+- A mute list is the fetch model wearing a different hat, and the audit measured
+  what happens to anything the agent must remember to revisit: theme T11, it goes
+  to zero. So what is currently muted belongs ON the screen, and the sketch
+  should say whether a mute expires, or is per-condition, or holds until lifted.
+
 ## Open — the question on the table
 
-### Element 3 of 9 — when the clock stops — **ASKED, UNANSWERED**
-
-This is where the session ended. The question as put:
-
-- **Already true today:** every letter, every new alert, an own-faction casualty, a
-  force-pausing dialog, a red error, the caller's own until-condition, and one
-  in-game day of quiet.
-- **Added:** something the colony built was destroyed, and a decision with a deadline
-  inside the next day.
-- **Deliberately not added:** a human at the controls (recorded and shown, but no
-  stop — nine days of this run were played by hand), and a chore that ran (reported,
-  not announced).
-
-Keep, change, or drop?
+Element 4 of 9 is next; nothing is currently awaiting an answer.
 
 ## Not yet reached — elements 4 to 9
 
@@ -107,4 +122,6 @@ the sketch's three trailing sections (§"Calls that could have gone the other wa
    including "time does not move until the last group is answered."
 2. Every panel cut to one line of purpose, the detail struck, and the sketch saying
    in its own voice that each panel is owed its own session.
-3. Whatever elements 3 to 9 change.
+3. The agent-held mute list for stop reasons, its shape against the existing
+   `AlertMuteComponent`, its visibility on the screen, and whether a mute expires.
+4. Whatever elements 4 to 9 change.
