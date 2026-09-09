@@ -170,13 +170,18 @@ namespace AutoRimmer
 
             string game = "unknown";
             try { game = RimWorld.VersionControl.CurrentVersionStringWithRev; } catch { }
-            Emit("session", new Dictionary<string, object>
-            {
-                ["kind"] = "boot",
-                ["mod"] = Runtime.ModVersion,
-                ["game"] = game,
-                ["bench"] = Environment.MachineName,
-            });
+            // 827c1bf: `by:"mod"`, explicitly. This is the mod writing about
+            // itself from its own ctor, before any provenance site exists, so
+            // the default would have called seq 1 a human act. Nobody pressed
+            // "boot".
+            using (Provenance.Chore())
+                Emit("session", new Dictionary<string, object>
+                {
+                    ["kind"] = "boot",
+                    ["mod"] = Runtime.ModVersion,
+                    ["game"] = game,
+                    ["bench"] = Environment.MachineName,
+                });
         }
 
         // exactTick comes from main-thread hook sites; everything else stamps
@@ -221,14 +226,24 @@ namespace AutoRimmer
                 try
                 {
                     n = Interlocked.Increment(ref seq);
+                    // git-bug 827c1bf. WHO DID IT, on every row, read once
+                    // here so no emitter has to remember to say. `by` is
+                    // Provenance's [ThreadStatic] and `cmd` rides beside it
+                    // only under `agent`, where there is a command id to
+                    // carry. See Provenance.cs for the four values and why
+                    // the default is `human`.
+                    string by = Provenance.Current;
+                    string byCmd = Provenance.CommandId;
                     var evt = new Dictionary<string, object>
                     {
                         ["seq"] = n,
                         ["tick"] = tick,
                         ["wall"] = DateTime.UtcNow.ToString("o"),
-                        ["type"] = type,
-                        ["payload"] = payload,
+                        ["by"] = by,
                     };
+                    if (byCmd != null) evt["cmd"] = byCmd;
+                    evt["type"] = type;
+                    evt["payload"] = payload;
                     // The seq is claimed by this point, so SOMETHING must be
                     // enqueued or the file gets the gap this lock exists to
                     // prevent. MiniJson.Write is throw-proof as of 1.5; this is
@@ -245,6 +260,12 @@ namespace AutoRimmer
                     {
                         line = "{\"seq\":" + n + ",\"tick\":" + tick
                             + ",\"wall\":" + MiniJson.J(DateTime.UtcNow.ToString("o"))
+                            // `by` on the backstop line too: "every row carries
+                            // a provenance" is a schema invariant, and a row
+                            // that lost its payload to a serializer failure
+                            // still has to say who wrote it (git-bug 827c1bf).
+                            + ",\"by\":" + MiniJson.J(by)
+                            + (byCmd != null ? ",\"cmd\":" + MiniJson.J(byCmd) : "")
                             + ",\"type\":" + MiniJson.J(type)
                             + ",\"payload\":{\"autorimmer_serialize_error\":"
                             + MiniJson.J(Truncate(e.ToString(), 500)) + "}}";

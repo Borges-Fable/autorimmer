@@ -22,6 +22,15 @@ namespace AutoRimmer
         public override void GameComponentUpdate()
         {
             System.Threading.Interlocked.Increment(ref Runtime.Heartbeat);
+            // git-bug 827c1bf. The main thread is provably at NO provenance
+            // site here — Verse/Game.UpdatePlay calls
+            // GameComponentUtility.GameComponentUpdate() outside
+            // TickManagerUpdate, and the drain below has not run yet — so this
+            // is the one place per frame where "nobody of ours is running" is
+            // known rather than inferred. It is a repair for a scope some
+            // future unwind path loses, not the mechanism; see
+            // Provenance.ReanchorFrame.
+            Provenance.ReanchorFrame();
             try
             {
                 float dt = Time.unscaledDeltaTime;
@@ -32,7 +41,15 @@ namespace AutoRimmer
                 // the rest of this body for the frame — the command drain and
                 // the advance loop included — which is how a third-party alert
                 // could silently stall the bridge (1.5 nit).
-                try { AlertScanner.Tick(); }
+                //
+                // 827c1bf: a CHORE for provenance purposes. The scanner is a
+                // standing observer — it runs every frame whatever anyone did,
+                // outside the drain, outside a chore proper and outside a tick
+                // — so the default-to-`human` rule would stamp a human on every
+                // `alert_on`. Nobody presses an alert; the mod's own diff
+                // noticed a condition. Same ruling as the clock observer's, and
+                // the same one-line shape.
+                try { using (Provenance.Chore()) AlertScanner.Tick(); }
                 catch (Exception e) { Log.Warning("[AutoRimmer] alert scan error: " + e); }
                 DrainCommands();
                 TimeDriver.FrameStep();
@@ -102,6 +119,12 @@ namespace AutoRimmer
             // starts and halts nothing.
             try { JournalVerbs.TickAlertFixture(); }
             catch { }
+            // 827c1bf's loss halt. Fourth of the same kind and for the same
+            // reason: the halt fires on a `destroyed` row produced from inside
+            // a tick, and `dev:destroy` is answered `busy` while an advance is
+            // in flight, so nothing else can produce one there.
+            try { JournalVerbs.TickDestroyFixture(); }
+            catch { }
         }
 
         public override void StartedNewGame() => GameBoundary("newgame");
@@ -136,6 +159,7 @@ namespace AutoRimmer
             JournalVerbs.ErrorAtTick = -1;
             JournalVerbs.DownAtTick = -1;
             JournalVerbs.AlertAtTick = -1;
+            JournalVerbs.DestroyAtTick = -1;
             var payload = new System.Collections.Generic.Dictionary<string, object>
             {
                 ["kind"] = kind,

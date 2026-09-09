@@ -8,7 +8,8 @@ contract and grow them additively.
 ## Event envelope
 
 ```json
-{"seq":12,"tick":48210,"wall":"2026-08-30T20:31:04.11Z","type":"letter","payload":{…}}
+{"seq":12,"tick":48210,"wall":"2026-08-30T20:31:04.11Z","by":"game","type":"letter","payload":{…}}
+{"seq":13,"tick":48210,"wall":"2026-08-30T20:31:04.19Z","by":"agent","cmd":"advance-203104-8412","type":"action","payload":{…}}
 ```
 
 - `seq` — monotonically increasing per session file, no gaps at rest (a gap
@@ -19,8 +20,43 @@ contract and grow them additively.
   background threads, boot-time events) it is the last published snapshot tick,
   accurate to about one frame. Before any game is loaded it is 0.
 - `wall` — UTC ISO-8601, always exact.
+- `by` — **WHO DID IT** (827c1bf). On **every** row, including the fallback
+  line a serializer failure produces. Exactly four values:
+  `agent` (executing inside the drain — `VerbRegistry.Execute`, which covers
+  both the main-thread drain and the poller-thread one) ·
+  `mod` (a chore: work the mod decided to do, with no command behind it and no
+  result envelope in front of it) ·
+  `game` (inside `Verse/TickManager.DoSingleTick`, whoever set the clock
+  running) ·
+  `human` (**the default**, and it means precisely "none of the above was
+  running when this row was written").
+
+  Five sites DECLARE `mod` rather than inherit, and they are the mod's standing
+  observers — code that runs every frame whatever anyone did, where the ambient
+  value would be meaningless: the clock observer (`TimeDriver.ClockEmit`), the
+  alert scanner (`AlertScanner.Tick`), the name-dialog sweep
+  (`TimeDriver.SweepNameDialogs`), `session/boot` and `session/unloaded`.
+  Everywhere else the ambient value IS the answer, which is why
+  `session/saved` gets correct provenance for free — `agent` for the `save`
+  verb, `game` for an autosave (it fires inside the tick), `human` for a hand
+  save — and why `session/newgame`/`loaded` stay on the default: somebody
+  loaded that save.
+  Read once per emit from `Provenance.Current`, a `[ThreadStatic]` set at three
+  sites; every existing hook gained the field without being touched. Thread-local
+  and not a plain static, because the bridge emits from the main thread, the
+  poller thread and whatever thread logged an error, and a shared value would
+  cross-attribute all three (`Provenance.cs` carries the argument).
+- `cmd` — the command id, present **only** under `by:"agent"`. The join key from
+  a journal row back to the result envelope that caused it.
 - `type`, `payload` — below. Consumers must ignore unknown payload fields and
   unknown types.
+
+**Why `by` exists.** The audit of run `openrun-20260902` counted at least 22
+human interventions the journal marks nowhere — a revival through the debug
+menu, a deleted weather event, 411 meals, nine in-game days played by hand
+(themes.md T13, T14). Three of that run's 23 `death` rows are debug-menu residue
+and one death was reversed with no row for the reversal, so **no count taken
+from that journal is a measurement**. A count you can filter by provenance is.
 
 ## Types
 
@@ -37,15 +73,16 @@ contract and grow them additively.
 | `red_error` | `msg` (≤2000) or `msg`+`suppressed:true`, `overflow?` | per-text cap 3 per session, then one suppression marker. **The cap is a FILE policy only** — `advance {halt_on_error:true}` halts on every occurrence including the ones not written here (1.5 blocker 3), so a repeat count in the file is a floor, not a total |
 | `warning` | `msg` (≤2000), `overflow?` | first occurrence per exact text per session; repeats are LogRelay's job |
 | `dialog` | `count`, `windows`: `[{type,type_full,title?,layer}]`, `opened`: same shape, `letters?` (≤10 labels) | a **force-pausing** modal went up. See below — this is why `advance` stops |
-| `clock` | `by`: `external` \| `mod`, `from`, `to`, `ticks`, `speed` (the FASTEST the span ran at), `speed_at_open`, `frames`, `wall_seconds`, `avg_tps`, `closed_by`: `pause` \| `advance-start` \| `game-boundary` \| `advance-failed`, `advance?` | **game time that moved with no advance in flight** (git-bug 65e7cf9). `TimeDriver.FrameStep` diffs `TicksGame` and `CurTimeSpeed` against the previous frame, before its own `!Active` early-out; the span opens on the first moved tick and closes when `CurTimeSpeed` goes `Paused` or an `advance` arms. The count is frame-exact, not sampled: `Verse/Game.UpdatePlay` runs `TickManagerUpdate()` and then `GameComponentUtility.GameComponentUpdate()` in the same method, so every tick the frame produced already exists when the diff is taken. `by` is `mod` when an advance was in flight when the span OPENED and `external` otherwise — it is not a claim about whose finger was on the key, and an `unpause` the agent itself sent reads `external`. **`by:"mod"` is journaled only when the result those ticks belong to carries no data block**, which is two cases: `closed_by:"game-boundary"` (`Abandon` answers `no-active-game` with `Data = null` — the colony went away underneath) and `closed_by:"advance-failed"` (`FinishFailed`, or a `Finish` whose command was already answered). Every other `mod` span is the advance's own and is fully described by that advance's result — journaling it as well would put a row inside every advance's own `journal_seq` and destroy 722c951's "a quiet colony never pays for this". **`speed` is why the row is not just a tick count**: `TickManager.TogglePaused` restores `prePauseTimeSpeed` and the mod's exit `Pause()` IS a `TogglePaused` from Ultrafast, so the first spacebar tap after an advance runs the colony at ~900 tps (measured 858–887). An `external` row is the ONE new thing that can create a 722c951 read obligation — see `advance`'s `since_last_look` below. |
+| `clock` | `drove`: `external` \| `mod`, `from`, `to`, `ticks`, `speed` (the FASTEST the span ran at), `speed_at_open`, `frames`, `wall_seconds`, `avg_tps`, `closed_by`: `pause` \| `advance-start` \| `game-boundary` \| `advance-failed`, `advance?` | **game time that moved with no advance in flight** (git-bug 65e7cf9). `TimeDriver.FrameStep` diffs `TicksGame` and `CurTimeSpeed` against the previous frame, before its own `!Active` early-out; the span opens on the first moved tick and closes when `CurTimeSpeed` goes `Paused` or an `advance` arms. The count is frame-exact, not sampled: `Verse/Game.UpdatePlay` runs `TickManagerUpdate()` and then `GameComponentUtility.GameComponentUpdate()` in the same method, so every tick the frame produced already exists when the diff is taken. `drove` is `mod` when an advance was in flight when the span OPENED and `external` otherwise — it is not a claim about whose finger was on the key, and an `unpause` the agent itself sent reads `external`. **It was called `by` until 827c1bf and was renamed with no change of meaning**: `by` now names the row's own provenance everywhere in this file, the two are different questions, and folding them was refused because `external` -> `human` would assert a finger on a key in the one case that provably is not one (the agent's own `unpause`). The row's `by` is `mod`, always, because the mod's clock observer writes it on its own initiative. The same rename lands on `since_last_look.outside[].drove`. **`drove:"mod"` is journaled only when the result those ticks belong to carries no data block**, which is two cases: `closed_by:"game-boundary"` (`Abandon` answers `no-active-game` with `Data = null` — the colony went away underneath) and `closed_by:"advance-failed"` (`FinishFailed`, or a `Finish` whose command was already answered). Every other `mod` span is the advance's own and is fully described by that advance's result — journaling it as well would put a row inside every advance's own `journal_seq` and destroy 722c951's "a quiet colony never pays for this". **`speed` is why the row is not just a tick count**: `TickManager.TogglePaused` restores `prePauseTimeSpeed` and the mod's exit `Pause()` IS a `TogglePaused` from Ultrafast, so the first spacebar tap after an advance runs the colony at ~900 tps (measured 858–887). An `external` row is the ONE new thing that can create a 722c951 read obligation — see `advance`'s `since_last_look` below. |
 
 Log hooks attach when AutoRimmer's ctor runs — last in the load order — so
 engine-init and earlier-mod load warnings (the bench's SteamAPI.Init line,
 notably) never reach the journal. That is LogRelay's beat (it backfills the
 pre-ctor log); the journal starts at its `boot` marker.
 | `dev` | `verb`, `step`, `target?`, … (`args?`, `ids?`, `placed?`, `caused_seqs?`, `forbid?`/`forbidden_stacks?`/`not_forbiddable?` — additive; ignore unknown fields) | provenance of every state-mutating dev action. 3.1 owns the type and its `dev:*` verbs are the primary writers; `journal-selftest`, `pawn-fixture` and `world-fixture` write it too (superseded but retained for acceptance replay). A dev verb's RESULT carries `dev.journal_seq` — the join key back to this line; `dev:starter-kit`'s line carries `caused_seqs` for the reverse join, and — since git-bug 091e3f0 — `forbid`/`forbidden_stacks`/`not_forbiddable`, so "the kit left its gear forbidden" is readable from the journal alone |
-| `action` | `verb`, `step`, `target?`, … (additive; ignore unknown fields) | provenance of every state-mutating PLAYER action, the non-`dev` twin of the row above. Written by `designate`/`forbid`/`flick` (DesignationVerbs), the area brushes (AreaVerbs), pawn orders (PawnActs), storage edits (StorageVerbs), zone edits (ZoneVerbs), `threat-pardon` and — since git-bug 280fb78 — `alert-mute`, whose row carries `step` (`mute`\|`unmute`\|`unmute-all`), the `ids` and the required `reason`; `advance` writes one too, `step:"escape"`, naming `unread_ok`\|`through_casualties`\|`through_news`. And — since session 16 — `build`, whose row carries `placement_id`, `def`, `at`, `rot`, `footprint`, `gate` and `thing_id`. `place-layout` and `cancel-layout` write it too, and `place-layout` writes **ONE row for the whole transaction** rather than one per element: it carries `layout_id`, `mode`, `origin`, `rect`, `requested`/`placed`/`skipped`, `rolled_back` and a `placements` array holding every placement id in the layout. One row and not N because a 66-element layout would bury the journal, while the durability those ids need is satisfied by one row that names them all — and a rolled-back call still writes its row, with `rolled_back: true`, because "we placed nothing and here is why" is provenance too. **This type shipped in spec 3.2 and was never listed here**; the omission was found in session 16 while adding the `construction` row, and five verbs had been writing an undocumented type for four sessions. `temp-set` (TemperatureVerbs, git-bug 261f2e9) writes one row per CALL rather than per building, carrying `target_c` and a `targets` array of `{id, def, before_c, after_c}` — because "what did this colony tell its coolers to hold, and when" is one decision even when it touches four buildings, and the before/after pair is what 261f2e9's last acceptance bullet asks the journal for. Its `step` is the target in INVARIANT culture with a `C` suffix (`-10C`), never the ambient locale's decimal comma. The verb's RESULT carries `journal_seq`, the join key back to the line. |
+| `action` | `verb`, `step`, `target?`, … (additive; ignore unknown fields) | provenance of every state-mutating PLAYER action, the non-`dev` twin of the row above. **Since 827c1bf a HUMAN press is one of these too**, with `by:"human"`, `verb:"human"` and a `step` naming which of the game's own input handlers it came through: `gizmo` (`Verse/Command.ProcessInput` — the selected-thing button strip, and every `Designator`, which is itself a `Command`), `float-menu` (`Verse/FloatMenuOption.Chosen`), `dialog-button` (`Verse/DiaOption.Activate`, the `Dialog_NodeTree` funnel), `debug-menu` (`LudeonTK/DebugActionNode.Enter`, leaf nodes only — a node with children is navigation, not an act) and `designator` (`Verse/DesignatorManager.ProcessInputEvents`, keyed on `Event.current.type == EventType.Used`, which is what each of that method's three branches leaves behind). `label` is the game's own label for what was pressed. Every one of the five is guarded on `Provenance.NothingOfOursIsRunning`, which is the definition of `human` rather than a precaution. **Three gaps, measured and not approximated**: (1) `Verse/Dialog_MessageBox`, whose three buttons are inline `Widgets.ButtonText` calls in `DoWindowContents` with no funnel to hook — the alternatives are `DoWindowContents` (every OnGUI frame, and a postfix cannot tell which button ran) or `Widgets.ButtonText` (every button in the whole UI, every frame); (2) the `DebugActionType.ToolMap`/`ToolWorld`/`ToolMapForPawns` second step, where `Enter` only arms `DebugTools.curTool` and the effect lands on the next map click through a delegate with no member of its own — the arming still produces a row carrying `action_type`, and the effect still reads `by:"human"`; (3) six of the 23 vanilla `ProcessInput` overrides do not call base — `Designator_Build`, `Designator_Install`, `Designator_Dropdown`, `Designator_Paint`, `Designator_MechControlGroup` and one gizmo inside `Comp_AtmosphericHeater` — so PICKING one of those tools writes no `gizmo` row. USING it does, through the `designator` hook. Written by `designate`/`forbid`/`flick` (DesignationVerbs), the area brushes (AreaVerbs), pawn orders (PawnActs), storage edits (StorageVerbs), zone edits (ZoneVerbs), `threat-pardon` and — since git-bug 280fb78 — `alert-mute`, whose row carries `step` (`mute`\|`unmute`\|`unmute-all`), the `ids` and the required `reason`; `advance` writes one too, `step:"escape"`, naming `unread_ok`\|`through_casualties`\|`through_news`. And — since session 16 — `build`, whose row carries `placement_id`, `def`, `at`, `rot`, `footprint`, `gate` and `thing_id`. `place-layout` and `cancel-layout` write it too, and `place-layout` writes **ONE row for the whole transaction** rather than one per element: it carries `layout_id`, `mode`, `origin`, `rect`, `requested`/`placed`/`skipped`, `rolled_back` and a `placements` array holding every placement id in the layout. One row and not N because a 66-element layout would bury the journal, while the durability those ids need is satisfied by one row that names them all — and a rolled-back call still writes its row, with `rolled_back: true`, because "we placed nothing and here is why" is provenance too. **This type shipped in spec 3.2 and was never listed here**; the omission was found in session 16 while adding the `construction` row, and five verbs had been writing an undocumented type for four sessions. `temp-set` (TemperatureVerbs, git-bug 261f2e9) writes one row per CALL rather than per building, carrying `target_c` and a `targets` array of `{id, def, before_c, after_c}` — because "what did this colony tell its coolers to hold, and when" is one decision even when it touches four buildings, and the before/after pair is what 261f2e9's last acceptance bullet asks the journal for. Its `step` is the target in INVARIANT culture with a `C` suffix (`-10C`), never the ambient locale's decimal comma. The verb's RESULT carries `journal_seq`, the join key back to the line. |
 | `construction` | `kind`: `completed` \| `failed`, plus `def`, `at`, `stuff?`, `rot?`, `worker`, `thing_id?`, `placement_id?` | the two Frame transitions, as POSITIVE events, from Harmony postfixes on `Frame.CompleteConstruction` and `Frame.FailConstruction`. They exist because **completion is an absence**: a finished build leaves no blueprint and no frame, and neither does a cancelled one, so without these rows the two are the same nothing (git-bug d7c8088). `failed` is NOT a cancellation — `FailConstruction` respawns the blueprint and a pawn tries again. `placement_id` is present only for a build THIS session placed through `build`; its absence means the blueprint was drawn by the player or came out of a save, which is different from a null id. `thing_id` is null for a TerrainDef, which sets the grid and produces no Thing. |
+| `destroyed` | `kind`: `building` \| `frame` \| `corpse`, plus `def`, `thing_id`, `at`, `mode` (a `Verse/DestroyMode` name), `player`, `faction?`, `label?`, `builds?` | **something the colony had is gone** (827c1bf, absorbing a8d8ada and the building half of f1a1700). Harmony postfixes on `Verse/Building.Destroy`, `RimWorld/Frame.Destroy` and `Verse/Corpse.Destroy`. **`Thing.Destroy` is NOT patched** — it is on every stack merge, every bullet and every hauled item, and a8d8ada's caution stands. `Frame : Building` and `Frame.Destroy` calls `base.Destroy(mode)`, so the building hook hands frames to the frame hook or every frame would produce two rows. Buildings and frames are **player faction only** (`Faction.IsPlayer`, resolved on the main thread and carried in `player` because the halt tap may not touch Verse) — which is how mining a mountain stays off this row; corpses are journaled whatever their faction. `mode` is the game's own word and nothing is inferred from it. `builds` is a frame's `entityDefToBuild` — what was actually lost, since a frame's own def is `Wall_Frame`. No map id: `Destroy` sets `mapIndexOrState = -2` so `Thing.Map` is null in a postfix, while `Position` (`positionInt`) and `Faction` (`factionInt`) are plain fields and survive. **It stops a running advance** the way a casualty does — see `advance`'s `reason:"loss"` and its `through_losses` escape — except for a corpse, which never halts, and except for the five `DestroyMode` values that are the colony's own decision arriving as planned (`Deconstruct`, `WillReplace`, `Cancel`, `Refund`, `FailConstruction`). The row is written in all of those cases regardless; only the halt is filtered. **The fact behind it**: a manhunter pack destroyed two turrets and an autocannon in run `openrun-20260902`, the journal recorded nothing, the agent rebuilt the two it had counted and never learned the third was gone — its own account names that as the first link in the chain that ended the colony (themes.md T3, F-S12-13/14) |
 
 ## Letter timing — the "once per frame" claim was half wrong
 
@@ -109,7 +146,7 @@ outside an advance.
     since_last_look: {
       ticks,             # every game tick since the last screen this mod delivered
       in_this_advance,   # == ticks_elapsed
-      outside: [{from, to, ticks, by, speed}],   # capped at 20
+      outside: [{from, to, ticks, drove, speed}],   # capped at 20 (`drove` was `by` before 827c1bf)
       outside_ticks, outside_spans,              # whole, uncapped
       journal_seq: [lastScreenSeq+1, endSeq]     # [] when nothing was journaled
     }
@@ -206,9 +243,27 @@ is visible rather than silent; `Journal.cs`'s header carries the upgrade path.
 ## Cost
 
 Hooks are read-only postfixes on rare paths (letters, messages, log calls,
-deaths, mental breaks, saves). The only recurring work is the alert diff at the
-scan cadence and one queue drain per poller cycle; file I/O happens on the
-poller thread, never the main thread.
+deaths, mental breaks, saves, and — since 827c1bf — building/frame/corpse
+destruction and the five human input handlers). The only recurring work is the
+alert diff at the scan cadence and one queue drain per poller cycle; file I/O
+happens on the poller thread, never the main thread.
+
+Two of 827c1bf's hooks are not on rare paths and are called out rather than
+buried:
+
+- **`Verse/TickManager.DoSingleTick`** carries the tree's only Harmony PREFIX
+  (plus a Finalizer, so a throw out of the tick cannot leave the provenance
+  stuck). Both bodies are one write to a `[ThreadStatic]`; the cost is Harmony's
+  wrapper, tens of nanoseconds against a tick that is hundreds of microseconds
+  of work on the 38-mod bench — order 0.01% of one core at the ~900 tps ceiling,
+  and no allocation. It is there because since 1.8 the mod does not call
+  `DoSingleTick` at all (the game's own `TickManagerUpdate` does), so a bracket
+  around the mod's call sites would label a starvation death during a human's
+  play window `human`, which is false.
+- **`Verse/DesignatorManager.ProcessInputEvents`** is on the OnGUI path, so its
+  postfix runs a few times per frame whatever the player is doing. Its first
+  statement is the `[ThreadStatic]` read and its second a null check; nothing
+  allocates unless a click was actually consumed.
 
 ## What is NOT here: periodic samples (git-bug 2d9a1da)
 

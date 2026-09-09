@@ -166,8 +166,15 @@ namespace AutoRimmer
             catch (Exception e) { Journal.EmitWarning("dialog: Dialog_NodeTree curNode field failed: " + e.Message); }
         }
 
+        // Binds on first use rather than relying on a verb having run first
+        // (827c1bf). `EnsureDiaRefs` is idempotent behind `diaRefTried` and its
+        // first line is that flag, so the loop callers below pay one branch.
+        // The reason it is needed is `HumanActions.Patch_DiaOptionActivate`,
+        // which is a Harmony postfix on `DiaOption.Activate` and can fire
+        // before any dialog verb has ever been called.
         public static string OptText(DiaOption o)
         {
+            EnsureDiaRefs();
             try { return diaTextRef != null ? diaTextRef(o) : null; }
             catch { return null; }
         }

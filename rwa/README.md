@@ -460,20 +460,29 @@ rwa advance --until.letter true --timeout_ticks 60000 --json \
   | jq -c '.data | {reason, ticks_elapsed, journal_unread, halted_on}'
 ```
 
-**The escapes are two per-call flags, each a REQUIRED non-empty reason string**,
-each journaled as an `action` row and echoed on the result envelope:
+**The escapes are FOUR per-call flags, each a REQUIRED non-empty reason
+string**, each journaled as an `action` row and echoed on the result envelope:
 
 ```bash
 rwa advance --ticks 60000 \
   --unread_ok:str "burning a day unattended to reach the caravan window" \
-  --through_casualties:str "the fight is lost; riding it out is the plan"
+  --through_casualties:str "the fight is lost; riding it out is the plan" \
+  --through_news:str "sieging out a raid; do not wake me for traders" \
+  --through_losses:str "the outer wall is expendable while the fight is on"
 ```
 
 `--unread_ok` bypasses ONE call and does not move the watermark, so the next
 advance asks again. `--through_casualties` covers both the casualty halt and the
-bleedout refusal. Use `:str` so a reason that happens to look numeric is not
-guessed into a number. There is no mode, no config key and no environment
-variable that turns either of these off for a session — that is the point.
+bleedout refusal. `--through_news` (280fb78) rides past the letter and
+`alert_on` wakes and reports what it swallowed as `news_rode_past`.
+`--through_losses` (827c1bf) rides past the `destroyed` halt — a player-faction
+building or frame ending in a mode the colony did not ask for — and reports
+`losses_rode_past` the same way. They are four flags and not two because a
+colony that accepts losing PEOPLE has not thereby accepted losing its power
+grid, and a post-mortem grepping for one must not turn up the other. Use `:str`
+so a reason that happens to look numeric is not guessed into a number. There is
+no mode, no config key and no environment variable that turns any of these off
+for a session — that is the point.
 
 **`rwa replay` is deliberately faithful and does NOT inject the escapes.**
 Replaying `transcripts/m1-20260831` therefore shows the refusal firing on the

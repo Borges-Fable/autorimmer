@@ -1407,16 +1407,23 @@ def read_journal(path, since_seq=0, since_tick=-1, types=None, limit=500):
 
 
 def journal_line(evt, width=0):
-    """One event, one line: `seq tick type payload`.
+    """One event, one line: `seq tick by type payload`.
 
     The payload is rendered as compact JSON rather than picked apart, so this
     stays schema-free — a new event type needs no change here. Clipping is the
     one place pretty mode hides anything, and it is marked with a `…` and
     switched off by --full.
+
+    `by` is in the HEAD and not left in the payload because it is the column a
+    reader scans (827c1bf): a `death` under `human` is debug-menu residue and a
+    `death` under `game` is a colony fact, and telling them apart by eye is the
+    whole point of the field. `?` for a row written before the field existed —
+    a journal from an older session reads without lying about it.
     """
     payload = evt.get("payload")
     body = json.dumps(payload, ensure_ascii=False) if payload is not None else ""
-    head = f"{evt.get('seq'):>5} t{evt.get('tick'):<8} {evt.get('type', '?'):<13}"
+    head = (f"{evt.get('seq'):>5} t{evt.get('tick'):<8} "
+            f"{evt.get('by', '?'):<6} {evt.get('type', '?'):<13}")
     line = head + " " + body
     if width and len(line) > width:
         line = line[:width - 1] + "…"

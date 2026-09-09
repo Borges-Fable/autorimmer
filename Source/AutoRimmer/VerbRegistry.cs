@@ -464,38 +464,54 @@ namespace AutoRimmer
         {
             var ctx = new VerbContext { Id = cmd.Id, Op = cmd.Op, Args = new VerbArgs(cmd.Args), Command = cmd };
             long seqBefore = Journal.CurrentSeq;
-            try
+            // git-bug 827c1bf, provenance SITE 1 — the drain. ONE site covers
+            // both: main-thread verbs reach here from
+            // AgentGameComponent.DrainCommands and MainThread=false verbs from
+            // Poller.ScanInbox, on the poller thread, and Provenance is
+            // thread-local so the two never see each other's value.
+            //
+            // AROUND THE HANDLER AND NOTHING ELSE. `advance` returns a
+            // DeferredResult the instant it has armed, so the ticks it causes
+            // happen later, in FrameStep, OUTSIDE this scope — which is right:
+            // a colonist who starves on tick 40,000 of an advance was killed by
+            // the simulation (`by:"game"`), not by the command that let the
+            // clock run. What is `agent` is the arming, the escape row, and
+            // every mutation a verb makes with its own hands.
+            using (Provenance.Command(cmd.Id))
             {
-                object data = cmd.Verb.Handler(ctx);
-                var stray = ctx.Args.StrayKeys();
-                if (stray.Count == 0) return Result.Success(cmd.Id, cmd.Op, data);
+                try
+                {
+                    object data = cmd.Verb.Handler(ctx);
+                    var stray = ctx.Args.StrayKeys();
+                    if (stray.Count == 0) return Result.Success(cmd.Id, cmd.Op, data);
 
-                var report = ctx.Args.StrayReport(cmd.Op, stray, seqBefore, Journal.CurrentSeq);
-                // Guarded: this is a REPORT, and a report must never be able to
-                // turn a command that worked into code=exception. A throw from
-                // Log (or from another mod's patch on it) would otherwise be
-                // caught below and answered as a failure the verb never had.
-                if (cmd.Verb.MainThread)
-                    try { Log.Warning("[AutoRimmer] " + cmd.Op + ": " + report["detail"]); }
-                    catch { }
+                    var report = ctx.Args.StrayReport(cmd.Op, stray, seqBefore, Journal.CurrentSeq);
+                    // Guarded: this is a REPORT, and a report must never be able to
+                    // turn a command that worked into code=exception. A throw from
+                    // Log (or from another mod's patch on it) would otherwise be
+                    // caught below and answered as a failure the verb never had.
+                    if (cmd.Verb.MainThread)
+                        try { Log.Warning("[AutoRimmer] " + cmd.Op + ": " + report["detail"]); }
+                        catch { }
 
-                // A deferred verb's single result belongs to its own writer
-                // (TimeDriver), so there is no envelope of ours to attach the
-                // report to; the journal row above is the only channel it has.
-                // `advance` is the one such verb.
-                if (data is DeferredResult) return Result.Success(cmd.Id, cmd.Op, data);
+                    // A deferred verb's single result belongs to its own writer
+                    // (TimeDriver), so there is no envelope of ours to attach the
+                    // report to; the journal row above is the only channel it has.
+                    // `advance` is the one such verb.
+                    if (data is DeferredResult) return Result.Success(cmd.Id, cmd.Op, data);
 
-                var ok = Result.Success(cmd.Id, cmd.Op, data);
-                ok.IgnoredArgs = report;
-                return ok;
-            }
-            catch (VerbArgsException e)
-            {
-                return Result.Fail(cmd.Id, cmd.Op, Err.BadArgs, e.Message, cmd.Args);
-            }
-            catch (Exception e)
-            {
-                return Result.Fail(cmd.Id, cmd.Op, Err.Exception, e.ToString(), cmd.Args);
+                    var ok = Result.Success(cmd.Id, cmd.Op, data);
+                    ok.IgnoredArgs = report;
+                    return ok;
+                }
+                catch (VerbArgsException e)
+                {
+                    return Result.Fail(cmd.Id, cmd.Op, Err.BadArgs, e.Message, cmd.Args);
+                }
+                catch (Exception e)
+                {
+                    return Result.Fail(cmd.Id, cmd.Op, Err.Exception, e.ToString(), cmd.Args);
+                }
             }
         }
     }

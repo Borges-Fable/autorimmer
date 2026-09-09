@@ -328,6 +328,149 @@ namespace AutoRimmer
             }
         }
 
+        // ===================================================== destroyed ====
+        // git-bug 827c1bf, absorbing a8d8ada and the building half of f1a1700.
+        // COCKPIT.md §"When the clock stops".
+        //
+        // THE JOURNAL HAD FIFTEEN EVENT TYPES AND NONE OF THEM WAS "SOMETHING
+        // WAS DESTROYED". When a manhunter pack destroyed two turrets and an
+        // autocannon in run openrun-20260902, the journal recorded nothing: the
+        // agent rebuilt the two it had happened to count and never learned the
+        // third was gone. Its own account of the wipe names that as the first
+        // link in the chain (themes.md T3, findings F-S12-13, F-S12-14).
+        //
+        // THREE HOOKS, AND `Thing.Destroy` IS DELIBERATELY NOT ONE OF THEM.
+        // a8d8ada's caution stands and is the reason: `Verse/Thing.Destroy` is
+        // on every stack merge, every bullet, every filth tick and every item
+        // a pawn hauls into a stack — hundreds of calls a second on a busy
+        // colony. `Building.Destroy`, `Frame.Destroy` and `Corpse.Destroy` are
+        // each reached only when one of those three kinds of object actually
+        // ends, which on a colony that is not being attacked is single digits
+        // per in-game day and during a raid is bounded by the number of things
+        // there are to lose. The postfix bodies below are a faction compare,
+        // a handful of field reads and a dictionary; nothing in them allocates
+        // per-frame and nothing walks a list.
+        //
+        // A FRAME IS A BUILDING, WHICH WOULD HAVE DOUBLE-COUNTED EVERY ONE.
+        // `RimWorld/Frame : Building` and `Frame.Destroy` calls
+        // `base.Destroy(mode)` — a non-virtual call straight into
+        // `Building.Destroy`, which Harmony patches by body, so both postfixes
+        // fire for one destroyed frame. Verified by reading both members. The
+        // building hook therefore hands frames to the frame hook and says so.
+        //
+        // WHY A POSTFIX CAN STILL READ THE THING. `Verse/Thing.Position` is
+        // `positionInt`, a plain field the destroy path never clears, and
+        // `Thing.Faction` is `factionInt`, likewise. `Thing.Map` is NOT
+        // readable — `Destroy` sets `mapIndexOrState = -2` — which is why no
+        // map id is published, matching every other position in this file.
+        // `Thing.Destroyed` is the gate: `Thing.Destroy` returns early without
+        // destroying anything when `def.destroyable` is false, and
+        // `Building.Destroy` runs its tail regardless, so a postfix that did
+        // not check would journal the loss of something still standing.
+        private static void EmitDestroyed(Thing t, DestroyMode mode, string kind, BuildableDef builds)
+        {
+            if (t == null || !t.Destroyed) return;
+            var payload = new Dictionary<string, object>
+            {
+                ["kind"] = kind,
+                ["def"] = t.def?.defName,
+                ["thing_id"] = t.thingIDNumber,
+                ["at"] = Positions.Out(t.Position),
+                // THE GAME'S OWN WORD, not a story about what happened. The
+                // full vocabulary is `Verse/DestroyMode`: Vanish, WillReplace,
+                // KillFinalize, KillFinalizeLeavingsOnly, Deconstruct,
+                // FailConstruction, Cancel, Refund, QuestLogic. a8d8ada asked
+                // for exactly this and for nothing to be inferred from it.
+                ["mode"] = mode.ToString(),
+                // Resolved HERE, on the main thread, for the same reason
+                // StampPawn resolves it: TimeDriver.Notice is documented "any
+                // thread" and may not ask Verse whether a faction is ours.
+                ["player"] = PlayerThing(t),
+            };
+            try { if (t.Faction != null) payload["faction"] = t.Faction.Name; }
+            catch { }
+            try { if (t.def?.label != null) payload["label"] = t.def.label; }
+            catch { }
+            // A frame's own def is `Wall_Frame`; what was LOST is the wall.
+            if (builds != null) payload["builds"] = builds.defName;
+            // `Deconstruct` on a Building_Storage and `WillReplace` on an
+            // upgrade are the colony's own work, and the halt below skips
+            // them; the row is written either way, because "the wall is gone"
+            // is a fact whatever put it there.
+            Journal.Emit("destroyed", payload, Tick());
+        }
+
+        // `Faction.IsPlayer` is `def.isPlayer`, a pure def read, and the same
+        // test PlayerFaction uses for pawns. A natural rock or a wild plant has
+        // no faction at all, which is how mining a mountain stays off this row.
+        private static bool PlayerThing(Thing t)
+        {
+            try { return t?.Faction != null && t.Faction.IsPlayer; }
+            catch { return false; }
+        }
+
+        [HarmonyPatch(typeof(Building), nameof(Building.Destroy))]
+        public static class Patch_BuildingDestroy
+        {
+            public static void Postfix(Building __instance, DestroyMode mode)
+            {
+                try
+                {
+                    if (Current.ProgramState != ProgramState.Playing) return;
+                    // Patch_FrameDestroy owns this one; see the header.
+                    if (__instance is Frame) return;
+                    // Player faction only. A raider's dropped weapon crate, a
+                    // ruin's collapsing wall and a wild megasloth's nest are
+                    // not the colony's loss, and this row exists to be counted.
+                    if (!PlayerThing(__instance)) return;
+                    EmitDestroyed(__instance, mode, "building", null);
+                }
+                catch { }
+            }
+        }
+
+        [HarmonyPatch(typeof(Frame), nameof(Frame.Destroy))]
+        public static class Patch_FrameDestroy
+        {
+            public static void Postfix(Frame __instance, DestroyMode mode)
+            {
+                try
+                {
+                    if (Current.ProgramState != ProgramState.Playing) return;
+                    if (!PlayerThing(__instance)) return;
+                    EmitDestroyed(__instance, mode, "frame", __instance.def?.entityDefToBuild);
+                }
+                catch { }
+            }
+        }
+
+        // NOT FACTION-FILTERED, and not by omission: a corpse rarely carries
+        // one, and a raider's body rotting away in the killbox is a fact the
+        // colony's own hauling backlog is measured by. What a corpse does NOT
+        // do is stop the clock — see TimeDriver.Notice, which keys the halt on
+        // `kind != "corpse"`. The issue is explicit: "A destroyed player
+        // building stops a running advance the way a casualty does; a corpse
+        // does not."
+        //
+        // The pawn is unreachable from here. `Verse/Corpse.Destroy` clears
+        // `innerContainer` before `base.Destroy`, so `InnerPawn` in a postfix
+        // is either null or a throw; the corpse's own def and id are what
+        // survive, and `Corpse.Destroy`'s own body proves it by capturing the
+        // pawn into a local first.
+        [HarmonyPatch(typeof(Corpse), nameof(Corpse.Destroy))]
+        public static class Patch_CorpseDestroy
+        {
+            public static void Postfix(Corpse __instance, DestroyMode mode)
+            {
+                try
+                {
+                    if (Current.ProgramState != ProgramState.Playing) return;
+                    EmitDestroyed(__instance, mode, "corpse", null);
+                }
+                catch { }
+            }
+        }
+
         [HarmonyPatch(typeof(GameDataSaveLoader), nameof(GameDataSaveLoader.SaveGame), typeof(string))]
         public static class Patch_SaveGame
         {

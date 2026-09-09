@@ -188,6 +188,18 @@ namespace AutoRimmer
         // two mechanisms as well as two meanings.
         private static string throughNews;
         private static bool haltOnNews;
+        // 827c1bf's escape, and a FOURTH for the same reason 280fb78 gave for
+        // the third. "A destroyed player building stops a running advance the
+        // way a casualty does" is unusable without one: a raid chewing through
+        // a wall line would halt on every segment, and the agent would spend
+        // its turns re-arming rather than answering the raid. It is not
+        // `through_casualties` because a colony that accepts losing PEOPLE has
+        // not thereby accepted losing its power grid, and a post-mortem asking
+        // which is which must not have to guess. Same shape as the news escape:
+        // it suppresses a DURING-ADVANCE halt rather than bypassing an arm-time
+        // refusal, and the halts it swallowed are counted and reported.
+        private static string throughLosses;
+        private static bool haltOnLoss;
         // What the wake WOULD have stopped for. An escape that hides the count
         // it bypassed is a silent bypass with a reason string stapled on — the
         // same argument the `bypassed` block above is built on — and a muted
@@ -201,6 +213,12 @@ namespace AutoRimmer
         private static readonly List<object> mutedSeen = new List<object>();
         private static int rodePastCount;
         private static int mutedSeenCount;
+        // 827c1bf. Its own list and its own count, NOT folded into
+        // `rodePast`: the two escapes answer different questions, and a
+        // post-mortem asking "did this run accept losing buildings" must not
+        // have to subtract trade caravans from the answer. Same cap, same lock.
+        private static readonly List<object> lossesRodePast = new List<object>();
+        private static int lossesRodePastCount;
         // What the refusal WOULD have said, kept for the result envelope when an
         // escape overrode it. An escape that hides the number it bypassed is a
         // silent bypass with a reason string stapled on.
@@ -737,6 +755,10 @@ namespace AutoRimmer
             // it suppresses happens later, inside Notice().
             throughNews = args.Has("through_news") ? Reason(args, "through_news") : null;
             haltOnNews = throughNews == null;
+            // 827c1bf. Read here with the other three so a refused advance
+            // still marks it as read (the block header above).
+            throughLosses = args.Has("through_losses") ? Reason(args, "through_losses") : null;
+            haltOnLoss = throughLosses == null;
             bypassed = null;
 
             // 65e7cf9. THE AGENT IS TAKING THE WHEEL, so whatever the clock was
@@ -866,7 +888,8 @@ namespace AutoRimmer
             // refused (`cannot-set-speed`) never existed, and a journal row
             // declaring an escape for it would be a confession to a decision
             // nobody got to make.
-            if (unreadOk != null || throughCasualties != null || throughNews != null)
+            if (unreadOk != null || throughCasualties != null || throughNews != null
+                || throughLosses != null)
             {
                 var payload = new Dictionary<string, object>
                 {
@@ -876,6 +899,9 @@ namespace AutoRimmer
                 };
                 if (unreadOk != null) payload["unread_ok"] = unreadOk;
                 if (throughCasualties != null) payload["through_casualties"] = throughCasualties;
+                // Same asymmetry as `through_news` below: no arm-time refusal
+                // corresponds to it, so it never appears in `bypassed`.
+                if (throughLosses != null) payload["through_losses"] = throughLosses;
                 // NOT in `bypassed` below, and the asymmetry is real rather
                 // than an oversight: `bypassed` names ARM-TIME refusals this
                 // call overrode, and there is no arm-time refusal for news.
@@ -918,6 +944,8 @@ namespace AutoRimmer
                 mutedSeen.Clear();
                 rodePastCount = 0;
                 mutedSeenCount = 0;
+                lossesRodePast.Clear();
+                lossesRodePastCount = 0;
             }
 
             // ARM THE PREDICATE LAST, AND EVALUATE IT ONCE.
@@ -1366,6 +1394,79 @@ namespace AutoRimmer
                     break;
             }
 
+            // ---- 827c1bf: the loss halt ---------------------------------------
+            //
+            // AFTER the `until` switch and BEFORE the wake, which is the
+            // position 280fb78's header argues for and the one place this
+            // file's two orderings differ. A caller that armed
+            // `until:{event:{type:"destroyed"}}` asked a question this
+            // call, and the token it branches on has to be the one it
+            // asked for (`reason:"event"`), so the switch runs first. The
+            // casualty halt above sits on the other side of the switch
+            // because it has shipped there since 722c951 and moving it
+            // would rename a halt suites already assert on.
+            //
+            // "A destroyed player building stops a running advance the way a
+            // casualty does; a corpse does not." Same shape as the block above
+            // and for the same reason: the JournalHooks postfix resolved
+            // `player` on the main thread and put it in the payload, because
+            // this tap is documented "any thread" and may not ask Verse.
+            //
+            // THE MODE FILTER IS THE WHOLE JUDGEMENT, and it is a filter on
+            // WHOSE DECISION IT WAS rather than on how bad it looks. Five of
+            // `Verse/DestroyMode`'s nine values are the colony's own work
+            // arriving as planned — `Deconstruct` (a pawn finishing a
+            // deconstruct job), `WillReplace` (a wall being upgraded under a
+            // new one), `Cancel` and `Refund` (a frame or blueprint the player
+            // called off), `FailConstruction` (which respawns the blueprint and
+            // already has its own `construction` row) — and stopping the clock
+            // for those would stop it for the colony working. The other four —
+            // `KillFinalize`, `KillFinalizeLeavingsOnly`, `Vanish`,
+            // `QuestLogic` — are the thing arriving from outside, which is the
+            // manhunter pack and the autocannon. `Vanish` is in the halting set
+            // deliberately: it is what `dev:destroy` uses by default, so the
+            // acceptance bullet ("dev:destroy a wall, a turret and a corpse
+            // during an advance … the advance halts on the building rows and
+            // not on the corpse row") tests the real path rather than a
+            // special case.
+            //
+            // A CORPSE NEVER HALTS whatever its mode, and the row still gets
+            // written — the fact is worth having, the interruption is not.
+            if (type == "destroyed" && payload != null
+                && payload.TryGetValue("player", out var ours) && ours is bool isOurs && isOurs
+                && Str(payload, "kind") != "corpse" && LossHalts(Str(payload, "mode")))
+            {
+                // The escape counts what it swallowed rather than dropping it,
+                // the same way `through_news` does — an escape that hides its
+                // own cost is a silent bypass with a reason string on it.
+                if (!haltOnLoss)
+                {
+                    NoteLossRodePast(payload, tick);
+                    return;
+                }
+                var evt = new Dictionary<string, object>
+                {
+                    ["kind"] = "loss",
+                    ["what"] = Str(payload, "kind"),
+                    ["def"] = Str(payload, "builds") ?? Str(payload, "def"),
+                    ["mode"] = Str(payload, "mode"),
+                    ["tick"] = (double)tick,
+                };
+                if (payload.TryGetValue("thing_id", out var tid)) evt["thing_id"] = tid;
+                if (payload.TryGetValue("at", out var at)) evt["at"] = at;
+                if (payload.TryGetValue("label", out var lab)) evt["label"] = lab;
+                evt["detail"] = (Str(payload, "label") ?? Str(payload, "def") ?? "a building")
+                    + " belonging to your faction was DESTROYED at tick " + tick
+                    + " (DestroyMode " + (Str(payload, "mode") ?? "?") + ") — the advance stopped "
+                    + "here rather than running on. Run openrun-20260902 lost two turrets and an "
+                    + "autocannon to a manhunter pack with no event to say so, rebuilt the two it "
+                    + "had counted, and named that as the first link in the chain that ended the "
+                    + "colony. `advance {through_losses:\"<why>\"}` rides past every such stop for "
+                    + "ONE call and reports what it swallowed as `losses_rode_past`.";
+                Halt("loss", evt, seq);
+                return;
+            }
+
             // ================================================ git-bug 280fb78 ==
             // THE WAKE. EVERY LETTER AND EVERY `alert_on`, WHETHER OR NOT THE
             // CALLER ASKED — the same disposition as `casualty` and `dialog`
@@ -1535,6 +1636,49 @@ namespace AutoRimmer
                     ["kind"] = kind,
                     ["id"] = id,
                     ["label"] = label,
+                    ["tick"] = (double)tick,
+                });
+            }
+        }
+
+        // WHICH `Verse/DestroyMode` VALUES ARE A LOSS. Any thread, no Verse:
+        // the mode arrives in the payload as the string the main-thread hook
+        // put there, so this is a string compare and not an enum parse.
+        //
+        // The five excluded values are the colony's own decisions arriving as
+        // planned; see the loss-halt block above for the argument. Written as
+        // a DENY list rather than an allow list deliberately: a DLC or a mod
+        // that adds a tenth DestroyMode should default to stopping the clock,
+        // because an unrecognised way for a building to end is exactly the
+        // case where somebody should look.
+        private static bool LossHalts(string mode)
+        {
+            switch (mode)
+            {
+                case "Deconstruct":
+                case "WillReplace":
+                case "Cancel":
+                case "Refund":
+                case "FailConstruction":
+                    return false;
+                default:
+                    return true;
+            }
+        }
+
+        // 827c1bf's twin of NoteRodePast, kept separate for the reason the
+        // field declaration gives.
+        private static void NoteLossRodePast(Dictionary<string, object> payload, int tick)
+        {
+            lock (newsLock)
+            {
+                lossesRodePastCount++;
+                if (lossesRodePast.Count >= NewsLogCap) return;
+                lossesRodePast.Add(new Dictionary<string, object>
+                {
+                    ["kind"] = Str(payload, "kind"),
+                    ["def"] = Str(payload, "def"),
+                    ["mode"] = Str(payload, "mode"),
                     ["tick"] = (double)tick,
                 });
             }
@@ -1838,11 +1982,37 @@ namespace AutoRimmer
 
         // `Journal.Emit` is thread-safe and this method touches no Verse, so
         // `Abandon` can call it from the poller thread.
+        //
+        // ---- 827c1bf: the two `by`s, and why this row has only one ----------
+        //
+        // THE ROW-LEVEL `by` IS `mod`, SET EXPLICITLY AND NOT INHERITED. This
+        // is reached from `ClockSample`, in `FrameStep`, on the main thread and
+        // outside the drain, outside a chore and outside a tick — so the
+        // default-to-`human` rule would stamp `human` on it. That is wrong two
+        // ways. No human wrote this row: the mod's clock observer did, on its
+        // own initiative, which is exactly what `mod` means. And on an
+        // `unreported` span the payload says the ticks were the mod's while the
+        // envelope would have said a human wrote the row — a self-contradiction
+        // in one line, in the one row whose whole job is to say who was driving.
+        //
+        // THE SPAN'S OWN OWNERSHIP KEEPS ITS FACT AND LOSES THE NAME `by`. It
+        // is now `drove`, and the reason is that it is NOT the same question as
+        // the row's provenance and must not be spelled the same. `drove` is
+        // `mod` when an advance was in flight when the span OPENED and
+        // `external` otherwise, and this file's CLOCK SPANS header already
+        // warns that "the name invites a wrong reading… it is NOT a claim about
+        // whose finger was on the key. An `unpause` verb the agent itself sent
+        // reads `external`". Folding that into the four-value vocabulary was
+        // considered and REFUSED: `external` -> `human` would assert a finger
+        // on a key in a case that provably occurs — the agent's own `unpause`
+        // verb — and a wrong attribution is worse than a coarse one in a field
+        // whose entire purpose is that a count can be trusted. Two facts, two
+        // names, one journal. DESIGN decisions log, 2026-09-09.
         private static void ClockEmit(ClockSpan s, string why)
         {
             var payload = new Dictionary<string, object>
             {
-                ["by"] = s.ByMod ? "mod" : "external",
+                ["drove"] = s.ByMod ? "mod" : "external",
                 ["from"] = s.From,
                 ["to"] = s.To,
                 ["ticks"] = s.Ticks,
@@ -1859,7 +2029,8 @@ namespace AutoRimmer
                 ["closed_by"] = why,
             };
             if (s.AdvanceId != null) payload["advance"] = s.AdvanceId;
-            long n = Journal.Emit("clock", payload, s.To);
+            long n;
+            using (Provenance.Chore()) n = Journal.Emit("clock", payload, s.To);
             if (n > clockNewsSeq) clockNewsSeq = n;
         }
 
@@ -1889,7 +2060,14 @@ namespace AutoRimmer
                     // `external` for a human's window; `mod` for a previous
                     // advance whose own result could not carry its ticks
                     // (`ClockClose`'s `unreported`).
-                    ["by"] = s.ByMod ? "mod" : "external",
+                    //
+                    // RENAMED FROM `by` WITH THE JOURNAL ROW (827c1bf), and
+                    // for the same reason: `by` now means the four-value
+                    // provenance everywhere else on this surface, and one
+                    // word must not mean two things across a result and the
+                    // journal that backs it. Same field, same values, a name
+                    // that says which question it answers.
+                    ["drove"] = s.ByMod ? "mod" : "external",
                     ["speed"] = s.TopSpeed.ToString(),
                 });
             }
@@ -1932,14 +2110,23 @@ namespace AutoRimmer
             if (!Config.AutoAnswerNameDialogs) return;
             var stack = Find.WindowStack;
             if (stack == null || !stack.WindowsForcePause) return;
-            var answered = PawnActs.AutoAnswerNameDialogs(stack);
-            if (answered == null || answered.Count == 0) return;
-            Journal.Emit("dialog_answered", new Dictionary<string, object>
+            // git-bug 827c1bf, provenance SITE 2 — a chore. This is the mod
+            // pressing a button nobody asked it to press: no command, no
+            // result envelope, its own decision. The scope covers the ANSWER
+            // as well as the row, so whatever `Dialog_GiveName.Named` sets off
+            // is attributed to the mod and not to the human whose keyboard was
+            // idle. It is the chore set COCKPIT.md describes, with one member.
+            using (Provenance.Chore())
             {
-                ["via"] = "auto",
-                ["accepted"] = answered,
-                ["still_blocking"] = stack.WindowsForcePause,
-            });
+                var answered = PawnActs.AutoAnswerNameDialogs(stack);
+                if (answered == null || answered.Count == 0) return;
+                Journal.Emit("dialog_answered", new Dictionary<string, object>
+                {
+                    ["via"] = "auto",
+                    ["accepted"] = answered,
+                    ["still_blocking"] = stack.WindowsForcePause,
+                });
+            }
             if (stack.WindowsForcePause) return;
             if (haltFlag && haltReason == "dialog")
             {
@@ -2440,6 +2627,7 @@ namespace AutoRimmer
             if (unreadOk != null) data["unread_ok"] = unreadOk;
             if (throughCasualties != null) data["through_casualties"] = throughCasualties;
             if (throughNews != null) data["through_news"] = throughNews;
+            if (throughLosses != null) data["through_losses"] = throughLosses;
             if (bypassed != null) data["escaped"] = bypassed;
             // 280fb78. WHAT THE ESCAPE AND THE MUTE LIST ACTUALLY COST, on the
             // envelope, so a transcript-only audit sees it without joining to
@@ -2458,6 +2646,19 @@ namespace AutoRimmer
                         ["count"] = (double)rodePastCount,
                         ["shown"] = (double)rodePast.Count,
                         ["events"] = new List<object>(rodePast),
+                    };
+                // 827c1bf, and present ONLY when `through_losses` actually
+                // swallowed something — silence means the guard was on or had
+                // nothing to stop, never "nobody counted".
+                if (lossesRodePastCount > 0)
+                    data["losses_rode_past"] = new Dictionary<string, object>
+                    {
+                        ["count"] = (double)lossesRodePastCount,
+                        ["shown"] = (double)lossesRodePast.Count,
+                        ["events"] = new List<object>(lossesRodePast),
+                        ["detail"] = "player-faction buildings or frames were destroyed and did "
+                            + "NOT stop the advance, because `through_losses` was passed. Each is "
+                            + "a `destroyed` row in the journal with its DestroyMode.",
                     };
                 if (mutedSeenCount > 0)
                     data["muted_alerts"] = new Dictionary<string, object>

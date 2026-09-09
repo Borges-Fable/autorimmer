@@ -4583,3 +4583,148 @@ queue by default (an agent flailing mid-experiment must not page triage).
   **NOTHING HERE HAS BEEN IN FRONT OF A GAME.** `65e7cf9`'s Acceptance section
   describes the dead-man switch that is not being built and does not cover this;
   what a bench run owes is listed in the branch's hand-back report.
+
+- 2026-09-09 (`827c1bf`) — **Every journal row carries `by`, one of four values,
+  and the `clock` row's own `by` is renamed `drove` rather than folded into
+  them.** Two separate rulings, taken together because they collide.
+
+  **THE FOUR VALUES.** `agent` (executing inside the drain, with the command id
+  in a sibling `cmd` field) · `mod` (a chore — work the mod decided to do, with
+  no command behind it and no result envelope in front of it) · `game` (inside
+  a game tick) · `human` (the default, meaning precisely "none of the above was
+  running when this row was written"). One `[ThreadStatic]` in
+  `Provenance.cs`, set at three sites, read once per emit in `Journal.Emit`, so
+  every existing hook gained the field without being touched. The fact behind
+  it is the audit's: 22 human interventions in run `openrun-20260902` that the
+  journal marks nowhere, three of its 23 `death` rows debug-menu residue and
+  one death reversed with no row for the reversal, so no count taken from that
+  run is a measurement (themes.md T13, T14).
+
+  **THREAD-LOCAL AND NOT A PLAIN STATIC**, which is the difference between a
+  provenance and a guess. The bridge emits from three thread populations:
+  main-thread verbs from `AgentGameComponent.DrainCommands`, `MainThread=false`
+  verbs inline on the poller thread in `Poller.ScanInbox`, and the `Log.Error`/
+  `Log.Warning` hooks from whatever thread logged. A shared static set by the
+  main thread would stamp `agent` on a background thread's warning during a
+  drain and `human` on the drain's own rows the moment a background emit reset
+  it. Thread-local, each thread reports what it is doing and an uninstrumented
+  thread reports the honest default.
+
+  **THE TICK SITE IS A HARMONY PREFIX ON `Verse/TickManager.DoSingleTick`, and
+  it is the tree's first.** `game` has to mean "inside ANY tick", not "inside a
+  tick this mod drove, because since 1.8 the mod drives none — `advance` sets a
+  speed and the game's own `TickManagerUpdate` calls `DoSingleTick` (there is no
+  call site in the tree, only comments). A bracket around the mod's own code
+  would therefore label a starvation death during a human's play window `human`,
+  which is false by the definition above and is exactly the wrong attribution
+  this issue exists to remove. `GameComponentTick` is not a substitute: it runs
+  AFTER `MapPreTick`, the tick lists, `StorytellerTick` and `MapPostTick` — every
+  path that kills a pawn — verified by reading `DoSingleTick`. The prefix returns
+  `void`, so Harmony cannot skip the original with it, and its body is one write
+  to our own field. The unwind is a **Finalizer** and not a postfix, because
+  `DoSingleTick` leaves `MapPreTick`, `MapPostTick` and the three tick lists
+  outside its `try`/`catch` and one throw from a modded tick would otherwise
+  have left the main thread stamped `game` for the rest of the session;
+  `AgentGameComponent.GameComponentUpdate` re-anchors once per frame as a second
+  line of defence.
+
+  **THE `clock` COLLISION, AND WHY THE TWO ARE NOT THE SAME FACT.** `65e7cf9`
+  shipped a `clock` payload field also called `by`, `mod`|`external`, meaning
+  "was an advance in flight when this span opened". Its own header already warns
+  that "the name invites a wrong reading… it is NOT a claim about whose finger
+  was on the key. An `unpause` verb the agent itself sent reads `external`."
+  Folding it into the four values was considered and REFUSED on that sentence:
+  `external` -> `human` would assert a human at the keyboard in a case that
+  provably occurs, and the whole point of this field is that a count can be
+  trusted, so a wrong attribution is worse than a coarse one. `mod` -> `agent`
+  has the mirror problem (the row is written by the observer, not by the
+  command). So the fact keeps its meaning and loses the name: the payload field
+  is `drove`, unchanged in values and semantics, and the same rename lands on
+  `since_last_look.outside[].drove` so the result and the journal spell it the
+  same way. Nothing in `rwa/`, `cockpit/` or `accept/` read either field.
+
+  **AND THE ROW'S OWN `by` IS `mod`, SET EXPLICITLY.** `ClockEmit` is reached
+  from `FrameStep`, outside all three sites, so the default rule would have
+  given it `human` — wrong on an `external` span (no human wrote the row; the
+  mod's observer did) and self-contradictory on an `unreported` `mod` span,
+  whose payload would have said the ticks were the mod's while the envelope said
+  a human wrote the row. It opens a `Provenance.Chore()` for the emit rather
+  than relying on a default.
+
+  **`destroyed`, AND WHAT IT DOES NOT HOOK.** Postfixes on
+  `Verse/Building.Destroy`, `RimWorld/Frame.Destroy` and `Verse/Corpse.Destroy`,
+  carrying def, id, position and the game's own `DestroyMode`. `Thing.Destroy`
+  is deliberately NOT patched — every stack merge, every bullet, every hauled
+  item — and `a8d8ada`'s caution stands. **`Frame : Building` and
+  `Frame.Destroy` calls `base.Destroy(mode)`**, a non-virtual call into a body
+  Harmony has patched, so both postfixes fire for one destroyed frame; the
+  building hook hands frames to the frame hook. Buildings and frames are
+  player-faction only, corpses are not filtered. A postfix can still read the
+  thing because `Thing.Position` is `positionInt` and `Thing.Faction` is
+  `factionInt`, both plain fields the destroy path never clears; `Thing.Map` is
+  gone (`mapIndexOrState = -2`), which is why no map id is published, and
+  `Thing.Destroyed` is the gate that keeps a non-destroyable thing's early
+  return out of the journal.
+
+  **THE HALT FILTERS ON WHOSE DECISION IT WAS, NOT ON HOW BAD IT LOOKS.** Five
+  of `Verse/DestroyMode`'s nine values are the colony's own work arriving as
+  planned — `Deconstruct`, `WillReplace`, `Cancel`, `Refund`,
+  `FailConstruction` — and stopping the clock for those would stop it for the
+  colony working. The other four halt, `Vanish` among them because that is
+  `dev:destroy`'s default and the acceptance has to exercise the real path. It
+  is written as a DENY list so a tenth `DestroyMode` from a DLC or a mod
+  defaults to stopping the clock. A corpse never halts whatever its mode; its
+  row is still written. The escape is `advance {through_losses:"<why>"}`, a
+  FOURTH per-call escape and not an extension of `through_casualties`, because
+  a colony that has accepted losing people has not thereby accepted losing its
+  power grid and a post-mortem must not have to guess which was meant; what it
+  swallows is counted and reported as `losses_rode_past`, on the precedent
+  `through_news`/`news_rode_past` set. The halt sits AFTER the `until` switch,
+  unlike the casualty halt, so `until:{event:{type:"destroyed"}}` still reports
+  the caller's own `reason:"event"` — `280fb78`'s rule; the casualty halt keeps
+  its older position because moving it would rename a halt suites assert on.
+
+  **THE HUMAN HALF: FIVE MEMBERS VERIFIED BY NAME, FOUR AND A HALF COVERED.**
+  `Verse/DesignatorManager.ProcessInputEvents()`,
+  `Verse/Command.ProcessInput(Event)`,
+  `Verse/FloatMenuOption.Chosen(bool, FloatMenu)`,
+  `LudeonTK/DebugActionNode.Enter(Dialog_Debug)` and
+  `Verse/DiaOption.Activate()` all exist with the shapes the issue assumed, and
+  each becomes an `action` row with `by:"human"` and the game's own label.
+  `Command.ProcessInput` is hooked on the BASE because `Command_Action` and
+  `Command_Toggle` both call `base.ProcessInput(ev)` FIRST and then act, so the
+  row precedes the effect — the right order for a chronology. Six of the 23
+  vanilla overrides do NOT call base (`Designator_Build`, `Designator_Install`,
+  `Designator_Dropdown`, `Designator_Paint`, `Designator_MechControlGroup` and
+  one gizmo inside `Comp_AtmosphericHeater`), counted by grep rather than
+  assumed, and the miss costs nothing that matters: those five arm a cursor and
+  do nothing until the cursor is USED, which goes through the designator hook.
+  `DebugActionNode.Enter` fires only for a childless node, because a node with
+  children calls `SetCurrentNode` and returns, which is navigating a menu.
+  `DesignatorManager.ProcessInputEvents` leaves no return value, so the postfix
+  keys on `Event.current.type == EventType.Used`, which each of its three
+  branches produces via `Use()`, and on `SelectedDesignator` still being
+  non-null, which distinguishes a designation from the branch that deselects.
+  **`Verse/Dialog_MessageBox` is the half not covered, and is reported rather
+  than approximated**: its three buttons are inline `Widgets.ButtonText` calls
+  in `DoWindowContents` that invoke `buttonAAction`/`buttonBAction`/
+  `buttonCAction` directly, so the only hooks available are `DoWindowContents`
+  (every OnGUI frame, and a postfix cannot tell which button ran) or
+  `Widgets.ButtonText` (every button in the entire UI, every frame). Neither is
+  affordable and neither would be correct. Every one of the five is guarded on
+  `Provenance.NothingOfOursIsRunning`, which is the definition of `human`
+  rather than a precaution — and it is what stops a future verb that presses a
+  real gizmo from booking its own act as a human's.
+
+  **THE ONE CHORE THAT EXISTS TODAY** is `TimeDriver.SweepNameDialogs`, the
+  auto-answer for `Dialog_GiveName`; the chore set `COCKPIT.md` describes is not
+  built. `ClockEmit` is the second `mod` site. `dev:*` verbs keep their `dev`
+  rows and are `by:"agent"` like every other command, as the issue asks.
+
+  **NOTHING HERE HAS BEEN IN FRONT OF A GAME.** `827c1bf`'s Acceptance section
+  is the orchestrator's to run; `accept/827c1bf-provenance.md` is the numbered
+  command list for it, including the `journal-selftest {steps:["destroy-at"]}`
+  fixture that exists because `dev:destroy` structurally cannot drive the halt
+  (`DrainCommands` answers every main-thread verb except `pause` with `busy`
+  while an advance is in flight, so a `dev:destroy` sent during an advance is
+  refused rather than executed).

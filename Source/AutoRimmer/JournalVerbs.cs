@@ -89,6 +89,58 @@ namespace AutoRimmer
             catch { }
         }
 
+        // -1 = disarmed. 827c1bf's `destroy-at`, the third of the same shape
+        // and here for exactly the reason `down-at` and `alert-at` exist: the
+        // loss halt fires on a `destroyed` row produced WHILE TIME RUNS, and no
+        // shipped route can produce one. `dev:destroy` runs from the command
+        // drain, and `AgentGameComponent.DrainCommands` answers every
+        // main-thread verb except `pause` with `busy` while an advance is in
+        // flight — so a `dev:destroy` sent during an advance is not executed
+        // during an advance, it is refused. Armed here, fired from
+        // GameComponentTick (inside DoSingleTick, inside the advance), the
+        // destruction lands mid-advance and the halt is real.
+        //
+        // TWO IDS AND NOT ONE, because the acceptance is a CONTRAST: "the
+        // advance halts on the building rows and not on the corpse row". Arming
+        // a building and a corpse in the same call and firing both on the same
+        // tick is what makes that a single observation rather than two runs
+        // that might differ for another reason.
+        public static int DestroyAtTick = -1;
+        private static readonly List<int> destroyTargetIds = new List<int>();
+        private static DestroyMode destroyFixtureMode = DestroyMode.Vanish;
+
+        public static void TickDestroyFixture()
+        {
+            if (DestroyAtTick < 0) return;
+            int now;
+            try { now = Find.TickManager.TicksGame; }
+            catch { return; }
+            if (now < DestroyAtTick) return;
+            DestroyAtTick = -1;
+            try
+            {
+                var map = Find.CurrentMap;
+                if (map == null) return;
+                // Resolved by id at FIRE time, not held as a reference: the
+                // thing may have been destroyed by something else in the
+                // meantime, and a stale reference would be a red error from
+                // inside the tick loop.
+                for (int i = 0; i < destroyTargetIds.Count; i++)
+                {
+                    Thing found = null;
+                    var all = map.listerThings.AllThings;
+                    for (int j = 0; j < all.Count; j++)
+                        if (all[j] != null && all[j].thingIDNumber == destroyTargetIds[i])
+                        { found = all[j]; break; }
+                    if (found == null || found.Destroyed) continue;
+                    try { found.Destroy(destroyFixtureMode); }
+                    catch { }
+                }
+            }
+            catch { }
+            finally { destroyTargetIds.Clear(); }
+        }
+
         public static void TickCasualtyFixture()
         {
             if (DownAtTick < 0) return;
@@ -307,6 +359,10 @@ namespace AutoRimmer
             // without adding its arguments here refuses every call to that step
             // BEFORE any step runs.
             "alert_delay_ticks", "alert_critical", "alert_label",
+            // 827c1bf's `destroy-at` step. Same trap as the two lines above:
+            // this list is a DECLARATION and a step whose arguments are missing
+            // from it is refused before it runs.
+            "destroy_delay_ticks", "destroy_things", "destroy_mode",
             // …and `letter_def`, so the `letter` step can send a def other
             // than NeutralEvent. 280fb78's acceptance is "a letter of ANY def
             // halts", which a one-def fixture cannot show.
@@ -873,6 +929,74 @@ namespace AutoRimmer
                         };
                         break;
                     }
+                    case "destroy-at":
+                    {
+                        // 827c1bf's loss halt, and the ONLY way its acceptance
+                        // can be driven from outside the game — see
+                        // TickDestroyFixture's header for why `dev:destroy`
+                        // structurally cannot (it is answered `busy` while an
+                        // advance is in flight).
+                        //
+                        // `destroy_things` is a list of thingIDNumbers, so the
+                        // SAME step proves every arm of the filter in one
+                        // advance: a player wall halts, a corpse does not, and
+                        // an unowned natural rock produces no row at all.
+                        // Dev-gated like every other step here, journaled as a
+                        // `dev` event.
+                        int delay = ctx.Args.Int("destroy_delay_ticks", 200);
+                        if (delay < 0 || delay > 600000)
+                            throw new VerbArgsException("destroy_delay_ticks must be 0..600000");
+                        if (map == null) throw new VerbArgsException("destroy-at needs a current map");
+                        string modeArg = ctx.Args.Str("destroy_mode", "vanish");
+                        if (!Enum.TryParse(modeArg, ignoreCase: true, out destroyFixtureMode))
+                            throw new VerbArgsException(
+                                "destroy_mode must be a Verse/DestroyMode name: vanish|willreplace|"
+                                + "killfinalize|killfinalizeleavingsonly|deconstruct|failconstruction|"
+                                + "cancel|refund|questlogic");
+                        if (!(ctx.Args.Raw("destroy_things") is List<object> want) || want.Count == 0)
+                            throw new VerbArgsException(
+                                "destroy-at needs 'destroy_things': a non-empty array of "
+                                + "thingIDNumbers. Get them from `things` or `map-dump`.");
+                        destroyTargetIds.Clear();
+                        var armedRows = new List<object>();
+                        foreach (var o in want)
+                        {
+                            if (!(o is double d))
+                                throw new VerbArgsException("'destroy_things' must be an array of numbers");
+                            int id = (int)d;
+                            Thing found = null;
+                            var all = map.listerThings.AllThings;
+                            for (int j = 0; j < all.Count; j++)
+                                if (all[j] != null && all[j].thingIDNumber == id) { found = all[j]; break; }
+                            if (found == null)
+                                throw new VerbArgsException($"no spawned thing with id {id} on this map");
+                            destroyTargetIds.Add(id);
+                            armedRows.Add(new Dictionary<string, object>
+                            {
+                                ["thing_id"] = id,
+                                ["def"] = found.def?.defName,
+                                ["is_corpse"] = found is Corpse,
+                                ["is_frame"] = found is Frame,
+                                ["faction"] = found.Faction?.Name,
+                                // What the loss halt will read. Published here
+                                // so the suite asserts against the mod's own
+                                // answer rather than re-deriving it.
+                                ["player_faction"] = found.Faction != null && found.Faction.IsPlayer,
+                            });
+                        }
+                        int armedTick = Find.TickManager.TicksGame;
+                        DestroyAtTick = armedTick + delay;
+                        target = $"{destroyTargetIds.Count} thing(s) at tick {DestroyAtTick}, "
+                            + "mode " + destroyFixtureMode;
+                        extras["destroy_at"] = new Dictionary<string, object>
+                        {
+                            ["armed_at_tick"] = armedTick,
+                            ["fires_at_tick"] = DestroyAtTick,
+                            ["mode"] = destroyFixtureMode.ToString(),
+                            ["things"] = armedRows,
+                        };
+                        break;
+                    }
                     case "main-menu":
                     {
                         // Arms only. It fires from the GameComponent AFTER the
@@ -893,7 +1017,7 @@ namespace AutoRimmer
                         break;
                     }
                     default:
-                        throw new VerbArgsException($"unknown step '{step}' (letter|message|error|error-at|weird-result|raid|downed|down-at|break|save|stockpile|alerts|alerts-clear|colonists|power|timeout-letter|dialogs|dialogs-clear|main-menu)");
+                        throw new VerbArgsException($"unknown step '{step}' (letter|message|error|error-at|weird-result|raid|downed|down-at|destroy-at|break|save|stockpile|alerts|alerts-clear|colonists|power|timeout-letter|dialogs|dialogs-clear|main-menu)");
                 }
                 Journal.Emit("dev", new Dictionary<string, object>
                 {

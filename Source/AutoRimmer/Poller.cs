@@ -153,11 +153,20 @@ namespace AutoRimmer
             if (!sawGame || stalled < AbandonAfterSeconds) return;
             sawGame = false;
             int answered = Runtime.ResetForGameBoundary(Runtime.BoundaryDetail);
-            Journal.Emit("session", new Dictionary<string, object>
-            {
-                ["kind"] = "unloaded",
-                ["aborted"] = answered,
-            });
+            // 827c1bf: `by:"mod"`. This row is the POLLER noticing that the
+            // heartbeat stopped — the mod's own inference about the bridge, on
+            // the mod's own thread, with no game left to ask. The default would
+            // have attributed it to a human, and the human in question may well
+            // have quit to the main menu, but this row is not that act: it is
+            // the mod saying it worked out what happened. `newgame` and
+            // `loaded` are left on the default deliberately, because those ARE
+            // somebody's act — whoever loaded the save.
+            using (Provenance.Chore())
+                Journal.Emit("session", new Dictionary<string, object>
+                {
+                    ["kind"] = "unloaded",
+                    ["aborted"] = answered,
+                });
         }
 
         // Results are buffered into `sink` rather than written here: every

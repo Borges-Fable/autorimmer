@@ -37,5 +37,16 @@
             <HintPath>$(RimWorldManaged)/UnityEngine.CoreModule.dll</HintPath>
             <Private>false</Private>
         </Reference>
+        <!-- UnityEngine.Event / EventType live here, not in CoreModule.
+             HumanActions.cs needs them to tell "the designator consumed a
+             click" from "OnGUI ran again", which is the only signal
+             DesignatorManager.ProcessInputEvents leaves behind for a postfix
+             (git-bug 827c1bf). RimWorld's whole UI is IMGUI, so the assembly
+             is present on every bench; same $(RimWorldManaged) root as the
+             other two, so it stays machine-portable. -->
+        <Reference Include="UnityEngine.IMGUIModule">
+            <HintPath>$(RimWorldManaged)/UnityEngine.IMGUIModule.dll</HintPath>
+            <Private>false</Private>
+        </Reference>
     </ItemGroup>
 </Project>
