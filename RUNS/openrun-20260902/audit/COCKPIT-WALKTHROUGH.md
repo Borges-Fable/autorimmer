@@ -129,9 +129,25 @@ for logical consistency and to test whether the categories themselves are sound 
 not to re-decide the behaviours. Element 6 is the taxonomy those categories come
 from, so that round should almost certainly take both sections together.
 
+### Element 6 of 9 — the line: chore, gauge, stop, or decision — **KEEP, unamended**
+
+Four categories, one per row: a chore the mod does, a gauge on every screen (a
+light is a gauge with a threshold), a stop of the clock, or a decision framed and
+handed over. All 27 of this run's incidents are sorted by it, and so are the run
+contract's eleven standing rules — nine of which stop being rules the agent has
+to remember at all.
+
+What stays with the agent, per the 2026-08-31 ruling: anything needing a forecast
+rather than an observation, anything weighing outcomes with no shared unit, the
+objective, whom to recruit, and situations no procedure anticipated.
+
+Standing against it: element 5's call that the categories themselves get a Fable
+round. Keeping the line here is keeping the sort as drawn, not a finding that the
+four categories are the right four.
+
 ## Open — the question on the table
 
-Element 6 of 9 is next; nothing is currently awaiting an answer.
+Element 7 of 9 is next; nothing is currently awaiting an answer.
 
 ## Not yet reached — elements 4 to 9
 
@@ -163,4 +179,4 @@ the sketch's three trailing sections (§"Calls that could have gone the other wa
 4. The chore list re-examined in its own Fable round with element 6: `roof`
    folded into a wider care-of-items concern, `save` moved out of the chore
    category to plain automatic behaviour, and the categories themselves tested.
-5. Whatever elements 6 to 9 change.
+5. Whatever elements 7 to 9 change.
