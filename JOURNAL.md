@@ -37,6 +37,7 @@ contract and grow them additively.
 | `red_error` | `msg` (≤2000) or `msg`+`suppressed:true`, `overflow?` | per-text cap 3 per session, then one suppression marker. **The cap is a FILE policy only** — `advance {halt_on_error:true}` halts on every occurrence including the ones not written here (1.5 blocker 3), so a repeat count in the file is a floor, not a total |
 | `warning` | `msg` (≤2000), `overflow?` | first occurrence per exact text per session; repeats are LogRelay's job |
 | `dialog` | `count`, `windows`: `[{type,type_full,title?,layer}]`, `opened`: same shape, `letters?` (≤10 labels) | a **force-pausing** modal went up. See below — this is why `advance` stops |
+| `clock` | `by`: `external` \| `mod`, `from`, `to`, `ticks`, `speed` (the FASTEST the span ran at), `speed_at_open`, `frames`, `wall_seconds`, `avg_tps`, `closed_by`: `pause` \| `advance-start` \| `game-boundary` \| `advance-failed`, `advance?` | **game time that moved with no advance in flight** (git-bug 65e7cf9). `TimeDriver.FrameStep` diffs `TicksGame` and `CurTimeSpeed` against the previous frame, before its own `!Active` early-out; the span opens on the first moved tick and closes when `CurTimeSpeed` goes `Paused` or an `advance` arms. The count is frame-exact, not sampled: `Verse/Game.UpdatePlay` runs `TickManagerUpdate()` and then `GameComponentUtility.GameComponentUpdate()` in the same method, so every tick the frame produced already exists when the diff is taken. `by` is `mod` when an advance was in flight when the span OPENED and `external` otherwise — it is not a claim about whose finger was on the key, and an `unpause` the agent itself sent reads `external`. **`by:"mod"` is journaled only when the result those ticks belong to carries no data block**, which is two cases: `closed_by:"game-boundary"` (`Abandon` answers `no-active-game` with `Data = null` — the colony went away underneath) and `closed_by:"advance-failed"` (`FinishFailed`, or a `Finish` whose command was already answered). Every other `mod` span is the advance's own and is fully described by that advance's result — journaling it as well would put a row inside every advance's own `journal_seq` and destroy 722c951's "a quiet colony never pays for this". **`speed` is why the row is not just a tick count**: `TickManager.TogglePaused` restores `prePauseTimeSpeed` and the mod's exit `Pause()` IS a `TogglePaused` from Ultrafast, so the first spacebar tap after an advance runs the colony at ~900 tps (measured 858–887). An `external` row is the ONE new thing that can create a 722c951 read obligation — see `advance`'s `since_last_look` below. |
 
 Log hooks attach when AutoRimmer's ctor runs — last in the load order — so
 engine-init and earlier-mod load warnings (the bench's SteamAPI.Init line,
@@ -90,6 +91,67 @@ So:
   intact is the whole of 1.7.
 - Journaled whether or not an advance is running: a modal going up is a
   first-class event.
+
+## `clock`, and `advance`'s `since_last_look` (git-bug 65e7cf9)
+
+The audit of run `openrun-20260902` recomputed the ticks that moved outside any
+returned advance as an interval union of `[tick − ticks_elapsed, tick]` rather
+than as a sum of `state.tick` deltas: **1,613,739 ticks, 15.3% of the run**, of
+which **89.6% was Dorian playing the colony by hand for nine in-game days**.
+659 of 659 returned advances ended paused and none refused a pause, so the mod
+never left the clock running — somebody else did, legitimately, and nothing in
+the record said so. `clock` rows are the record saying so. **There is no
+auto-pause anywhere in this**; the mod observes the clock and never sets it
+outside an advance.
+
+`advance`'s result gained a sibling to `journal_seq`:
+
+    since_last_look: {
+      ticks,             # every game tick since the last screen this mod delivered
+      in_this_advance,   # == ticks_elapsed
+      outside: [{from, to, ticks, by, speed}],   # capped at 20
+      outside_ticks, outside_spans,              # whole, uncapped
+      journal_seq: [lastScreenSeq+1, endSeq]     # [] when nothing was journaled
+    }
+
+`outside` holds a span only when its ticks reach no result envelope of their
+own, which is arithmetic rather than taste: `ticks` is
+`outside_ticks + in_this_advance`, so a `mod` span whose advance DID report its
+ticks would be counted twice. One such closes mid-advance whenever the clock is
+paused with an advance still armed — a human on the spacebar, a `pause` verb, a
+discharged pause debt — and every tick of it is already `in_this_advance`. The
+`mod` spans that DO appear here are the ones whose own result carried no data
+block (`closed_by` `game-boundary` or `advance-failed`); the window is also not
+consumed by such a result, so the next one that CAN carry a `since_last_look`
+reports it.
+
+`journal_seq` (the older field) starts at the advance's own ARM point.
+`since_last_look.journal_seq` starts at the last SCREEN — the last result this
+mod handed back, or the highest seq a `journal` call has served, whichever is
+later. The difference between the two marks is the window in which nobody was
+at the wheel, and rows journaled in it — `(lastAdvanceEndSeq, startSeq]` — were
+claimed by **no** advance's `journal_seq`. Measured on that run's own spine
+(`RUNS/openrun-20260902/audit/spine.ndjson`): **404 gaps between consecutively
+published advance ranges, holding 2,973 journal rows** — 93 of them `death`,
+`downed` or `letter`. Tony's downing and death (seq 1201, 1267), Tanya's (1779,
+1789) and two `ThreatBig` letters (`Shamblers approach` 1803, `Raid: Nyararm
+Mechhive` 3103) are all in that list.
+
+Those rows were also **gated by nothing**: `TimeDriver.Start` refuses on
+`ReadWatermark < lastAdvanceEndSeq`, and `lastAdvanceEndSeq` only moves when an
+advance journals something of its own — so a silent advance after a human play
+window left the window unread and unrefused forever. It now also moves to the
+seq of the `clock` row that closed the human window, which is at or above
+everything that window produced. **Only that** — an advance does not create an
+obligation out of the agent's own `action` rows, which are emitted while it is
+at the wheel with the game paused and which it got a result envelope for.
+
+A human play window therefore costs **at most one** `unread-journal` refusal,
+whose type breakdown names `clock` beside the deaths — and it lands one turn
+late by construction: the `clock` row is written when the NEXT advance arms, so
+that advance cannot have read it and is not refused on it. The advance after it
+is. The obligation exists from the first teardown that follows, so the lag is
+one turn and never more.
 
 ## Alert timing — read before asserting on ticks
 

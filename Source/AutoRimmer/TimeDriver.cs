@@ -262,6 +262,147 @@ namespace AutoRimmer
         private static int slowerFromTick;
         private static readonly List<object> slowerSpans = new List<object>();
 
+        // ==================================================== git-bug 65e7cf9 ==
+        // CLOCK SPANS — GAME TIME NOBODY ASKED THIS MOD FOR, MADE VISIBLE.
+        //
+        // The audit of run `openrun-20260902` recomputed the ticks that moved
+        // outside any returned advance as an interval union rather than as a
+        // sum of `state.tick` deltas: 1,613,739 ticks, 15.3% of the run, and
+        // 89.6% of THAT was Dorian playing the colony by hand for nine in-game
+        // days. So the failure is not that the time happened. The failure is
+        // that nothing in the record said it had. 659 of 659 returned advances
+        // ended paused; the mod never left the clock running. Somebody else did,
+        // legitimately, and the journal was silent about it.
+        //
+        // WHY THIS IS A DIFF AND NOT A HOOK. `TickManager` publishes no "time
+        // moved" event and vanilla's own speed setters are scattered across a
+        // dozen-odd call sites (`TimeControls`, `GravshipUtility`,
+        // `QuestPart_EndGame`, `Game.LoadGame`…). The one thing they have in common is
+        // that `TicksGame` ends up larger. So the observation is a subtraction.
+        //
+        // AND WHY IT IS FRAME-EXACT. `Verse/Game.UpdatePlay` runs
+        // `tickManager.TickManagerUpdate()` and then, later in the SAME method,
+        // `GameComponentUtility.GameComponentUpdate()` — which is where
+        // `AgentGameComponent.GameComponentUpdate` calls `FrameStep`. Verified
+        // by member name against the decompiled 1.6 source. Every tick this
+        // frame produced has therefore already been produced when the diff is
+        // taken, and no tick can be produced between the diff and the next one:
+        // `DoSingleTick` is only ever reached from `TickManagerUpdate`. The
+        // count is exact, not sampled.
+        //
+        // WHAT `by` MEANS, precisely, because the name invites a wrong reading:
+        // it is `mod` when an AutoRimmer advance was in flight at the moment the
+        // span opened and `external` otherwise. It is NOT a claim about whose
+        // finger was on the key. An `unpause` verb the agent itself sent reads
+        // `external`, and that is the honest answer — nothing is driving that
+        // time, nothing is bounding it, and no screen is coming at the end of
+        // it, which is exactly the property that makes it worth a row.
+        // `TimeControls.DoTimeControlsGUI` is the sole vanilla caller of
+        // `TickManager.TogglePaused` outside `TickManager` itself and the only
+        // non-scripted `CurTimeSpeed` setter (grepped over the whole decompiled
+        // tree), so in practice an `external` span with a speed above Normal is
+        // a human at the controls; the residual is vanilla's own scripted
+        // setters, which only ever set `Normal` or `Paused`.
+        //
+        // WHY A SPEED AND NOT ONLY A TICK COUNT. `TogglePaused` restores
+        // `prePauseTimeSpeed`, and this mod's exit `Pause()` IS a `TogglePaused`
+        // from Ultrafast — so the very first spacebar tap after an advance runs
+        // the colony at ~900 tps (measured 858–887 in three of the run's human
+        // windows). A span that reported "4,300 ticks" without "Ultrafast" would
+        // read like a minute of pottering.
+        //
+        // NO AUTO-PAUSE LIVES HERE, AND THAT IS THE RULING, NOT AN OMISSION.
+        // See the decisions log for 2026-09-09: 65e7cf9's "no tick without an
+        // advance in flight" is unimplementable without re-pinning the clock
+        // every frame, which is the 1.3 mechanism 1.8 deliberately deleted, and
+        // it would have blocked 1.45M ticks of legitimate play in this one run.
+        // This block OBSERVES. It never sets a speed.
+        //
+        // ---- allocation ----------------------------------------------------
+        // `ClockSample` is on the per-frame path and allocates NOTHING in its
+        // steady state: a `TicksGame` read, a `CurTimeSpeed` read, integer
+        // arithmetic, enum compares. `DateTime.UtcNow` is a struct and is read
+        // only when a span OPENS or CLOSES, never per frame. The payload
+        // dictionary and its `ToString()`s are built once per closed span —
+        // once per human pause, not once per frame. `outsideSpans` is a struct
+        // list preallocated at its cap and never grown.
+        private const int ClockSpanCap = 20;
+
+        // A frame cannot legitimately produce more than `TickRateMultiplier*2`
+        // ticks (30 at Ultrafast; `Verse/TickManager.TickManagerUpdate`'s own
+        // loop bound), so anything past this is a discontinuity — a dev
+        // `DebugSetTicksGame`, or a load this class has not been told about —
+        // and is rebased rather than journaled as a span that never happened.
+        // Deliberately loose (136x the real ceiling) because the cost of a
+        // false rebase is one lost span and the cost of a false span is a lie.
+        // `DebugSettings.fastEcology` (+2000 ticks per tick) would trip it; it
+        // is a dev toggle the bench never sets.
+        private const int ClockMaxTicksPerFrame = 4096;
+
+        private struct ClockSpan
+        {
+            public int From, To, Ticks, Frames;
+            public bool ByMod;
+            public string AdvanceId;
+            public TimeSpeed OpenSpeed, TopSpeed;
+            public double Wall;
+        }
+
+        private static int clockLastTick = int.MinValue;
+        private static TimeSpeed clockPrevSpeed;
+        private static bool clockOpen;
+        private static int clockFrom;
+        private static int clockTicks;
+        private static int clockFrames;
+        private static bool clockByMod;
+        private static string clockAdvanceId;
+        private static TimeSpeed clockOpenSpeed;
+        private static TimeSpeed clockTopSpeed;
+        private static DateTime clockOpenWall;
+
+        // ---- the window since the last delivered screen ---------------------
+        //
+        // `lastScreenSeq` is `Journal.CurrentSeq` at the moment this mod last
+        // handed the client a RESULT — success or failure, from `Teardown`.
+        // `lastAdvanceEndSeq` above is the same number but only for advances
+        // that journaled something, and the difference between the two marks is
+        // the hole the round found: rows emitted BETWEEN advances land in
+        // `(lastAdvanceEndSeq, startSeq]`, which the previous advance's
+        // `journal_seq` ends below and the next one's begins above. Tony's and
+        // Tanya's deaths and a raid letter were in that gap, claimed by no
+        // advance's range. Anchoring "since you last looked" to the SCREEN mark
+        // rather than to the advance's arm point is the whole fix, and it is the
+        // same one line in two places: the range published in the result, and
+        // the test that decides whether an advance created a read obligation.
+        private static long lastScreenSeq;
+
+        // THE TOP OF THE LAST HUMAN-PLAY WINDOW, in journal seqs: the seq of the
+        // `clock` row that closed it. Everything that window produced — the
+        // deaths, the letters, the row itself — is at or below this number,
+        // because the row is emitted when the span closes and the span closes
+        // after everything that happened inside it.
+        //
+        // This is the ONE new thing that can create a 722c951 read obligation,
+        // and the criterion is that issue's own: "events emitted while TIME RAN
+        // are news the caller did not see." It just stops assuming that time
+        // only ever runs inside an advance. What it deliberately does NOT do is
+        // widen the obligation to "any unread event at all" — the agent's own
+        // `action` rows are emitted while it is AT THE WHEEL with the game
+        // paused, it got a result envelope for each, and charging a `journal`
+        // round trip to every turn that acted is the friction 722c951's header
+        // rules out in as many words. Consumed at `Teardown`, so a human play
+        // window costs exactly one refusal, not a mode.
+        private static long clockNewsSeq;
+        private static readonly List<ClockSpan> outsideSpans = new List<ClockSpan>(ClockSpanCap);
+        private static int outsideTicks;
+        private static int outsideCount;
+
+        // Snapshot taken by `Teardown` for `BuildData`, which runs after it.
+        private static long lookSeqFrom;
+        private static int lookOutsideTicks;
+        private static int lookOutsideCount;
+        private static readonly List<object> lookOutside = new List<object>(ClockSpanCap);
+
         // ---- vanilla's speed ladder ---------------------------------------
         //
         // Read off `TickManager.TickRateMultiplier` (decompiled): Normal 1,
@@ -598,6 +739,18 @@ namespace AutoRimmer
             haltOnNews = throughNews == null;
             bypassed = null;
 
+            // 65e7cf9. THE AGENT IS TAKING THE WHEEL, so whatever the clock was
+            // doing before this call stops being an open question and becomes a
+            // closed, journaled span. HERE and not after the refusals below,
+            // deliberately: the `unread-journal` refusal is the one most likely
+            // to fire right after a human play window, and its whole job is to
+            // send the caller to `journal` — so the row naming that window must
+            // already be IN the journal when it gets there. It samples before
+            // `SetSpeed` further down, so the speed it records is the one the
+            // clock was actually running at rather than the one this advance is
+            // about to ask for.
+            ClockSample("advance-start");
+
             // REFUSAL 1 — the unread journal delta. Cheapest check first,
             // deliberately: it is two longs plus (only when it fires) one ring
             // walk, whereas refusal 2 can cost a pathfind. Doing the cheap one
@@ -623,11 +776,26 @@ namespace AutoRimmer
                     ["types"] = breakdown,
                 };
                 if (ringTrunc) block["ring_truncated"] = true;
+                // Names the one type whose presence changes what the reader is
+                // looking at: not "the advance produced news" but "the colony
+                // ran without you". Conditional, so an ordinary refusal does
+                // not carry a paragraph about a thing that did not happen.
+                string clockNote = counts.ContainsKey("clock")
+                    ? "A `clock` row in that list is game time that moved with NO advance in "
+                      + "flight — a human at the controls, or an `unpause` — and it carries the "
+                      + "tick span and the speed it ran at. "
+                    : "";
                 string detail =
-                    $"the previous advance journaled {n} event(s) that no `journal` call has read "
-                    + $"(seq {watermark + 1}..{lastAdvanceEndSeq}; types: {breakdown}). "
+                    // 65e7cf9 widened what can put events in this window — time
+                    // that ran with no advance in flight now lands here too —
+                    // so the sentence no longer claims the previous ADVANCE
+                    // produced them. The `key=value` tokens below are unchanged
+                    // and are what `accept/722c951-advance-halt.py` parses.
+                    $"{n} event(s) between your last screen and now have not been read by any "
+                    + $"`journal` call (seq {watermark + 1}..{lastAdvanceEndSeq}; types: {breakdown}). "
                     + $"unread={n} unread_total={total} read_watermark={watermark} "
                     + $"advance_end_seq={lastAdvanceEndSeq}. "
+                    + clockNote
                     + "Advancing again now is advancing BLIND: run m1-20260831 lost a colonist to "
                     + "exactly this, when step 148's own result carried journal_seq:[125,128] "
                     + "announcing Table was down and the run advanced five more times while he "
@@ -1452,6 +1620,29 @@ namespace AutoRimmer
             haltEvent = null;
             haltSeq = 0;
             slowerNow = false;
+            // 65e7cf9. THE SPAN IN FLIGHT, WHATEVER IT IS. This exit hands
+            // back a failure result with `Data = null`, so an advance that was
+            // ticking when the colony went away reports its elapsed time
+            // nowhere else at all — and an `external` span open at the boundary
+            // has no next result to be carried into either, because the window
+            // dies with the colony two lines below. `unreported: true` is
+            // therefore right for both.
+            //
+            // AFTER `Active = false` above, deliberately: `Journal.Emit` fires
+            // `Notice` synchronously on the emitting thread, and an advance on
+            // its way out must not be re-entered by its own halt matchers.
+            // Touches no Verse (a span is cached ints and an enum), so it is
+            // legal on the poller thread, which is where the heartbeat edge
+            // calls this from — and the whole block is swallowed because the
+            // two lists it clears are main-thread structures and a boundary is
+            // the one moment the other thread may reach them.
+            try
+            {
+                if (clockOpen && clockTicks > 0)
+                    ClockClose("game-boundary", clockLastTick, unreported: true);
+                ClockReset();
+            }
+            catch { }
             // 722c951: the read obligation dies with the game that created it.
             // The command was answered `no-active-game` with NO data, so the
             // caller was never handed a `journal_seq` range and never learned a
@@ -1459,6 +1650,11 @@ namespace AutoRimmer
             // from a colony that no longer exists is noise, not discipline. The
             // events are still in the file for a post-mortem.
             lastAdvanceEndSeq = 0;
+            // 65e7cf9, same argument one field over: the screen mark is a seq
+            // in a journal whose colony is gone. AFTER `ClockReset` above, which
+            // sets `clockLastTick = int.MinValue` — so the next `ClockSample`
+            // takes its seed branch and re-seeds this from `Journal.CurrentSeq`.
+            lastScreenSeq = 0;
             if (c == null) return false;
             var r = Result.Fail(c.Id, c.Op, code, detail, c.Args);
             r.Data = null;
@@ -1475,6 +1671,11 @@ namespace AutoRimmer
             // control with the colony still running is the one failure this
             // spec must not ship.
             if (pendingPause) DischargePause();
+            // 65e7cf9. BEFORE the `!Active` early-out, deliberately and
+            // necessarily: the whole point is the time that moves when NO
+            // advance is in flight. See the CLOCK SPANS header above for why
+            // the diff taken here is frame-exact.
+            ClockSample(null);
             if (!Active) return;
             try
             {
@@ -1487,6 +1688,241 @@ namespace AutoRimmer
                 // Teardown's restore is what actually stops the clock.
                 FinishFailed(Err.Exception, e.ToString());
             }
+        }
+
+        // ---- 65e7cf9: the clock-span observer -------------------------------
+        //
+        // MAIN THREAD ONLY (`FrameStep`, and `Start`, which runs in the same
+        // `GameComponentUpdate` a few lines above it). Everything it touches on
+        // the Verse side is two reads on `TickManager`.
+        //
+        // `forceClose` non-null closes an open span with that reason whatever
+        // the clock is doing; `null` closes only on `CurTimeSpeed == Paused`.
+        // `CurTimeSpeed` and NOT `TickManager.Paused`, for the same reason
+        // `PausedOnExit` gives: `Paused` is also true from a force-pausing
+        // window alone, and a modal going up does not disarm the clock — the
+        // colony resumes at whatever speed it was set to the instant that
+        // window closes, which is one span, not two.
+        private static void ClockSample(string forceClose)
+        {
+            TickManager tm;
+            try { tm = Find.TickManager; }
+            catch { return; }
+            if (tm == null) return;
+            int now = tm.TicksGame;
+            TimeSpeed speed = tm.CurTimeSpeed;
+
+            if (clockLastTick == int.MinValue)
+            {
+                clockLastTick = now;
+                clockPrevSpeed = speed;
+                // THE SCREEN MARK IS SEEDED HERE, on the first frame this
+                // observer runs for a game, and NOT at the first advance's arm
+                // point. Seeding it at arm time put the floor ABOVE any row a
+                // human's play window had already produced, so a session that
+                // opened with somebody playing by hand published an `outside`
+                // span of 50,000 ticks beside a `journal_seq` that excluded
+                // every death those ticks caused — self-contradictory in
+                // exactly the case this feature exists for.
+                //
+                // Safe to seed low: `lastScreenSeq` feeds `LookMark()`, which
+                // is used ONLY for the range published in `since_last_look`.
+                // The read obligation keys on `startSeq` and `clockNewsSeq`, so
+                // nothing here can create one. And 722c951's "the session
+                // `boot` event is not an obligation" is preserved either way —
+                // `boot` is emitted from `Journal.Init` in the mod ctor and the
+                // `newgame`/`loaded` row from `GameBoundary`, both before the
+                // first `GameComponentUpdate` of that game, so both are at or
+                // below this mark.
+                if (lastScreenSeq == 0) lastScreenSeq = Journal.CurrentSeq;
+                return;
+            }
+            int ran = now - clockLastTick;
+            clockLastTick = now;
+            if (ran < 0 || ran > ClockMaxTicksPerFrame)
+            {
+                // A discontinuity, not a span: drop whatever was open rather
+                // than publish a `from`/`to` pair off two different timelines.
+                clockOpen = false;
+                clockPrevSpeed = speed;
+                return;
+            }
+            if (ran > 0)
+            {
+                // WHICH SPEED RAN THOSE TICKS. `speed` is read after
+                // `TickManagerUpdate` and after `DrainCommands`, so it is the
+                // speed in force for this frame's ticks EXCEPT when this mod
+                // itself changed it earlier in the same frame — a discharged
+                // pause, or a `pause` verb. `Paused` with ticks behind it is
+                // exactly that case, and the previous frame's reading is the
+                // truthful one. (`Start` samples BEFORE its own `SetSpeed`, so
+                // an advance arming never lands here.)
+                TimeSpeed at = speed != TimeSpeed.Paused ? speed : clockPrevSpeed;
+                if (!clockOpen)
+                {
+                    clockOpen = true;
+                    clockFrom = now - ran;
+                    clockTicks = 0;
+                    clockFrames = 0;
+                    clockByMod = Active;
+                    clockAdvanceId = Active ? ActiveId : null;
+                    clockOpenSpeed = at;
+                    clockTopSpeed = at;
+                    clockOpenWall = DateTime.UtcNow;
+                }
+                clockTicks += ran;
+                clockFrames++;
+                if (at > clockTopSpeed) clockTopSpeed = at;
+            }
+            clockPrevSpeed = speed;
+            if (clockOpen && (forceClose != null || speed == TimeSpeed.Paused))
+                ClockClose(forceClose ?? "pause", now);
+        }
+
+        // Closes the open span, and — if its ticks reach nobody — records it in
+        // the since-last-screen window and journals it.
+        //
+        // ONE TEST DECIDES BOTH: `!ByMod || unreported`. A `mod` span's ticks
+        // are the advance's own and its result already reports them four ways
+        // (`tick`, `ticks_elapsed`, `avg_tps`, `since_last_look.in_this_advance`),
+        // so recording it would double-count against
+        // `since_last_look.ticks = outside_ticks + in_this_advance`, and
+        // journaling it would put a row inside every single advance's own
+        // `journal_seq` — which would make EVERY advance create a read
+        // obligation under 722c951 and destroy that mechanism's stated
+        // property, "an advance that journaled NOTHING creates no obligation,
+        // so a quiet colony never pays for this at all".
+        //
+        // `unreported: true` is the exception, and it names a fact rather than
+        // a preference: the result these ticks belong to carries `Data = null`,
+        // so they are reported NOWHERE unless this row exists. Two callers —
+        // `Abandon` (`no-active-game`, the colony went away underneath) and
+        // `Teardown` on the non-publishing path (`FinishFailed`, or a `Finish`
+        // whose command was already answered).
+        private static void ClockClose(string why, int to, bool unreported = false)
+        {
+            clockOpen = false;
+            if (clockTicks <= 0) return;
+            int ticks = clockTicks;
+            // Zeroed HERE as well as on open. Every read is gated by
+            // `clockOpen` today, so this is unreachable-stale rather than
+            // wrong — but a fourth call site that forgot the gate would find a
+            // closed span's tick count sitting in the field, and that is the
+            // kind of trap this file's other counters do not set.
+            clockTicks = 0;
+            var span = new ClockSpan
+            {
+                From = clockFrom,
+                To = to,
+                Ticks = ticks,
+                Frames = clockFrames,
+                ByMod = clockByMod,
+                AdvanceId = clockAdvanceId,
+                OpenSpeed = clockOpenSpeed,
+                TopSpeed = clockTopSpeed,
+                Wall = (DateTime.UtcNow - clockOpenWall).TotalSeconds,
+            };
+            // Dropping a `mod` span here is a correctness constraint, not a
+            // filter: `since_last_look.ticks` is `outside_ticks +
+            // ticks_elapsed`, so recording one would count its ticks twice —
+            // and one DOES close mid-advance whenever the clock is paused with
+            // an advance still armed: a human on the spacebar (9 of run
+            // openrun-20260902's advances stalled exactly that way,
+            // `cause: external-pause`), a `pause` verb, a discharged pause debt.
+            if (span.ByMod && !unreported) return;
+            outsideCount++;
+            outsideTicks += span.Ticks;
+            if (outsideSpans.Count < ClockSpanCap) outsideSpans.Add(span);
+            ClockEmit(span, why);
+        }
+
+        // `Journal.Emit` is thread-safe and this method touches no Verse, so
+        // `Abandon` can call it from the poller thread.
+        private static void ClockEmit(ClockSpan s, string why)
+        {
+            var payload = new Dictionary<string, object>
+            {
+                ["by"] = s.ByMod ? "mod" : "external",
+                ["from"] = s.From,
+                ["to"] = s.To,
+                ["ticks"] = s.Ticks,
+                // The FASTEST speed the span ever ran at, not the one it ended
+                // at — the same argument `fastestSpeed` carries for
+                // `overshoot_bound`, and here it is the number that says
+                // whether `prePauseTimeSpeed` handed a spacebar tap 900 tps.
+                ["speed"] = s.TopSpeed.ToString(),
+                ["speed_at_open"] = s.OpenSpeed.ToString(),
+                ["frames"] = s.Frames,
+                ["wall_seconds"] = s.Wall,
+                // Measured, never nominal — FINDINGS 4c and 6.
+                ["avg_tps"] = s.Wall > 0 ? s.Ticks / s.Wall : 0d,
+                ["closed_by"] = why,
+            };
+            if (s.AdvanceId != null) payload["advance"] = s.AdvanceId;
+            long n = Journal.Emit("clock", payload, s.To);
+            if (n > clockNewsSeq) clockNewsSeq = n;
+        }
+
+        // THE LAST THING YOU ACTUALLY SAW: the later of the last result this
+        // mod handed back and the highest seq a `journal` call has served.
+        // Both are screens; `Journal.ReadWatermark` is the only one of the two
+        // that a between-advance read can move.
+        private static long LookMark()
+        {
+            long wm = Journal.ReadWatermark;
+            return wm > lastScreenSeq ? wm : lastScreenSeq;
+        }
+
+        // A screen is being delivered: snapshot the window for `BuildData` and
+        // start a new one. Main thread, from `Teardown`.
+        private static void ClockScreenDelivered()
+        {
+            lookOutside.Clear();
+            for (int i = 0; i < outsideSpans.Count; i++)
+            {
+                var s = outsideSpans[i];
+                lookOutside.Add(new Dictionary<string, object>
+                {
+                    ["from"] = s.From,
+                    ["to"] = s.To,
+                    ["ticks"] = s.Ticks,
+                    // `external` for a human's window; `mod` for a previous
+                    // advance whose own result could not carry its ticks
+                    // (`ClockClose`'s `unreported`).
+                    ["by"] = s.ByMod ? "mod" : "external",
+                    ["speed"] = s.TopSpeed.ToString(),
+                });
+            }
+            lookOutsideTicks = outsideTicks;
+            lookOutsideCount = outsideCount;
+            outsideSpans.Clear();
+            outsideTicks = 0;
+            outsideCount = 0;
+        }
+
+        // EITHER thread, from `Abandon`. Everything indexed by a game that no
+        // longer exists.
+        //
+        // PAIRED WITH `lastScreenSeq = 0`, which its one caller sets a few lines
+        // later and this method deliberately does not touch — the seq mark is
+        // 722c951's field, reset beside `lastAdvanceEndSeq` where its argument
+        // lives. A second caller of this method MUST set it too: without the
+        // pair, `clockLastTick = int.MinValue` here sends `ClockSample` into its
+        // seed branch, the `lastScreenSeq == 0` guard there declines, and the
+        // new colony inherits a dead one's mark.
+        private static void ClockReset()
+        {
+            clockOpen = false;
+            clockLastTick = int.MinValue;
+            clockPrevSpeed = TimeSpeed.Paused;
+            outsideSpans.Clear();
+            lookOutside.Clear();
+            outsideTicks = 0;
+            outsideCount = 0;
+            lookOutsideTicks = 0;
+            lookOutsideCount = 0;
+            lookSeqFrom = 0;
+            clockNewsSeq = 0;
         }
 
         // Main thread, per frame, and cheap: the `WindowsForcePause` scan it
@@ -1719,7 +2155,9 @@ namespace AutoRimmer
         private static void Finish(string reason)
         {
             var c = System.Threading.Interlocked.Exchange(ref cmd, null);
-            Teardown();
+            // `c != null` is exactly "a `BuildData` block is going out", which
+            // is exactly "a `since_last_look` is going out" — see Teardown.
+            Teardown(c != null);
             if (c == null) return;
             Runtime.Outgoing.Enqueue(Result.Success(c.Id, c.Op, BuildData(reason)));
         }
@@ -1727,14 +2165,22 @@ namespace AutoRimmer
         private static void FinishFailed(ErrCode code, string detail)
         {
             var c = System.Threading.Interlocked.Exchange(ref cmd, null);
-            Teardown();
+            // NEVER publishing: this path sets `r.Data = null` below.
+            Teardown(false);
             if (c == null) return;
             var r = Result.Fail(c.Id, c.Op, code, detail, c.Args);
             r.Data = null;
             Runtime.Outgoing.Enqueue(r);
         }
 
-        private static void Teardown()
+        // `publishing` is "the result about to go out carries a data block",
+        // i.e. a `since_last_look`. FALSE for `FinishFailed` (`Data = null`) and
+        // for a `Finish` whose command was already answered — and on that path
+        // the since-last-screen window must NOT be consumed, because nothing
+        // will report it. Consuming it there silently dropped the pending
+        // external spans AND advanced the seq floor past rows the caller was
+        // never shown. The read obligation itself is set on BOTH paths, below.
+        private static void Teardown(bool publishing)
         {
             // Cleared first: Journal.Emit fires Notice synchronously, and
             // RestorePause can log a warning, so nothing below may re-enter a
@@ -1747,6 +2193,22 @@ namespace AutoRimmer
             // caller got no `journal_seq` at all for it. Read before
             // `RestorePause` below, whose Log.Warning would itself journal.
             //
+            // 65e7cf9: THE CLOCK CLOSES FIRST, so a row it writes is inside the
+            // seq numbers computed below rather than one turn behind them.
+            // `LookMark()` is taken before even that, for the mirror reason: it
+            // is the FLOOR of the range this result will publish, and that floor
+            // predates anything this teardown emits.
+            long look = LookMark();
+            // This advance's own span, either way. When a data block is going
+            // out its ticks are `in_this_advance` and the span is dropped; when
+            // one is not, they reach nobody at all, so the span is recorded and
+            // journaled on the same rule `Abandon` uses.
+            if (clockOpen && !publishing && clockTicks > 0)
+                ClockClose("advance-failed", clockLastTick, unreported: true);
+            clockOpen = false;
+            try { clockLastTick = Find.TickManager.TicksGame; }
+            catch { clockLastTick = int.MinValue; }
+
             // ONLY IF THIS ADVANCE ACTUALLY PRODUCED EVENTS. `endSeq > startSeq`
             // is the same test `BuildData` uses to decide whether to publish a
             // `journal_seq` range at all, so the obligation and the published
@@ -1755,6 +2217,35 @@ namespace AutoRimmer
             // invent one out of events that predate it.
             long endedAt = Journal.CurrentSeq;
             if (endedAt > startSeq) lastAdvanceEndSeq = endedAt;
+            // ---------------------------------------------- git-bug 65e7cf9 --
+            // …AND THE OTHER HALF OF THE SAME FACT, which the test above could
+            // not see. Rows journaled BETWEEN advances land in
+            // `(lastAdvanceEndSeq, startSeq]` — below the previous advance's
+            // published range and above the next one's — so no advance ever
+            // claimed them, and a SILENT advance left `lastAdvanceEndSeq`
+            // untouched, so nothing ever gated them either. Measured on run
+            // openrun-20260902's own spine: 404 gaps between consecutively
+            // published advance ranges, holding 2,973 journal rows, 93 of them
+            // `death`, `downed` or `letter` — Tony's downing and death (seq
+            // 1201, 1267), Tanya's (1779, 1789) and two ThreatBig letters
+            // among them.
+            //
+            // `clockNewsSeq` is the top of the human-play window that produced
+            // them — see its field header for why it, and not `LookMark()`, is
+            // the right ceiling: anchoring the obligation to the last SCREEN
+            // would sweep in the agent's own `action` rows and charge a
+            // `journal` round trip to every turn that acted, which is exactly
+            // the friction 722c951 refuses. The only thing that becomes an
+            // obligation here is time that ran with nobody at the wheel.
+            if (clockNewsSeq > lastAdvanceEndSeq) lastAdvanceEndSeq = clockNewsSeq;
+            clockNewsSeq = 0;
+            // A SCREEN, only when one is actually being handed over.
+            if (publishing)
+            {
+                lookSeqFrom = look;
+                lastScreenSeq = endedAt;
+                ClockScreenDelivered();
+            }
             try
             {
                 if (slowerNow)
@@ -1876,6 +2367,55 @@ namespace AutoRimmer
                     ? new List<object> { (double)(startSeq + 1), (double)endSeq }
                     : new List<object>(),
                 ["slower_spans"] = new List<object>(slowerSpans),
+
+                // ============================================ git-bug 65e7cf9 ==
+                // "SINCE YOU LAST LOOKED", ANCHORED TO THE LAST SCREEN THIS MOD
+                // DELIVERED rather than to the moment this advance armed.
+                //
+                // The two marks differ by exactly the time the agent was not at
+                // the wheel, and in run openrun-20260902 that difference was
+                // 1,613,739 ticks — 15.3% of the run, 89.6% of it Dorian playing
+                // the colony by hand. `ticks_elapsed` above is this advance's
+                // own; this block is that number plus everything the clock did
+                // between the previous result and this call.
+                //
+                // ALWAYS PRESENT, including when it is all zeroes, for the same
+                // reason `timeout_ticks` is: a key that appears only sometimes
+                // cannot be asserted, and `eq(…, None)` passes on an absent key.
+                //
+                // `outside` is capped at ClockSpanCap entries while
+                // `outside_spans` and `outside_ticks` stay whole, which is the
+                // shape `news_rode_past` and `muted_alerts` already use — a
+                // three-day advance through a siege must not return a thousand
+                // rows, and a capped list that hides its own count is a silent
+                // truncation.
+                //
+                // THE TWO HALVES ANCHOR DIFFERENTLY AND THAT IS DELIBERATE.
+                // `ticks`/`outside` measure from the last DATA-BEARING screen
+                // (`lastScreenSeq`); `journal_seq` measures from `LookMark()`,
+                // which is that OR the highest seq a `journal` call has served,
+                // whichever is later. They diverge after a read taken between
+                // advances, and in that case `outside` can list a span whose
+                // journal rows `journal_seq` leaves out — correctly, because the
+                // caller has already been handed those rows and has NOT been
+                // handed the tick count. Each half answers its own question;
+                // making them share one mark would make one of them lie.
+                ["since_last_look"] = new Dictionary<string, object>
+                {
+                    ["ticks"] = lookOutsideTicks + ticks,
+                    ["in_this_advance"] = ticks,
+                    ["outside"] = new List<object>(lookOutside),
+                    ["outside_ticks"] = lookOutsideTicks,
+                    ["outside_spans"] = lookOutsideCount,
+                    // The range `journal_seq` above cannot express: it starts at
+                    // THIS advance's arm point, so every row journaled while a
+                    // human was playing fell between the two and was claimed by
+                    // nobody. Empty when nothing at all has been journaled since
+                    // the last screen, matching `journal_seq`'s own convention.
+                    ["journal_seq"] = endSeq > lookSeqFrom
+                        ? new List<object> { (double)(lookSeqFrom + 1), (double)endSeq }
+                        : new List<object>(),
+                },
 
                 // 722c951. THIS ECHO IS NOT A READ AND DOES NOT DISCHARGE
                 // ANYTHING — see JournalVerbs.Read's header for why, and the M1

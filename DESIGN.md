@@ -131,6 +131,17 @@ can never come, so the halt cannot fire. Both are session 21's, and the
 decisions log carries why the day is the idle unit rather than the panic
 button.
 
+**TIME THAT NO ADVANCE ASKED FOR IS JOURNALED, NOT PREVENTED** (git-bug
+65e7cf9, 2026-09-09). `TimeDriver.FrameStep` diffs `TicksGame` and
+`CurTimeSpeed` against the previous frame before its own `!Active` early-out,
+opens a span on the first moved tick, and closes it on `Paused` or on an
+advance arming — one `clock` journal row per span, carrying `by`
+(`external`\|`mod`), the tick range and the fastest speed it ran at. `advance`'s
+result grew `since_last_look`, which anchors "what happened while you were not
+looking" to the last SCREEN this mod delivered rather than to the advance's own
+arm point. See JOURNAL.md § `clock`. **No auto-pause is attached to any of it**
+and the decisions log carries why.
+
 **A clock predicate is the one that makes tick arithmetic unnecessary.**
 `advance {ticks:N}` overshoots by up to `MaxTicksPerFrame(speed)` — 30 at
 Ultrafast — and the overshoots accumulate with nothing to re-anchor them. Every
@@ -238,8 +249,9 @@ Principle: **the model does topology, the game does geometry.**
 ## Journal
 
 Append-only `events.ndjson` per session: letter, message, alert_on/alert_off,
-death, downed, mental_break, red_error, warning, dev-verb provenance — each
-stamped with game tick + wall time. It is simultaneously: the agent's "what
+death, downed, mental_break, red_error, warning, dev-verb provenance, and —
+since `65e7cf9` — `clock`, a span of game time that moved with no advance in
+flight. Each row is stamped with game tick + wall time. It is simultaneously: the agent's "what
 happened while time ran", the watchpoint source for advance-until, the
 post-mortem input, and the primary rwtest assertion substrate. Standing
 invariant everywhere: **zero red errors**.
@@ -4442,3 +4454,132 @@ queue by default (an agent flailing mid-experiment must not page triage).
   front of a game** — the bench half is Dorian's: an advance whose client is
   SIGTERMed mid-flight must be reconciled by the next `rwa` call rather than
   reported down, and `status.json` must never be observed missing.
+
+- 2026-09-09 (`65e7cf9`) — **`65e7cf9`'s first half is REFUSED and its second
+  half is built** (clock spans + `since_last_look`). The issue asks for a
+  mod-side dead-man switch whose modern restatement is "no tick without an
+  advance in flight". That is not implementable on 1.8's clock and it is not
+  wanted.
+
+  **WHY IT CANNOT BE BUILT.** 1.3 produced ticks itself: it pinned
+  `CurTimeSpeed = Paused` EVERY FRAME and pumped `tm.DoSingleTick()` in a
+  wall-clock-budgeted loop. 1.8 deleted that deliberately — `advance` now sets
+  the game's own speed and lets `TickManagerUpdate` tick — and the deletion is
+  what made a force-pausing window genuinely stop the game and stopped
+  `LetterStack.OpenAutomaticLetters` being starved BY CONSTRUCTION rather than
+  by our vigilance (TimeDriver's own header). The mod can call `tm.Pause()`; it
+  cannot stop a human's `TogglePaused` on the NEXT frame except by re-pinning
+  the speed every frame, which is the 1.3 mechanism back. There is no third
+  option: `Verse/TickManager.TogglePaused` and the `CurTimeSpeed` setter are
+  both plain writes to `curTimeSpeed` gated only on `PlayerCanControl`, and
+  `TimeControls.DoTimeControlsGUI` calls them from `OnGUI`, after our frame.
+
+  **WHY IT IS NOT WANTED, WITH THE TICK EVIDENCE.** Recomputed as an interval
+  union of every returned advance rather than as a sum of `state.tick` deltas
+  (F-XC-4's delta method said 1,935,033 / 18.3%; 368,518 of the ticks it called
+  unwitnessed were inside advances that DID return their results, observed
+  mid-flight by a foreground read), run `openrun-20260902` moved **1,613,739
+  ticks — 15.3% — outside any returned advance**, and **1,445,452 of them, 89.6%, were Dorian playing the colony by
+  hand across 11 windows**. He played nine in-game days on purpose, and DESIGN
+  has always ruled that must stay possible. A frame-by-frame pin would have
+  blocked every one of those ticks. It would also have done nothing for the two
+  real client-side failure modes the same audit found — orphaned advances after
+  a client death (62,709 ticks, 3.9%) and the client declaring the bench down
+  while its own advance ran (97,505 ticks, 6.0%) — and it would never have fired
+  for the 580,000-tick case at all, which is time moving under the AGENT'S OWN
+  non-advance calls after a human left the clock running: 174 non-advance
+  replies in that run carried `state.paused: false`, and the loop paused twice
+  in the whole run.
+
+  And the mod was not the offender: **659 of 659 returned advances ended paused**
+  (`paused_on_exit: true`), 0 `pause_refused`, 9 `stalled` and all nine
+  `cause: external-pause`. The turn-based contract held every single time.
+
+  **SO THE ANSWER IS VISIBILITY, NOT PREVENTION**, in two parts. (1)
+  `TimeDriver.FrameStep` diffs `TicksGame` and `CurTimeSpeed` against the last
+  frame BEFORE its `!Active` early-out and journals a `clock` row per span —
+  `by: external|mod`, the tick range, and the FASTEST speed it ran at.
+  Frame-exact because `Verse/Game.UpdatePlay` runs `TickManagerUpdate()` and
+  then `GameComponentUtility.GameComponentUpdate()` in the same method, verified
+  by member name against the decompiled 1.6 source. (2) `advance`'s result
+  gained `since_last_look`, anchored to the last SCREEN this mod delivered
+  instead of to the advance's arm point. **There is no auto-pause anywhere in
+  either**, and the observer never sets a speed.
+
+  **THE SPEED IS LOAD-BEARING, NOT DECORATION.** `TogglePaused` restores
+  `prePauseTimeSpeed`, and the mod's exit `Pause()` IS a `TogglePaused` from
+  Ultrafast — so the first spacebar tap after any advance runs the colony at
+  ~900 tps (measured 858–887 in three of that run's human windows). A span
+  reporting "4,300 ticks" without "Ultrafast" reads like a minute of pottering.
+
+  **THE MOD-SIDE HOLE THIS CLOSED, VERIFIED BEFORE IT WAS FIXED.** `Teardown`
+  set the read obligation on `endedAt > startSeq` and `Start` gates on
+  `Journal.ReadWatermark < lastAdvanceEndSeq`, while `startSeq` is
+  `Journal.CurrentSeq` at arm time — so rows journaled BETWEEN advances land in
+  `(lastAdvanceEndSeq, startSeq]`, above the previous advance's published
+  `journal_seq` and below the next one's, claimed by neither; and a SILENT
+  advance never moved `lastAdvanceEndSeq`, so nothing gated them either.
+  Measured on the run's own spine (`RUNS/openrun-20260902/audit/spine.ndjson`)
+  before writing the fix: **404 gaps between consecutively published advance
+  ranges, holding 2,973 journal rows, 93 of them `death`, `downed` or
+  `letter`** — Tony's downing and death (seq 1201, 1267), Tanya's (1779, 1789)
+  and two `ThreatBig` letters (`Shamblers approach` 1803, `Raid: Nyararm
+  Mechhive` 3103) among them. The hole is real and exactly the shape the round
+  described.
+
+  **WHAT THE OBLIGATION NOW KEYS ON, AND WHAT IT DELIBERATELY DOES NOT.** The
+  first draft of this fix anchored the obligation to the screen mark itself, and
+  that was WRONG in a way worth recording: it would have swept in the agent's
+  own `action` rows — emitted while it is at the wheel with the game paused,
+  each already answered by a result envelope — and charged a `journal` round
+  trip to EVERY turn that acted. `722c951`'s header rules that out in as many
+  words: "friction with no safety in it, and friction is what drives a run to
+  leave the escape hatch switched on". The shipped rule keys on the seq of the
+  `clock` row that CLOSED the human's window instead — the top of everything
+  that window produced — so the criterion stays `722c951`'s own ("events emitted
+  while TIME RAN are news the caller did not see") and merely stops assuming
+  time only ever runs inside an advance. A human play window costs exactly ONE
+  `unread-journal` refusal, whose type breakdown names `clock` beside the
+  deaths, and a quiet colony still pays nothing.
+
+  **NOT TAKEN:** gating the FIRST advance after a human window at arm time. The
+  `clock` row is written when that advance arms, so it cannot have been read by
+  then, and refusing on it would refuse the call that produced it. The
+  obligation it creates is discharged one turn later. That one-turn lag is said
+  out loud here rather than discovered.
+
+  **`by` IS NOT A CLAIM ABOUT WHOSE FINGER WAS ON THE KEY.** It is `mod` when an
+  advance was in flight when the span OPENED and `external` otherwise, so an
+  `unpause` the agent itself sent reads `external` — honestly, because nothing
+  is driving that time, nothing is bounding it, and no screen is coming at the
+  end of it. `TimeControls.DoTimeControlsGUI` is the sole vanilla caller of
+  `TogglePaused` outside `TickManager` and the only non-scripted `CurTimeSpeed`
+  setter (grepped over the whole decompiled tree; the other ten setters are
+  `Game.InitNewGame`/`Game.LoadGame`, `GravshipUtility` x2,
+  `WorldComponent_GravshipController` x2, `QuestPart_EndGame`,
+  `QuestPart_NewColony`, `ScenPart_GameStartDialog` and `Screen_Credits` — all
+  scripted, all setting only `Normal` or `Paused`), which is what makes
+  `external` attributable at all.
+
+  **A `by:"mod"` SPAN IS JOURNALED ONLY WHEN THE RESULT ITS TICKS BELONG TO
+  CARRIES NO DATA BLOCK** — `closed_by:"game-boundary"` from `Abandon` (the
+  colony went away underneath: main menu, load, new game) and
+  `closed_by:"advance-failed"` from `FinishFailed`. Both answer with
+  `Data = null`, so those ticks reach nobody unless the row exists, and on both
+  paths the since-last-screen window is left UNCONSUMED for the next result that
+  can carry a `since_last_look`. Every
+  other `mod` span is the advance's own and is fully described by that advance's
+  result; journaling it too would put a row inside every advance's own
+  `journal_seq` and destroy `722c951`'s "an advance that journaled NOTHING
+  creates no obligation, so a quiet colony never pays for this at all".
+
+  **COST.** `ClockSample` is on the per-frame path and allocates nothing in its
+  steady state — a `TicksGame` read, a `CurTimeSpeed` read, integer arithmetic,
+  enum compares. `DateTime.UtcNow` is a struct and is read only when a span
+  opens or closes. The payload dictionary is built once per CLOSED span, i.e.
+  once per human pause; `outsideSpans` is a struct list preallocated at its cap
+  of 20 and never grown, with `outside_ticks`/`outside_spans` kept whole.
+
+  **NOTHING HERE HAS BEEN IN FRONT OF A GAME.** `65e7cf9`'s Acceptance section
+  describes the dead-man switch that is not being built and does not cover this;
+  what a bench run owes is listed in the branch's hand-back report.
