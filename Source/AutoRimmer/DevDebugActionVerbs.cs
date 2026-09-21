@@ -47,7 +47,9 @@ namespace AutoRimmer
     // ========================================================================
     public static class DevDebugActionVerbs
     {
-        internal static List<Dictionary<string, object>> capture;
+        // List<object>, not List<Dictionary<..>>: MiniJson.Write serializes only List<object>
+        // and IEnumerable<string>, and prints any other list as its type name.
+        internal static List<object> capture;
 
         internal static void Capture(string type, string text)
         {
@@ -108,7 +110,7 @@ namespace AutoRimmer
             }
 
             var windowsBefore = new HashSet<Window>(Find.WindowStack.Windows);
-            var output = new List<Dictionary<string, object>>();
+            var output = new List<object>();
             string threw = null;
             capture = output;
             try
