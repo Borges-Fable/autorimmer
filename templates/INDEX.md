@@ -12,6 +12,7 @@ stopped being a checklist line by becoming geometry.
 | `freezer-kitchen` | 11×6 | AirConditioning (+Electricity for the conduit spine) | cold that is checked, clean that is measured, haul paths short, 400 W that has to come from somewhere |
 | `power-room` | 7×7 | Electricity (+Batteries, +Firefoam) | the popper, the one deliberate conduit, hidden conduit for the rest, banks sized to their own explosion |
 | `workshop` | 9×7 | none (Wall and Door carry no `researchPrerequisites`) | benches go indoors, the door south like `bedroom`'s so two do not open into each other, one torch lamp and not in the lane, a roof reported rather than sent |
+| `classroom` | 9×9 | ComplexFurniture, Stonecutting (+ Biotech, Progression: Education) | a board makes the classroom and only linked desks count, the seat is the desk's interaction cell, the teacher's strip in front of the board stays clear, no class without a bell |
 
 ## Format: annotated IR, in two halves
 
