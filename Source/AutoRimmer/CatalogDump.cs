@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -118,6 +119,14 @@ namespace AutoRimmer
             Str(sb, "designationCategory", d.designationCategory?.defName ?? "");
             sb.Append("\"size\":[").Append(d.size.x).Append(',').Append(d.size.z).Append("],");
             Bool(sb, "rotatable", d.rotatable);
+            // Interaction cells: offsets at Rot4.North from the thing's Position (the placement
+            // centre), which ThingUtility.InteractionCellWhenAt rotates by the placed Rot4.
+            // Empty when the def has none. These are the RESOLVED runtime values: several defs
+            // inherit theirs from an abstract parent or get them from a mod, so the loose XML
+            // is not a reliable source (Biotech's SchoolDesk carries none in its own def).
+            // Additive to schema 1: consumers ignore unknown keys.
+            InteractionCells(sb, d);
+            Str(sb, "passability", d.passability.ToString());
             Bool(sb, "stuffable", d.MadeFromStuff);
             Bool(sb, "isStuff", d.IsStuff);
             Color(sb, "color", d.graphicData?.color);
@@ -151,6 +160,23 @@ namespace AutoRimmer
         // ---- JSON helpers (hand-rolled: 3849 defs through MiniJson's object
         // model would allocate a dictionary per def for no gain) ----
         private static void Key(StringBuilder sb, string k) => Esc(sb, k).Append(':');
+
+        private static void InteractionCells(StringBuilder sb, ThingDef d)
+        {
+            sb.Append("\"interactionCells\":[");
+            var offsets = !d.multipleInteractionCellOffsets.NullOrEmpty()
+                ? d.multipleInteractionCellOffsets
+                : d.hasInteractionCell ? new List<IntVec3> { d.interactionCellOffset } : null;
+            if (offsets != null)
+            {
+                for (int i = 0; i < offsets.Count; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    sb.Append('[').Append(offsets[i].x).Append(',').Append(offsets[i].z).Append(']');
+                }
+            }
+            sb.Append("],");
+        }
 
         private static void Str(StringBuilder sb, string k, string v) =>
             Esc(Esc(sb, k).Append(':'), v).Append(',');
