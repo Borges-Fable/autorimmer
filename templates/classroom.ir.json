@@ -1,0 +1,33 @@
+{
+  "defName": "AR_Classroom_9x9",
+  "size": [9, 9],
+  "spawnConduits": false,
+  "layers": [
+    [
+      ["Wall", "Wall", "Wall", "Wall", "Wall", "Wall", "Wall", "Wall", "Wall"],
+      ["Wall", ".", ".", "Blackboard_South", ".", ".", ".", ".", "Wall"],
+      ["Wall", ".", ".", ".", ".", ".", ".", ".", "Wall"],
+      ["Wall", ".", "SchoolDesk_North", ".", ".", "SchoolDesk_North", ".", ".", "Wall"],
+      ["Wall", ".", ".", ".", ".", ".", ".", ".", "Wall"],
+      ["Wall", ".", "SchoolDesk_North", ".", ".", "SchoolDesk_North", ".", ".", "Wall"],
+      ["Wall", ".", ".", ".", ".", ".", ".", ".", "Wall"],
+      ["Wall", "TorchLamp", ".", ".", ".", ".", ".", "PE_TribalBell_South", "Wall"],
+      ["Wall", "Wall", "Wall", "Wall", "Door", "Wall", "Wall", "Wall", "Wall"]
+    ]
+  ],
+  "terrain": [],
+  "roof": [
+    [1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1]
+  ],
+  "modRequirements": ["Ludeon.RimWorld.Biotech", "ferny.ProgressionEducation"],
+  "extension": null,
+  "animalCells": []
+}
